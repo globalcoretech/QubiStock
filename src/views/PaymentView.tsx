@@ -1,0 +1,627 @@
+import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Party, PartyBalance, PendingBill, SearchableOption, Feedback } from "../types";
+import { Translations, Language } from "../i18n";
+import { formatCurrency, formatDate } from "../utils/formatters";
+import { SearchableSelect } from "../components/SearchableSelect";
+import { FeedbackBanner } from "../components/FeedbackBanner";
+import { AddPartyModal } from "../components/AddPartyModal";
+import {
+  Wallet,
+  ArrowDownLeft,
+  ArrowUpRight,
+  CheckCircle2,
+  Landmark,
+  Plus,
+  X,
+} from "../components/icons";
+
+interface PaymentViewProps {
+  refreshTrigger: number;
+  onRefresh?: () => void;
+  t: Translations;
+  lang: Language;
+  initialPartyId?: number | null;
+  initialType?: "receipt" | "payment";
+}
+
+export function PaymentView({
+  refreshTrigger,
+  onRefresh,
+  t,
+  lang,
+  initialPartyId,
+  initialType = "receipt",
+}: PaymentViewProps) {
+  const [paymentType, setPaymentType] = useState<"receipt" | "payment">(initialType);
+  const [partyId, setPartyId] = useState<string>(initialPartyId ? initialPartyId.toString() : "");
+  const [amountRupees, setAmountRupees] = useState("");
+  const [paymentMode, setPaymentMode] = useState<"cash" | "upi_bank" | "bank">("cash");
+  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [remark, setRemark] = useState("");
+  const [customRefId, setCustomRefId] = useState("");
+  const [matchedInvoiceNo, setMatchedInvoiceNo] = useState("");
+
+  const [parties, setParties] = useState<Party[]>([]);
+  const [balances, setBalances] = useState<PartyBalance[]>([]);
+  const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
+  const [loadingBills, setLoadingBills] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
+
+  // Load parties and party balances
+  const loadPartiesAndBalances = async () => {
+    try {
+      const [ptList, balList] = await Promise.all([
+        invoke<Party[]>("get_parties_cmd", { partyType: null }),
+        invoke<PartyBalance[]>("get_party_balances_cmd"),
+      ]);
+      setParties(ptList);
+      setBalances(balList);
+    } catch (e) {
+      console.error("loadPartiesAndBalances error:", e);
+    }
+  };
+
+  useEffect(() => {
+    loadPartiesAndBalances();
+  }, [refreshTrigger]);
+
+  // Load pending bills when partyId changes
+  useEffect(() => {
+    if (!partyId) {
+      setPendingBills([]);
+      setMatchedInvoiceNo("");
+      return;
+    }
+
+    const pId = parseInt(partyId);
+    if (isNaN(pId)) return;
+
+    setLoadingBills(true);
+    invoke<PendingBill[]>("get_pending_bills_cmd", { partyId: pId })
+      .then((bills) => {
+        setPendingBills(bills);
+      })
+      .catch((e) => {
+        console.error("get_pending_bills_cmd error:", e);
+        setPendingBills([]);
+      })
+      .finally(() => {
+        setLoadingBills(false);
+      });
+  }, [partyId]);
+
+  const selectedParty = parties.find((p) => p.id.toString() === partyId);
+  const selectedBalance = balances.find((b) => b.party_id.toString() === partyId);
+  const currentNetBalance = selectedBalance ? selectedBalance.net_balance : 0;
+
+  // Calculate projected new balance after this entry
+  const parsedAmountPaise = Math.round((parseFloat(amountRupees || "0") || 0) * 100);
+  const projectedBalance =
+    paymentType === "receipt"
+      ? currentNetBalance - parsedAmountPaise
+      : currentNetBalance + parsedAmountPaise;
+
+  const partyOptions: SearchableOption[] = parties.map((p) => {
+    const bal = balances.find((b) => b.party_id === p.id);
+    let balLabel = "";
+    if (bal) {
+      if (bal.net_balance > 0) {
+        balLabel = ` (लेना: ${formatCurrency(bal.net_balance)})`;
+      } else if (bal.net_balance < 0) {
+        balLabel = ` (देना: ${formatCurrency(Math.abs(bal.net_balance))})`;
+      }
+    }
+    return {
+      value: p.id.toString(),
+      label: p.name + balLabel,
+      subLabel: p.village ? p.village : p.phone || undefined,
+      badge: p.party_type === "customer" ? t.common.customer : p.party_type === "supplier" ? t.common.supplier : undefined,
+    };
+  });
+
+  const handleSelectPendingBill = (bill: PendingBill) => {
+    if (matchedInvoiceNo === bill.invoice_no) {
+      // Unselect
+      setMatchedInvoiceNo("");
+      setCustomRefId("");
+    } else {
+      setMatchedInvoiceNo(bill.invoice_no);
+      setCustomRefId(bill.invoice_no);
+      // If amount isn't set yet, auto-fill pending amount in Rupees
+      if (!amountRupees || parseFloat(amountRupees) === 0) {
+        setAmountRupees((bill.pending_amount / 100).toFixed(2));
+      }
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFeedback(null);
+
+    if (!partyId) {
+      setFeedback({ message: t.payment.validationParty, isError: true });
+      return;
+    }
+
+    const amt = parseFloat(amountRupees);
+    if (isNaN(amt) || amt <= 0) {
+      setFeedback({ message: t.payment.validationAmount, isError: true });
+      return;
+    }
+
+    setSaving(true);
+    const amountPaise = Math.round(amt * 100);
+    const effectiveRefId = matchedInvoiceNo || customRefId.trim() || undefined;
+
+    const payload = {
+      party_id: parseInt(partyId),
+      payment_type: paymentType,
+      amount_paise: amountPaise,
+      payment_mode: paymentMode,
+      date,
+      remark: remark.trim() || undefined,
+      ref_id: effectiveRefId,
+    };
+
+    try {
+      const generatedRef = await invoke<string>("record_payment_cmd", { payload });
+      const partyName = selectedParty?.name || "";
+      const successMsg =
+        lang === "hi"
+          ? `${paymentType === "receipt" ? "पैसा मिला" : "पैसा दिया"} सफल! (${partyName} • ${formatCurrency(amountPaise)} • संदर्भ: ${generatedRef})`
+          : `Payment ${paymentType === "receipt" ? "received" : "paid"} recorded! (${partyName} • ${formatCurrency(amountPaise)} • Ref: ${generatedRef})`;
+
+      setFeedback({ message: successMsg, isError: false });
+      setAmountRupees("");
+      setRemark("");
+      setCustomRefId("");
+      setMatchedInvoiceNo("");
+
+      // Refresh balances
+      await loadPartiesAndBalances();
+      if (partyId) {
+        const pId = parseInt(partyId);
+        invoke<PendingBill[]>("get_pending_bills_cmd", { partyId: pId })
+          .then((bills) => setPendingBills(bills))
+          .catch(() => {});
+      }
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      console.error("record_payment_cmd error:", err);
+      setFeedback({ message: String(err), isError: true });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-200">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+              <Wallet size={18} strokeWidth={2} />
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+              {t.payment.title}
+            </h2>
+          </div>
+          <p className="text-sm text-slate-500 mt-0.5">
+            {t.payment.subtitle}
+          </p>
+        </div>
+
+        {/* Voucher Type Tabs (पैसा मिला vs पैसा दिया) */}
+        <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80">
+          <button
+            type="button"
+            onClick={() => {
+              setPaymentType("receipt");
+              setMatchedInvoiceNo("");
+            }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+              paymentType === "receipt"
+                ? "bg-white text-emerald-700 shadow-sm border border-emerald-200/60"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <ArrowDownLeft size={15} strokeWidth={2.5} className="text-emerald-600" />
+            <span>{t.payment.receiptTab}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPaymentType("payment");
+              setMatchedInvoiceNo("");
+            }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+              paymentType === "payment"
+                ? "bg-white text-rose-700 shadow-sm border border-rose-200/60"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <ArrowUpRight size={15} strokeWidth={2.5} className="text-rose-600" />
+            <span>{t.payment.paymentTab}</span>
+          </button>
+        </div>
+      </div>
+
+      <FeedbackBanner feedback={feedback} />
+
+      {/* Main Entry Form Grid */}
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {/* 1. Party Selector */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                  {t.payment.partyLabel} *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsPartyModalOpen(true)}
+                  className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold flex items-center gap-1"
+                >
+                  <Plus size={13} strokeWidth={2} />
+                  <span>{t.common.newParty}</span>
+                </button>
+              </div>
+              <div data-testid="payment-party-select">
+                <SearchableSelect
+                  options={partyOptions}
+                  value={partyId}
+                  onChange={setPartyId}
+                  placeholder={t.payment.partyPlaceholder}
+                />
+              </div>
+            </div>
+
+            {/* 2. Amount Input (₹) */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                {t.payment.amountLabel} *
+              </label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-base">
+                  ₹
+                </span>
+                <input
+                  required
+                  data-testid="payment-amount-input"
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="0.00"
+                  className="w-full pl-8 pr-4 py-2.5 border border-slate-300 rounded-xl text-base font-mono font-bold text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
+                  value={amountRupees}
+                  onChange={(e) => setAmountRupees(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* 3. Date */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                {t.payment.dateLabel} *
+              </label>
+              <input
+                required
+                type="date"
+                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Party Balance Status Cards (If party is chosen) */}
+          {selectedParty && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-slate-50/80 border border-slate-200/80">
+              {/* Current Outstanding */}
+              <div>
+                <span className="text-xs text-slate-500 font-medium block">
+                  {t.payment.currentBalance} ({selectedParty.name})
+                </span>
+                <div className="flex items-center gap-2 mt-1">
+                  <span
+                    className={`text-xl font-bold font-mono ${
+                      currentNetBalance > 0
+                        ? "text-emerald-700"
+                        : currentNetBalance < 0
+                        ? "text-rose-700"
+                        : "text-slate-700"
+                    }`}
+                  >
+                    {formatCurrency(Math.abs(currentNetBalance))}
+                  </span>
+                  <span className="text-xs font-medium text-slate-500">
+                    {currentNetBalance > 0
+                      ? (lang === "hi" ? "लेना है" : "Receivable")
+                      : currentNetBalance < 0
+                      ? (lang === "hi" ? "देना है" : "Payable")
+                      : t.lenDen.settledText}
+                  </span>
+                </div>
+              </div>
+
+              {/* Projected Balance */}
+              <div>
+                <span className="text-xs text-slate-500 font-medium block">
+                  {t.payment.newBalance} ({lang === "hi" ? "इस एंट्री के बाद" : "After this entry"})
+                </span>
+                <div className="flex items-center gap-2 mt-1">
+                  <span
+                    className={`text-xl font-bold font-mono ${
+                      projectedBalance > 0
+                        ? "text-emerald-700"
+                        : projectedBalance < 0
+                        ? "text-rose-700"
+                        : "text-slate-700"
+                    }`}
+                  >
+                    {formatCurrency(Math.abs(projectedBalance))}
+                  </span>
+                  <span className="text-xs font-medium text-slate-500">
+                    {projectedBalance > 0
+                      ? (lang === "hi" ? "लेना रहेगा" : "Remaining Receivable")
+                      : projectedBalance < 0
+                      ? (lang === "hi" ? "देना रहेगा" : "Remaining Payable")
+                      : t.lenDen.settledText}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Payment Mode Selector */}
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
+              {t.payment.modeLabel} *
+            </label>
+            <div className="grid grid-cols-3 gap-3 max-w-lg">
+              <button
+                type="button"
+                onClick={() => setPaymentMode("cash")}
+                className={`py-3 px-4 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 transition-all ${
+                  paymentMode === "cash"
+                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-2 ring-emerald-600/20 shadow-sm"
+                    : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                }`}
+              >
+                <Wallet size={16} className={paymentMode === "cash" ? "text-emerald-600" : "text-slate-400"} />
+                <span>{t.common.cash}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPaymentMode("upi_bank")}
+                className={`py-3 px-4 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 transition-all ${
+                  paymentMode === "upi_bank"
+                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-2 ring-emerald-600/20 shadow-sm"
+                    : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                }`}
+              >
+                <span className="font-bold text-xs">UPI</span>
+                <span>{lang === "hi" ? "यूपीआई" : "UPI"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPaymentMode("bank")}
+                className={`py-3 px-4 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 transition-all ${
+                  paymentMode === "bank"
+                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-2 ring-emerald-600/20 shadow-sm"
+                    : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                }`}
+              >
+                <Landmark size={16} className={paymentMode === "bank" ? "text-emerald-600" : "text-slate-400"} />
+                <span>{lang === "hi" ? "बैंक ट्रांसफर" : "Bank"}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Remark and Ref ID */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                {t.payment.remarkLabel}
+              </label>
+              <input
+                type="text"
+                placeholder={t.payment.remarkPlaceholder}
+                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                {t.payment.refIdLabel}
+              </label>
+              <input
+                type="text"
+                placeholder={
+                  matchedInvoiceNo
+                    ? `${matchedInvoiceNo} (Matched Bill)`
+                    : t.payment.refIdPlaceholder
+                }
+                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
+                value={customRefId}
+                onChange={(e) => {
+                  setCustomRefId(e.target.value);
+                  setMatchedInvoiceNo("");
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Pending Bills Matching Section (Optional) */}
+          {partyId && (
+            <div className="pt-2 border-t border-slate-100 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {t.payment.pendingBillSection}
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {t.payment.pendingBillHelp}
+                  </p>
+                </div>
+                {matchedInvoiceNo && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMatchedInvoiceNo("");
+                      setCustomRefId("");
+                    }}
+                    className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 font-medium"
+                  >
+                    <X size={14} />
+                    <span>{lang === "hi" ? "चयन हटाएं" : "Clear selection"}</span>
+                  </button>
+                )}
+              </div>
+
+              {loadingBills ? (
+                <div className="py-4 text-center text-xs text-slate-400">
+                  {t.common.loading}
+                </div>
+              ) : pendingBills.length === 0 ? (
+                <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 text-center border border-slate-200/60">
+                  {t.payment.noPendingBills}
+                </div>
+              ) : (
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                        <th className="py-2.5 px-3">{lang === "hi" ? "चुनें" : "Select"}</th>
+                        <th className="py-2.5 px-3">{t.dashboard.invoiceNo}</th>
+                        <th className="py-2.5 px-3">{t.common.date}</th>
+                        <th className="py-2.5 px-3">{t.dashboard.entryType}</th>
+                        <th className="py-2.5 px-3 text-right">{t.common.total}</th>
+                        <th className="py-2.5 px-3 text-right">{t.common.paid}</th>
+                        <th className="py-2.5 px-3 text-right text-rose-700 font-bold">{t.common.balance}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pendingBills.map((bill) => {
+                        const isSelected = matchedInvoiceNo === bill.invoice_no;
+                        return (
+                          <tr
+                            key={bill.invoice_no}
+                            onClick={() => handleSelectPendingBill(bill)}
+                            className={`cursor-pointer transition-colors ${
+                              isSelected
+                                ? "bg-emerald-50/80 font-semibold"
+                                : "hover:bg-slate-50/70"
+                            }`}
+                          >
+                            <td className="py-2.5 px-3 text-center">
+                              <input
+                                type="radio"
+                                name="matchedBill"
+                                checked={isSelected}
+                                onChange={() => handleSelectPendingBill(bill)}
+                                className="text-emerald-600 focus:ring-emerald-500"
+                              />
+                            </td>
+                            <td className="py-2.5 px-3 font-mono font-medium text-slate-900">
+                              {bill.invoice_no}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-slate-600">
+                              {formatDate(bill.date)}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                  bill.bill_type === "sale"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : "bg-slate-100 text-slate-700 border border-slate-200"
+                                }`}
+                              >
+                                {bill.bill_type === "sale" ? t.nav.items.sale : t.nav.items.purchase}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-slate-700">
+                              {formatCurrency(bill.total_amount)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-emerald-700">
+                              {formatCurrency(bill.paid_amount)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-rose-700 font-bold">
+                              {formatCurrency(bill.pending_amount)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Submit Action */}
+          <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div className="text-xs text-slate-500">
+              {paymentType === "receipt" ? (
+                <span className="text-emerald-700 font-medium">
+                  {lang === "hi"
+                    ? "✓ पार्टी के खाते में जमा (Credit) होगा और बकाया घटेगा।"
+                    : "✓ Party ledger will be credited and outstanding will decrease."}
+                </span>
+              ) : (
+                <span className="text-rose-700 font-medium">
+                  {lang === "hi"
+                    ? "✓ पार्टी के खाते में नामे (Debit) होगा और देयता घटेगी।"
+                    : "✓ Party ledger will be debited and liability will decrease."}
+                </span>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving || !partyId || !amountRupees}
+              className={`w-full sm:w-auto px-8 py-3 rounded-xl font-bold text-sm text-white shadow-sm transition-all flex items-center justify-center gap-2 ${
+                paymentType === "receipt"
+                  ? "bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-500"
+                  : "bg-slate-800 hover:bg-slate-900 focus:ring-slate-500"
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              {saving ? (
+                <span>{t.payment.savingBtn}</span>
+              ) : (
+                <>
+                  <CheckCircle2 size={16} strokeWidth={2} />
+                  <span>
+                    {paymentType === "receipt"
+                      ? (lang === "hi" ? "पैसा मिला दर्ज करें" : "Record Receipt")
+                      : (lang === "hi" ? "पैसा दिया दर्ज करें" : "Record Payment")}
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </form>
+
+      {/* Add Party Modal */}
+      <AddPartyModal
+        isOpen={isPartyModalOpen}
+        onClose={() => setIsPartyModalOpen(false)}
+        onSuccess={() => {
+          loadPartiesAndBalances();
+          if (onRefresh) onRefresh();
+        }}
+        t={t}
+      />
+    </div>
+  );
+}

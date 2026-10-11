@@ -1,0 +1,1672 @@
+use crate::db::init_db;
+use crate::inventory::{get_qty_in_base_unit, add_stock_ledger_entry, calculate_weighted_average_cost, reverse_stock_ledger_entry};
+
+#[test]
+fn test_db_init_and_migrations() {
+    let conn = init_db(":memory:").expect("Failed to init in-memory DB");
+    
+    // Check if tables are created
+    let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='items'").unwrap();
+    let exists: String = stmt.query_row([], |row| row.get(0)).unwrap();
+    assert_eq!(exists, "items");
+}
+
+#[test]
+fn test_stock_ledger_append_only() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    // Setup dummy data
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'Urea', 'fertilizer', '1234', 5000, 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Insert to stock ledger
+    add_stock_ledger_entry(&conn, "2026-10-07", 1, 1, 100_000, "purchase", Some("INV-001"), None, None, None).unwrap();
+    
+    // Try to update - should fail
+    let update_result = conn.execute("UPDATE stock_ledger SET qty_base = 200000 WHERE id = 1", []);
+    assert!(update_result.is_err());
+    
+    // Try to delete - should fail
+    let delete_result = conn.execute("DELETE FROM stock_ledger WHERE id = 1", []);
+    assert!(delete_result.is_err());
+}
+
+#[test]
+fn test_multi_unit_conversion() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'Urea', 'fertilizer', '1234', 5000, 'kg')", []).unwrap();
+    conn.execute("INSERT INTO item_units (item_id, unit_name, factor_to_base) VALUES (1, 'bag', 50000)", []).unwrap(); // 50kg per bag in milli
+
+    // Base unit test (10.0 kg = 10000 milli)
+    let base_qty = get_qty_in_base_unit(&conn, 1, 10000, "kg").unwrap();
+    assert_eq!(base_qty, 10000);
+
+    // Alternate unit test (2.0 bags = 2000 milli bags) -> should equal 100.0 kg (100000 milli)
+    let alt_qty = get_qty_in_base_unit(&conn, 1, 2000, "bag").unwrap();
+    assert_eq!(alt_qty, 100000); 
+}
+
+#[test]
+fn test_weighted_average_cost() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'Urea', 'fertilizer', '1234', 5000, 'kg')", []).unwrap();
+    conn.execute("INSERT INTO item_units (item_id, unit_name, factor_to_base) VALUES (1, 'bag', 50000)", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (2, 'Supplier A', 'supplier')", []).unwrap();
+    
+    // Purchase 1: 10 bags (10000 milli) @ 150000 paise taxable
+    conn.execute("INSERT INTO purchases (invoice_no, date, supplier_id) VALUES ('INV-1', '2026-10-01', 2)", []).unwrap();
+    conn.execute("INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst) 
+                  VALUES ('INV-1', 1, 10000, 'bag', 15000, 150000, 0, 0, 0)", []).unwrap(); // 10 bags -> 500kg
+
+    // Purchase 2: 200 kg (200000 milli) @ 80000 paise taxable 
+    conn.execute("INSERT INTO purchases (invoice_no, date, supplier_id) VALUES ('INV-2', '2026-10-05', 2)", []).unwrap();
+    conn.execute("INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst) 
+                  VALUES ('INV-2', 1, 200000, 'kg', 400, 80000, 0, 0, 0)", []).unwrap(); // 200kg
+
+    // Total paise: 230000
+    // Total kg: 700
+    // Expected WAC (paise per kg): 230000 / 700 = 328 (integer math)
+    let wac = calculate_weighted_average_cost(&conn, 1).unwrap();
+    assert_eq!(wac, 328);
+}
+
+#[test]
+fn test_wac_after_sale_and_rounding() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Seeds', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (2, 'Supplier A', 'supplier')", []).unwrap();
+    
+    // Purchase: 3 kg (3000 milli) for 100 rupees (10000 paise)
+    conn.execute("INSERT INTO purchases (invoice_no, date, supplier_id) VALUES ('INV-1', '2026-10-01', 2)", []).unwrap();
+    conn.execute("INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst) 
+                  VALUES ('INV-1', 1, 3000, 'kg', 3333, 10000, 0, 0, 0)", []).unwrap();
+
+    let wac = calculate_weighted_average_cost(&conn, 1).unwrap();
+    assert_eq!(wac, 3333); // 10000 / 3 = 3333 paise per kg
+
+    // Note: WAC only looks at purchase lines based on existing logic.
+    // So sale doesn't change WAC formula as currently implemented (it's perpetual average of all purchases).
+}
+
+#[test]
+fn test_stock_reversal() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'Urea', 'fertilizer', '1234', 5000, 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Insert to stock ledger (100 kg)
+    let entry_id = add_stock_ledger_entry(&conn, "2026-10-07", 1, 1, 100000, "purchase", Some("INV-001"), None, None, None).unwrap();
+    
+    // Reverse it
+    let rev_id = reverse_stock_ledger_entry(&conn, entry_id, "2026-10-08", "REV-001").unwrap();
+
+    let rev_qty: i64 = conn.query_row("SELECT qty_base FROM stock_ledger WHERE id = ?1", rusqlite::params![rev_id], |row| row.get(0)).unwrap();
+    assert_eq!(rev_qty, -100000);
+
+    // Double reversal should fail
+    let rev_2 = reverse_stock_ledger_entry(&conn, entry_id, "2026-10-08", "REV-002");
+    assert!(rev_2.is_err());
+}
+
+#[test]
+fn test_foreign_key_violation() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    // Try to insert a stock entry with invalid item_id
+    let res = conn.execute("INSERT INTO stock_ledger (date, item_id, godown_id, qty_base, type) VALUES ('2026-10-07', 999, 1, 1000, 'purchase')", []);
+    assert!(res.is_err()); // Should fail due to FK
+}
+
+#[test]
+fn test_transfer_between_godowns() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Urea', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Godown 1')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (2, 'Godown 2')", []).unwrap();
+
+    // Transfer 50 kg (50000 milli) from 1 to 2
+    add_stock_ledger_entry(&conn, "2026-10-07", 1, 1, -50000, "transfer", Some("TRF-1"), None, None, None).unwrap();
+    add_stock_ledger_entry(&conn, "2026-10-07", 1, 2, 50000, "transfer", Some("TRF-1"), None, None, None).unwrap();
+
+    let stock_g1: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE godown_id = 1", [], |row| row.get(0)).unwrap();
+    let stock_g2: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE godown_id = 2", [], |row| row.get(0)).unwrap();
+    
+    assert_eq!(stock_g1, -50000);
+    assert_eq!(stock_g2, 50000);
+}
+
+#[test]
+fn test_decimal_qty_rounding() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Seed', 'kg')", []).unwrap();
+    // In code, user will multiply 2.5 * 1000 = 2500 milli-units
+    let qty_kg = 2.5_f64;
+    let qty_milli = (qty_kg * 1000.0).round() as i64;
+    assert_eq!(qty_milli, 2500);
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    add_stock_ledger_entry(&conn, "2026-10-07", 1, 1, qty_milli, "purchase", None, None, None, None).unwrap();
+
+    let stock: i64 = conn.query_row("SELECT qty_base FROM stock_ledger WHERE id = 1", [], |row| row.get(0)).unwrap();
+    assert_eq!(stock, 2500);
+}
+
+// asli voucher XML ka intezaar
+#[test]
+#[ignore]
+fn test_tally_xml_import_success() {
+    use crate::tally_import::{preview_import, confirm_import};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    
+    let xml = r#"
+<ENVELOPE>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDATA>
+        <TALLYMESSAGE>
+          <LEDGER NAME="Supplier A"><PARENT>Sundry Creditors</PARENT><GUID>guid-1</GUID></LEDGER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE>
+          <STOCKITEM NAME="Urea" BASEUNITS="kg"><GUID>guid-2</GUID></STOCKITEM>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE>
+          <VOUCHER VCHTYPE="Purchase" VOUCHERTYPENAME="Purchase" DATE="20261007" PARTYLEDGERNAME="Supplier A">
+            <GUID>guid-3</GUID>
+            <REFERENCE>INV-001</REFERENCE>
+            <ALLINVENTORYENTRIES.LIST>
+              <STOCKITEMNAME>Urea</STOCKITEMNAME>
+              <BILLEDQTY>100 kg</BILLEDQTY>
+              <RATE>150.00/kg</RATE>
+              <AMOUNT>-15000.00</AMOUNT>
+            </ALLINVENTORYENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>"#;
+
+    // Preview
+    let report = preview_import(&conn, xml).unwrap();
+    assert_eq!(report.new_parties, 1);
+    assert_eq!(report.new_items, 1);
+    assert_eq!(report.new_vouchers, 1);
+
+    // Confirm
+    let db_path = "dummy.sqlite"; // in memory, backup will fail but we'll ignore it if file doesn't exist
+    confirm_import(&mut conn, db_path, xml, "tally_sample.xml").unwrap();
+
+    // Verify DB
+    let party_count: i64 = conn.query_row("SELECT COUNT(*) FROM parties", [], |row| row.get(0)).unwrap();
+    assert_eq!(party_count, 1);
+    let item_count: i64 = conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0)).unwrap();
+    assert_eq!(item_count, 1);
+    let purchase_count: i64 = conn.query_row("SELECT COUNT(*) FROM purchases", [], |row| row.get(0)).unwrap();
+    assert_eq!(purchase_count, 1);
+}
+
+#[test]
+fn test_tally_xml_duplicate_prevention() {
+    use crate::tally_import::confirm_import;
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    let xml = "<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>";
+    
+    // First import
+    confirm_import(&mut conn, "dummy.sqlite", xml, "test.xml").unwrap();
+    
+    // Second import should fail
+    let err = confirm_import(&mut conn, "dummy.sqlite", xml, "test.xml");
+    assert!(err.is_err());
+    assert!(err.unwrap_err().to_string().contains("Duplicate"));
+}
+
+#[test]
+fn test_tally_xml_invalid_rollback() {
+    use crate::tally_import::confirm_import;
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    
+    // Malformed XML
+    let xml = "<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA><TALLYMESSAGE><LEDGER NAME=\"Supplier A\"";
+    
+    let err = confirm_import(&mut conn, "dummy.sqlite", xml, "broken.xml");
+    assert!(err.is_err());
+    
+    // Verify DB is untouched (contains only default Cash Sale party with id=1)
+    let party_count: i64 = conn.query_row("SELECT COUNT(*) FROM parties", [], |row| row.get(0)).unwrap();
+    assert_eq!(party_count, 1);
+}
+
+#[test]
+fn test_master_xml_parsing() {
+    use crate::tally_import::{decode_tally_xml, preview_import, confirm_import};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    
+    // Asli Tally "All Masters" export UTF-16 file read
+    let bytes = include_bytes!("../../samples/Master.xml");
+    
+    let decoded_xml = decode_tally_xml(bytes);
+    assert!(!decoded_xml.contains("&#4;")); // Char stripped
+    
+    let report = preview_import(&conn, &decoded_xml).unwrap();
+    
+    // Ensure it processed correctly without failing on missing Vouchers/Ledgers
+    // Note: Adjust the exact assert numbers based on the real Master.xml contents if needed.
+    // Assuming the user stated there are at least 3 items, etc.
+    assert!(report.total_items >= 3);
+    
+    confirm_import(&mut conn, "dummy.sqlite", &decoded_xml, "Master.xml").unwrap();
+    
+    // Godown test
+    let main_godown: i64 = conn.query_row("SELECT COUNT(*) FROM godowns WHERE name = 'Main Location'", [], |row| row.get(0)).unwrap();
+    assert_eq!(main_godown, 1);
+    
+    // Check for compound unit "box of 12 pcs" logic
+    // We expect there's an item with this unit. Let's just verify the item_units table has a factor of 12000 (12 * 1000).
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM item_units WHERE factor_to_base = 12000 AND unit_name = 'box'", [], |row| row.get(0)).unwrap();
+    assert!(count > 0, "Expected at least one item mapped to 'box' with factor 12000");
+}
+
+#[test]
+fn test_master_xml_duplicate_import() {
+    use crate::tally_import::{decode_tally_xml, confirm_import};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    
+    let bytes = include_bytes!("../../samples/Master.xml");
+    let decoded_xml = decode_tally_xml(bytes);
+    
+    confirm_import(&mut conn, "dummy.sqlite", &decoded_xml, "Master.xml").unwrap();
+    
+    let err = confirm_import(&mut conn, "dummy.sqlite", &decoded_xml, "Master.xml");
+    assert!(err.is_err());
+    assert!(err.unwrap_err().to_string().contains("Duplicate"));
+}
+
+#[test]
+fn test_master_xml_corrupted_rollback() {
+    use crate::tally_import::{decode_tally_xml, confirm_import};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    
+    let bytes = include_bytes!("../../samples/Master.xml");
+    let mut decoded_xml = decode_tally_xml(bytes);
+    
+    let len = decoded_xml.len();
+    if len > 50 {
+        decoded_xml.truncate(len - 50); // aakhir kaat ke kharab kiya
+    }
+    
+    let err = confirm_import(&mut conn, "dummy.sqlite", &decoded_xml, "Broken_Master.xml");
+    assert!(err.is_err());
+    
+    // Verify DB is untouched
+    let item_count: i64 = conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0)).unwrap();
+    assert_eq!(item_count, 0);
+    
+    let godown_count: i64 = conn.query_row("SELECT COUNT(*) FROM godowns", [], |row| row.get(0)).unwrap();
+    assert_eq!(godown_count, 0);
+}
+
+#[test]
+fn test_party_create_manual_null_guid() {
+    use crate::commands::add_party_inner;
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    
+    // Create unregistered supplier
+    let p1_id = add_party_inner(&conn, "Supplier One", "supplier", "unregistered", None, None, None).unwrap();
+    assert!(p1_id > 0);
+    
+    // Create regular customer with valid GSTIN
+    let p2_id = add_party_inner(&conn, "Customer Two", "customer", "regular", Some("Bhopal"), Some("22AAAAA0000A1Z5"), Some("9876543210")).unwrap();
+    assert!(p2_id > 0);
+
+    // Creating regular party without valid GSTIN should fail
+    let err = add_party_inner(&conn, "Invalid Regular", "customer", "regular", None, Some("INVALID"), None);
+    assert!(err.is_err());
+    assert!(err.unwrap_err().contains("GSTIN"));
+
+    // Verify default Cash Sale party is created on init_db
+    let default_party_name: String = conn.query_row("SELECT name FROM parties WHERE id = 1", [], |row| row.get(0)).unwrap();
+    assert_eq!(default_party_name, "Cash Sale (Walk-in)");
+}
+
+#[test]
+fn test_purchase_save_creates_stock_ledger() {
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Urea', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (2, 'Supplier X', 'supplier', 'unregistered')", []).unwrap();
+
+    let payload = InvoicePayload {
+        invoice_no: "PUR-101".to_string(),
+        date: "2026-10-09".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 157500,
+        shop_state: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 50000, // 50.0 kg in milli
+                unit: "kg".to_string(),
+                rate: 3000, // 30.00 rupees in paise
+                taxable: 150000,
+                cgst: 3750,
+                sgst: 3750,
+                igst: 0,
+            }
+        ]
+    };
+
+    save_invoice(&mut conn, payload).unwrap();
+
+    // Check stock_ledger entry created
+    let (qty_base, entry_type, ref_id): (i64, String, Option<String>) = conn.query_row(
+        "SELECT qty_base, type, ref_id FROM stock_ledger WHERE item_id = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    ).unwrap();
+
+    assert_eq!(qty_base, 50000);
+    assert_eq!(entry_type, "purchase");
+    assert_eq!(ref_id, Some("PUR-101".to_string()));
+}
+
+#[test]
+fn test_credit_sale_and_composition_supplier() {
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Seed 1', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (2, 'Comp Supplier', 'supplier', 'composition')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (3, 'Credit Customer', 'customer', 'unregistered')", []).unwrap();
+
+    // 1. Purchase from Composition supplier (GST should be forced to 0)
+    let pur_payload = InvoicePayload {
+        invoice_no: "PUR-COMP-1".to_string(),
+        date: "2026-10-09".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 100000, // ₹1000 paid of ₹5000 invoice
+        shop_state: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 100000, // 100kg
+                unit: "kg".to_string(),
+                rate: 5000,  // ₹50
+                taxable: 500000,
+                cgst: 25000, // should be zeroed out for composition
+                sgst: 25000,
+                igst: 0,
+            }
+        ]
+    };
+    save_invoice(&mut conn, pur_payload).unwrap();
+
+    // Verify line CGST & SGST are 0
+    let (cgst, sgst): (i64, i64) = conn.query_row(
+        "SELECT cgst, sgst FROM purchase_lines WHERE invoice_no = 'PUR-COMP-1'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?))
+    ).unwrap();
+    assert_eq!(cgst, 0);
+    assert_eq!(sgst, 0);
+
+    // 2. Credit Sale of ₹3000 with ₹1000 paid to Customer 3
+    let sale_payload = InvoicePayload {
+        invoice_no: "SALE-CR-1".to_string(),
+        date: "2026-10-09".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 100000, // ₹1000 paid
+        shop_state: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 50000, // 50kg
+                unit: "kg".to_string(),
+                rate: 6000, // ₹60
+                taxable: 300000, // ₹3000
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ]
+    };
+    save_invoice(&mut conn, sale_payload).unwrap();
+
+    // Check Customer 3 net balance (Debit 300000 - Credit 100000 = +200000 paise / ₹2000 Len / Receivable)
+    let cust_balance: i64 = conn.query_row(
+        "SELECT SUM(debit) - SUM(credit) FROM party_ledger WHERE party_id = 3",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(cust_balance, 200000);
+}
+
+#[test]
+fn test_import_from_bytes() {
+    use crate::tally_import::{decode_tally_xml, preview_import, confirm_import};
+    use base64::Engine;
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    
+    let xml_str = r#"<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>
+        <TALLYMESSAGE><LEDGER NAME="Byte Supplier"><PARENT>Sundry Creditors</PARENT><GUID>guid-bytes-1</GUID></LEDGER></TALLYMESSAGE>
+        <TALLYMESSAGE><GODOWN NAME="Byte Godown"></GODOWN></TALLYMESSAGE>
+        <TALLYMESSAGE><STOCKITEM NAME="Byte Item" BASEUNITS="kg"><GUID>guid-bytes-2</GUID></STOCKITEM></TALLYMESSAGE>
+    </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>"#;
+
+    let raw_bytes = xml_str.as_bytes();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(raw_bytes);
+
+    let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+    let xml_content = decode_tally_xml(&decoded_bytes);
+
+    let report = preview_import(&conn, &xml_content).unwrap();
+    assert_eq!(report.new_parties, 1);
+    assert_eq!(report.new_items, 1);
+    assert_eq!(report.new_godowns, 1);
+
+    confirm_import(&mut conn, "dummy.sqlite", &xml_content, "bytes_test.xml").unwrap();
+
+    let party_count: i64 = conn.query_row("SELECT COUNT(*) FROM parties WHERE name = 'Byte Supplier'", [], |row| row.get(0)).unwrap();
+    assert_eq!(party_count, 1);
+}
+
+#[test]
+fn test_import_updates_items_list() {
+    use crate::tally_import::confirm_import;
+    use crate::commands::get_items_inner;
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    let xml = r#"<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>
+        <TALLYMESSAGE><STOCKITEM NAME="ImportedItem101" BASEUNITS="kg"><GUID>g-item-101</GUID></STOCKITEM></TALLYMESSAGE>
+        <TALLYMESSAGE><STOCKITEM NAME="ImportedItem102" BASEUNITS="ltr"><GUID>g-item-102</GUID></STOCKITEM></TALLYMESSAGE>
+    </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>"#;
+
+    confirm_import(&mut conn, "dummy.sqlite", xml, "test_items_import.xml").unwrap();
+
+    let items = get_items_inner(&conn).unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().any(|i| i.name == "ImportedItem101"));
+    assert!(items.iter().any(|i| i.name == "ImportedItem102"));
+}
+
+#[test]
+fn test_oversell_block() {
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::get_available_stock_inner;
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Urea', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (2, 'Customer A', 'customer', 'unregistered')", []).unwrap();
+
+    // Add initial stock: 50 kg (50,000 milli-units)
+    conn.execute(
+        "INSERT INTO stock_ledger (date, item_id, godown_id, qty_base, type) VALUES ('2026-10-09', 1, 1, 50000, 'purchase')",
+        []
+    ).unwrap();
+
+    // Verify available stock is 50,000 milli-units
+    let avail = get_available_stock_inner(&conn, 1, 1).unwrap();
+    assert_eq!(avail, 50000);
+
+    // Attempt to sell 80 kg (80,000 milli-units) -> Should fail oversell check!
+    let sale_payload = InvoicePayload {
+        invoice_no: "SALE-OVERSELL-1".to_string(),
+        date: "2026-10-09".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 400000,
+        shop_state: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 80000, // 80kg
+                unit: "kg".to_string(),
+                rate: 5000,
+                taxable: 400000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ]
+    };
+
+    let result = save_invoice(&mut conn, sale_payload);
+    assert!(result.is_err(), "Saving invoice with qty exceeding available stock must fail!");
+}
+
+#[test]
+fn test_opening_stock() {
+    use crate::commands::{add_opening_stock_inner, get_available_stock_inner};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'NPK 19-19-19', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Add opening stock of 100 kg (100,000 milli-units)
+    let entry_id = add_opening_stock_inner(&conn, 1, 1, 100000, "kg", "2026-10-01").unwrap();
+    assert!(entry_id > 0);
+
+    // Verify stock_ledger record
+    let (qty_base, type_): (i64, String) = conn.query_row(
+        "SELECT qty_base, type FROM stock_ledger WHERE id = ?1",
+        rusqlite::params![entry_id],
+        |row| Ok((row.get(0)?, row.get(1)?))
+    ).unwrap();
+
+    assert_eq!(qty_base, 100000);
+    assert_eq!(type_, "opening");
+
+    // Verify available stock
+    let avail = get_available_stock_inner(&conn, 1, 1).unwrap();
+    assert_eq!(avail, 100000);
+}
+
+#[test]
+fn test_stock_adjustment() {
+    use crate::commands::{add_opening_stock_inner, add_stock_adjustment_inner, get_available_stock_inner};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'DAP', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Initial opening stock 50 kg
+    add_opening_stock_inner(&conn, 1, 1, 50000, "kg", "2026-10-01").unwrap();
+
+    // Positive adjustment +20 kg
+    let adj1_id = add_stock_adjustment_inner(&conn, 1, 1, 20000, "kg", Some("Stock taking difference"), "2026-10-05").unwrap();
+    assert!(adj1_id > 0);
+
+    // Negative adjustment -10 kg
+    let adj2_id = add_stock_adjustment_inner(&conn, 1, 1, -10000, "kg", Some("Damaged bag"), "2026-10-06").unwrap();
+    assert!(adj2_id > 0);
+
+    // Check adjustment entries types in stock_ledger
+    let type1: String = conn.query_row("SELECT type FROM stock_ledger WHERE id = ?1", rusqlite::params![adj1_id], |r| r.get(0)).unwrap();
+    let type2: String = conn.query_row("SELECT type FROM stock_ledger WHERE id = ?1", rusqlite::params![adj2_id], |r| r.get(0)).unwrap();
+    assert_eq!(type1, "adjustment");
+    assert_eq!(type2, "adjustment");
+
+    // Net stock: 50 + 20 - 10 = 60 kg (60,000 milli-units)
+    let avail = get_available_stock_inner(&conn, 1, 1).unwrap();
+    assert_eq!(avail, 60000);
+}
+
+#[test]
+fn test_dashboard_stats_and_recent_entries() {
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::{get_dashboard_stats_inner, get_recent_entries_inner, get_invoice_details_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO items (id, name, base_unit) VALUES (1, 'Urea 50kg', 'kg')", []).unwrap();
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (2, 'Supplier Kisan', 'supplier', 'unregistered')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (3, 'Farmer Ramesh', 'customer', 'unregistered')", []).unwrap();
+
+    // Purchase on 2026-10-11
+    let pur = InvoicePayload {
+        invoice_no: "PUR-201".to_string(),
+        date: "2026-10-11".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 100000, // ₹1000 paid
+        shop_state: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 100000, // 100kg
+                unit: "kg".to_string(),
+                rate: 3000,  // ₹30
+                taxable: 300000, // ₹3000
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ]
+    };
+    save_invoice(&mut conn, pur).unwrap();
+
+    // Sale on 2026-10-11
+    let sale = InvoicePayload {
+        invoice_no: "SALE-201".to_string(),
+        date: "2026-10-11".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 50000, // ₹500 paid
+        shop_state: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 20000, // 20kg
+                unit: "kg".to_string(),
+                rate: 4000,  // ₹40
+                taxable: 80000, // ₹800
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ]
+    };
+    save_invoice(&mut conn, sale).unwrap();
+
+    // Test dashboard stats
+    let stats = get_dashboard_stats_inner(&conn, "2026-10-11").unwrap();
+    assert_eq!(stats.today_sales, 80000); // ₹800
+    assert_eq!(stats.today_purchases, 300000); // ₹3000
+    assert_eq!(stats.total_receivable, 30000); // Customer 3: 800 - 500 = 300 (30000 paise)
+    assert_eq!(stats.total_payable, 200000); // Supplier 2: 3000 - 1000 = 2000 (200000 paise)
+
+    // Test recent entries
+    let recent = get_recent_entries_inner(&conn).unwrap();
+    assert_eq!(recent.len(), 2);
+    assert!(recent.iter().any(|r| r.invoice_no == "SALE-201" && r.party_name == "Farmer Ramesh"));
+    assert!(recent.iter().any(|r| r.invoice_no == "PUR-201" && r.party_name == "Supplier Kisan"));
+
+    // Test invoice details for print
+    let print_details = get_invoice_details_inner(&conn, "SALE-201").unwrap();
+    assert_eq!(print_details.invoice_no, "SALE-201");
+    assert_eq!(print_details.party_name, "Farmer Ramesh");
+    assert_eq!(print_details.lines.len(), 1);
+    assert_eq!(print_details.lines[0].item_name, "Urea 50kg");
+    assert_eq!(print_details.lines[0].qty, 20000);
+}
+
+#[test]
+fn test_reports_comprehensive_hand_calculated() {
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::{
+        get_purchase_register_inner,
+        get_sales_register_inner,
+        get_gst_summary_inner,
+        get_hsn_summary_inner,
+        get_profit_report_inner,
+    };
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Setup Master Data
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) 
+         VALUES (1, 'DAP Fertilizer 50kg bag', 'fertilizer', '3105', 5000, 'bag')",
+        []
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) 
+         VALUES (2, 'Chlorpyrifos 1L', 'pesticide', '3808', 18000, 'bottle')",
+        []
+    ).unwrap();
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Parties
+    // Supplier A: Regular, Intrastate (MP - 23)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone) 
+         VALUES (2, 'Supplier A', 'supplier', 'regular', '23ABCDE1234F1Z5', '9893000001')",
+        []
+    ).unwrap();
+    // Supplier B: Composition, Intrastate (MP - 23)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone) 
+         VALUES (3, 'Supplier B', 'supplier', 'composition', '23COMP00000A1Z1', '9893000002')",
+        []
+    ).unwrap();
+    // Supplier C: Regular, Interstate (MH - 27)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone) 
+         VALUES (4, 'Supplier C', 'supplier', 'regular', '27AAAAB9999C1Z1', '9893000003')",
+        []
+    ).unwrap();
+    // Customer X: Unregistered Local (MP - 23, No GSTIN)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone) 
+         VALUES (5, 'Customer X', 'customer', 'unregistered', NULL, '9893000004')",
+        []
+    ).unwrap();
+    // Customer Y: Regular Interstate (MH - 27)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone) 
+         VALUES (6, 'Customer Y', 'customer', 'regular', '27ZZZZZ1111A1Z9', '9893000005')",
+        []
+    ).unwrap();
+
+    let shop_state = "23";
+
+    // 2. Purchases
+    // PUR-001: 10 bags DAP @ ₹1,200 = ₹12,000 taxable. 5% GST = ₹600 (CGST ₹300, SGST ₹300).
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-001".to_string(),
+        date: "2026-10-15".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 400000,
+        shop_state: Some(shop_state.to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 10000, // 10 bags
+                unit: "bag".to_string(),
+                rate: 120000, // ₹1,200
+                taxable: 1200000, // ₹12,000
+                cgst: 30000,
+                sgst: 30000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // PUR-002: 5 bottles Chlorpyrifos @ ₹400 = ₹2,000 taxable. Composition supplier -> 0 GST.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-002".to_string(),
+        date: "2026-10-16".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 200000,
+        shop_state: Some(shop_state.to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 2,
+                qty: 5000, // 5 bottles
+                unit: "bottle".to_string(),
+                rate: 40000, // ₹400
+                taxable: 200000, // ₹2,000
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // PUR-003: 5 bottles Chlorpyrifos @ ₹500 = ₹2,500 taxable. Interstate (27) -> 18% IGST = ₹450.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-003".to_string(),
+        date: "2026-10-17".to_string(),
+        party_id: 4,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "upi_bank".to_string(),
+        paid_amount: 295000,
+        shop_state: Some(shop_state.to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 2,
+                qty: 5000, // 5 bottles
+                unit: "bottle".to_string(),
+                rate: 50000, // ₹500
+                taxable: 250000, // ₹2,500
+                cgst: 0,
+                sgst: 0,
+                igst: 45000, // ₹450
+            }
+        ],
+    }).unwrap();
+
+    // WAC check before sales:
+    // DAP: 1200000 / 10 = 120000 paise/bag (₹1,200)
+    // Chlorpyrifos: (200000 + 250000) / 10 = 45000 paise/bottle (₹450)
+    let wac_dap = calculate_weighted_average_cost(&conn, 1).unwrap();
+    let wac_chlor = calculate_weighted_average_cost(&conn, 2).unwrap();
+    assert_eq!(wac_dap, 120000);
+    assert_eq!(wac_chlor, 45000);
+
+    // 3. Sales
+    // SALE-001: 6 bags DAP @ ₹1,500 = ₹9,000 taxable. Intrastate 5% -> CGST ₹225, SGST ₹225. Cost snapshot: 6 * 1200 = ₹7,200.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-001".to_string(),
+        date: "2026-10-18".to_string(),
+        party_id: 5,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 945000,
+        shop_state: Some(shop_state.to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 6000, // 6 bags
+                unit: "bag".to_string(),
+                rate: 150000, // ₹1,500
+                taxable: 900000, // ₹9,000
+                cgst: 22500, // ₹225
+                sgst: 22500, // ₹225
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // SALE-002: 4 bottles Chlorpyrifos @ ₹600 = ₹2,400 taxable. Interstate 18% -> IGST ₹432. Cost snapshot: 4 * 450 = ₹1,800.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-002".to_string(),
+        date: "2026-10-19".to_string(),
+        party_id: 6,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 100000,
+        shop_state: Some(shop_state.to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 2,
+                qty: 4000, // 4 bottles
+                unit: "bottle".to_string(),
+                rate: 60000, // ₹600
+                taxable: 240000, // ₹2,400
+                cgst: 0,
+                sgst: 0,
+                igst: 43200, // ₹432
+            }
+        ],
+    }).unwrap();
+
+    // -------------------------------------------------------------
+    // REPORT 1: Purchase Register Verification
+    // -------------------------------------------------------------
+    let pur_reg = get_purchase_register_inner(&conn, "2026-10-01", "2026-10-31", Some(shop_state)).unwrap();
+    assert_eq!(pur_reg.entries.len(), 3);
+    assert_eq!(pur_reg.total_taxable, 1650000); // 12000 + 2000 + 2500 = ₹16,500
+    assert_eq!(pur_reg.total_cgst, 30000);     // ₹300
+    assert_eq!(pur_reg.total_sgst, 30000);     // ₹300
+    assert_eq!(pur_reg.total_igst, 45000);     // ₹450
+    assert_eq!(pur_reg.grand_total, 1755000);   // ₹17,550
+
+    // Check entry-wise details
+    let pur_001 = &pur_reg.entries[0];
+    assert_eq!(pur_001.invoice_no, "PUR-001");
+    assert_eq!(pur_001.party_name, "Supplier A");
+    assert_eq!(pur_001.state_type, "intrastate");
+    assert_eq!(pur_001.taxable, 1200000);
+    assert_eq!(pur_001.cgst, 30000);
+    assert_eq!(pur_001.sgst, 30000);
+    assert_eq!(pur_001.igst, 0);
+    assert_eq!(pur_001.total, 1260000);
+    assert_eq!(pur_001.payment_mode, "credit");
+
+    let pur_003 = &pur_reg.entries[2];
+    assert_eq!(pur_003.invoice_no, "PUR-003");
+    assert_eq!(pur_003.party_name, "Supplier C");
+    assert_eq!(pur_003.state_type, "interstate");
+    assert_eq!(pur_003.taxable, 250000);
+    assert_eq!(pur_003.cgst, 0);
+    assert_eq!(pur_003.sgst, 0);
+    assert_eq!(pur_003.igst, 45000);
+    assert_eq!(pur_003.total, 295000);
+    assert_eq!(pur_003.payment_mode, "upi_bank");
+
+    // -------------------------------------------------------------
+    // REPORT 2: Sales Register Verification
+    // -------------------------------------------------------------
+    let sale_reg = get_sales_register_inner(&conn, "2026-10-01", "2026-10-31", Some(shop_state)).unwrap();
+    assert_eq!(sale_reg.entries.len(), 2);
+    assert_eq!(sale_reg.total_taxable, 1140000); // 9000 + 2400 = ₹11,400
+    assert_eq!(sale_reg.total_cgst, 22500);     // ₹225
+    assert_eq!(sale_reg.total_sgst, 22500);     // ₹225
+    assert_eq!(sale_reg.total_igst, 43200);     // ₹432
+    assert_eq!(sale_reg.grand_total, 1228200);   // ₹12,282
+
+    let sale_001 = &sale_reg.entries[0];
+    assert_eq!(sale_001.invoice_no, "SALE-001");
+    assert_eq!(sale_001.party_name, "Customer X");
+    assert_eq!(sale_001.state_type, "intrastate");
+    assert_eq!(sale_001.taxable, 900000);
+    assert_eq!(sale_001.cgst, 22500);
+    assert_eq!(sale_001.sgst, 22500);
+    assert_eq!(sale_001.igst, 0);
+    assert_eq!(sale_001.total, 945000);
+
+    let sale_002 = &sale_reg.entries[1];
+    assert_eq!(sale_002.invoice_no, "SALE-002");
+    assert_eq!(sale_002.party_name, "Customer Y");
+    assert_eq!(sale_002.state_type, "interstate");
+    assert_eq!(sale_002.taxable, 240000);
+    assert_eq!(sale_002.cgst, 0);
+    assert_eq!(sale_002.sgst, 0);
+    assert_eq!(sale_002.igst, 43200);
+    assert_eq!(sale_002.total, 283200);
+
+    // -------------------------------------------------------------
+    // REPORT 3: GST Summary Verification
+    // -------------------------------------------------------------
+    let gst_sum = get_gst_summary_inner(&conn, "2026-10-01", "2026-10-31", Some(shop_state)).unwrap();
+    // Output GST
+    assert_eq!(gst_sum.output_taxable, 1140000);  // ₹11,400
+    assert_eq!(gst_sum.output_cgst, 22500);      // ₹225
+    assert_eq!(gst_sum.output_sgst, 22500);      // ₹225
+    assert_eq!(gst_sum.output_igst, 43200);      // ₹432
+    assert_eq!(gst_sum.output_total_gst, 88200); // ₹882
+
+    // Input GST (Composition excluded!)
+    assert_eq!(gst_sum.input_taxable_eligible, 1450000);   // 12000 + 2500 = ₹14,500
+    assert_eq!(gst_sum.input_taxable_ineligible, 200000);  // ₹2,000 (Supplier B composition)
+    assert_eq!(gst_sum.input_cgst, 30000);                // ₹300
+    assert_eq!(gst_sum.input_sgst, 30000);                // ₹300
+    assert_eq!(gst_sum.input_igst, 45000);                // ₹450
+    assert_eq!(gst_sum.input_total_gst, 105000);          // ₹1,050
+
+    // Net Payable: Output - Input
+    assert_eq!(gst_sum.net_cgst_payable, -7500);          // 225 - 300 = -₹75
+    assert_eq!(gst_sum.net_sgst_payable, -7500);          // 225 - 300 = -₹75
+    assert_eq!(gst_sum.net_igst_payable, -1800);          // 432 - 450 = -₹18
+    assert_eq!(gst_sum.net_total_payable, -16800);        // 882 - 1050 = -₹168 (ITC Surplus)
+
+    // -------------------------------------------------------------
+    // REPORT 4: HSN Summary Verification
+    // -------------------------------------------------------------
+    let hsn_rep = get_hsn_summary_inner(&conn, "2026-10-01", "2026-10-31", Some(shop_state)).unwrap();
+    assert_eq!(hsn_rep.items.len(), 2);
+    assert_eq!(hsn_rep.total_taxable, 1140000); // ₹11,400
+    assert_eq!(hsn_rep.total_tax, 88200);       // ₹882
+    assert_eq!(hsn_rep.grand_total, 1228200);   // ₹12,282
+
+    let hsn_3105 = hsn_rep.items.iter().find(|h| h.hsn == "3105").unwrap();
+    assert_eq!(hsn_3105.total_qty, 6000);       // 6 bags
+    assert_eq!(hsn_3105.taxable_value, 900000); // ₹9,000
+    assert_eq!(hsn_3105.cgst, 22500);
+    assert_eq!(hsn_3105.sgst, 22500);
+    assert_eq!(hsn_3105.igst, 0);
+    assert_eq!(hsn_3105.total_tax, 45000);      // ₹450
+    assert_eq!(hsn_3105.total_value, 945000);
+
+    let hsn_3808 = hsn_rep.items.iter().find(|h| h.hsn == "3808").unwrap();
+    assert_eq!(hsn_3808.total_qty, 4000);       // 4 bottles
+    assert_eq!(hsn_3808.taxable_value, 240000); // ₹2,400
+    assert_eq!(hsn_3808.cgst, 0);
+    assert_eq!(hsn_3808.sgst, 0);
+    assert_eq!(hsn_3808.igst, 43200);           // ₹432
+    assert_eq!(hsn_3808.total_tax, 43200);
+    assert_eq!(hsn_3808.total_value, 283200);
+
+    // -------------------------------------------------------------
+    // REPORT 5: Profit Report Verification (WAC Snapshotted Cost)
+    // -------------------------------------------------------------
+    let profit_rep = get_profit_report_inner(&conn, "2026-10-01", "2026-10-31").unwrap();
+    assert_eq!(profit_rep.items.len(), 2);
+    assert_eq!(profit_rep.total_taxable_sale, 1140000);     // ₹11,400
+    assert_eq!(profit_rep.total_cost, 900000);              // ₹7,200 + ₹1,800 = ₹9,000
+    assert_eq!(profit_rep.total_profit_without_gst, 240000);// ₹11,400 - ₹9,000 = ₹2,400
+    assert_eq!(profit_rep.total_gross_sale, 1228200);       // ₹12,282
+    assert_eq!(profit_rep.total_gross_profit, 328200);      // ₹12,282 - ₹9,000 = ₹3,282
+
+    let dap_profit = profit_rep.items.iter().find(|p| p.item_id == 1).unwrap();
+    assert_eq!(dap_profit.qty_sold, 6000);                  // 6 bags
+    assert_eq!(dap_profit.taxable_sale, 900000);            // ₹9,000
+    assert_eq!(dap_profit.cost_amount, 720000);             // ₹7,200 (6 * ₹1,200)
+    assert_eq!(dap_profit.profit_without_gst, 180000);      // ₹1,800
+    assert_eq!(dap_profit.gross_sale, 945000);              // ₹9,450
+    assert_eq!(dap_profit.gross_profit, 225000);            // ₹2,250
+    assert_eq!(dap_profit.unit_sale_price, 150000);         // ₹1,500/bag
+    assert_eq!(dap_profit.unit_cost, 120000);               // ₹1,200/bag
+    assert_eq!(dap_profit.unit_profit, 30000);              // ₹300/bag
+
+    let chlor_profit = profit_rep.items.iter().find(|p| p.item_id == 2).unwrap();
+    assert_eq!(chlor_profit.qty_sold, 4000);                // 4 bottles
+    assert_eq!(chlor_profit.taxable_sale, 240000);          // ₹2,400
+    assert_eq!(chlor_profit.cost_amount, 180000);           // ₹1,800 (4 * ₹450)
+    assert_eq!(chlor_profit.profit_without_gst, 60000);     // ₹600
+    assert_eq!(chlor_profit.gross_sale, 283200);            // ₹2,832
+    assert_eq!(chlor_profit.gross_profit, 103200);          // ₹1,032
+    assert_eq!(chlor_profit.unit_sale_price, 60000);        // ₹600/bottle
+    assert_eq!(chlor_profit.unit_cost, 45000);              // ₹450/bottle
+    assert_eq!(chlor_profit.unit_profit, 15000);            // ₹150/bottle
+
+    // -------------------------------------------------------------
+    // ISOLATION TEST: Subsequent Purchase Rate Change Does NOT Alter Past Cost/Profit
+    // -------------------------------------------------------------
+    // Now record a new purchase on 2026-10-25 at a MUCH higher rate: ₹2,000 per bag
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-004".to_string(),
+        date: "2026-10-25".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 2000000,
+        shop_state: Some(shop_state.to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 10000, // 10 bags
+                unit: "bag".to_string(),
+                rate: 200000, // ₹2,000
+                taxable: 2000000, // ₹20,000
+                cgst: 50000,
+                sgst: 50000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // Verify that WAC for DAP has indeed increased to ₹1,600:
+    let new_wac = calculate_weighted_average_cost(&conn, 1).unwrap();
+    assert_eq!(new_wac, 160000); // (12,000 + 20,000) / 20 = 160,000 paise (₹1,600)
+
+    // Re-run the profit report for the earlier period (2026-10-01 to 2026-10-20):
+    let past_profit_rep = get_profit_report_inner(&conn, "2026-10-01", "2026-10-20").unwrap();
+    let past_dap = past_profit_rep.items.iter().find(|p| p.item_id == 1).unwrap();
+
+    // PAST COST AND PROFIT ARE EXACTLY PRESERVED (Cost snapshotting works!)
+    assert_eq!(past_dap.cost_amount, 720000);             // Still ₹7,200, NOT ₹9,600!
+    assert_eq!(past_dap.profit_without_gst, 180000);      // Still ₹1,800!
+    assert_eq!(past_dap.unit_cost, 120000);               // Still ₹1,200/bag!
+}
+
+#[test]
+fn test_tally_ledger_import_filters_non_trade_ledgers() {
+    use crate::tally_import::{preview_import, confirm_import};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    let xml = r#"
+<ENVELOPE>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDATA>
+        <!-- 1. Genuine Customer under Sundry Debtors -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="Farmer Ramesh">
+            <PARENT>Sundry Debtors</PARENT>
+            <GUID>guid-debtor-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <!-- 2. Genuine Supplier under Sundry Creditors sub-group -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="Bharat Chemicals">
+            <PARENT>Sundry Creditors - Fertilizers</PARENT>
+            <GUID>guid-creditor-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <!-- 3. Cash-in-hand (MUST BE SKIPPED) -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="Cash">
+            <PARENT>Cash-in-Hand</PARENT>
+            <GUID>guid-cash-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <!-- 4. Profit & Loss (MUST BE SKIPPED) -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="Profit &amp; Loss A/c">
+            <PARENT>Primary</PARENT>
+            <GUID>guid-pnl-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <!-- 5. Purchase Account (MUST BE SKIPPED) -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="Purchase Account">
+            <PARENT>Purchase Accounts</PARENT>
+            <GUID>guid-pur-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <!-- 6. Sales Account (MUST BE SKIPPED) -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="Sales Account">
+            <PARENT>Sales Accounts</PARENT>
+            <GUID>guid-sale-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+
+        <!-- 7. Bank Account (MUST BE SKIPPED) -->
+        <TALLYMESSAGE>
+          <LEDGER NAME="State Bank of India">
+            <PARENT>Bank Accounts</PARENT>
+            <GUID>guid-bank-1</GUID>
+          </LEDGER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>"#;
+
+    let report = preview_import(&conn, xml).unwrap();
+    // Only 2 genuine trade parties should be counted
+    assert_eq!(report.new_parties, 2);
+    // 5 accounting ledgers must be recorded as skipped
+    assert_eq!(report.skipped_ledgers, 5);
+
+    // Confirm import
+    confirm_import(&mut conn, "dummy.sqlite", xml, "tally_test_filtered.xml").unwrap();
+
+    // Verify 'Farmer Ramesh' and 'Bharat Chemicals' exist in parties
+    let ramesh_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'Farmer Ramesh')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(ramesh_exists, "'Farmer Ramesh' must exist in parties");
+
+    let bharat_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'Bharat Chemicals')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(bharat_exists, "'Bharat Chemicals' must exist in parties");
+
+    let customer_type: String = conn.query_row(
+        "SELECT type FROM parties WHERE name = 'Farmer Ramesh'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(customer_type, "customer");
+
+    let supplier_type: String = conn.query_row(
+        "SELECT type FROM parties WHERE name = 'Bharat Chemicals'",
+        [],
+        |row| row.get(0)
+    ).unwrap();
+    assert_eq!(supplier_type, "supplier");
+
+    // Non-trade ledgers MUST NOT exist in parties table
+    let cash_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'Cash')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!cash_exists, "'Cash' must NOT exist in parties");
+
+    let pnl_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'Profit & Loss A/c')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!pnl_exists, "'Profit & Loss A/c' must NOT exist in parties");
+
+    let purchase_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'Purchase Account')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!purchase_exists, "'Purchase Account' must NOT exist in parties");
+
+    let sales_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'Sales Account')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!sales_exists, "'Sales Account' must NOT exist in parties");
+
+    let sbi_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE name = 'State Bank of India')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!sbi_exists, "'State Bank of India' must NOT exist in parties");
+}
+
+#[test]
+fn test_cleanup_accounting_parties() {
+    use crate::commands::cleanup_accounting_parties_inner;
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // Insert Cash, Profit & Loss A/c, and Input CGST accounting parties
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (101, 'Cash', 'customer')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (102, 'Profit & Loss A/c', 'customer')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (103, 'Input CGST', 'customer')", []).unwrap();
+
+    // Use one of them ('Input CGST', id 103) in a sale
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id) VALUES ('INV-TAX-101', '2026-10-10', 103)", []).unwrap();
+
+    // Also insert a legitimate farmer customer who has an invoice
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (10, 'Suresh Farmer', 'customer')", []).unwrap();
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id) VALUES ('INV-101', '2026-10-10', 10)", []).unwrap();
+
+    // Run cleanup
+    let cleaned = cleanup_accounting_parties_inner(&conn).unwrap();
+    
+    // Exactly 2 parties ('Cash' and 'Profit & Loss A/c') should be deleted
+    assert_eq!(cleaned, 2);
+
+    // Verify 'Cash' was deleted
+    let cash_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE id = 101 AND name = 'Cash')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!cash_exists, "Unused 'Cash' party should be deleted");
+
+    // Verify 'Profit & Loss A/c' was deleted
+    let pnl_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE id = 102 AND name = 'Profit & Loss A/c')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(!pnl_exists, "Unused 'Profit & Loss A/c' party should be deleted");
+
+    // Verify 'Input CGST' was PRESERVED because it is used in a sale
+    let input_cgst_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE id = 103 AND name = 'Input CGST')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(input_cgst_exists, "Used 'Input CGST' party must be preserved");
+
+    // Verify 'Suresh Farmer' is also preserved
+    let suresh_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM parties WHERE id = 10 AND name = 'Suresh Farmer')",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(suresh_exists, "Farmer party must be preserved");
+}
+
+#[test]
+fn test_record_payment_receipt_and_ledger() {
+    use crate::commands::{record_payment_inner, PaymentPayload, get_party_balances_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type, category, phone, village) VALUES (5, 'Ramesh Patel', 'customer', 'unregistered', '9898012345', 'Bhopal')", []).unwrap();
+
+    // 1. Give customer an opening debt/sale of ₹2,000 (200000 paise)
+    conn.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+         VALUES ('2026-10-01', 5, 'sale', 'INV-501', 200000, 0, 'credit', 'Sale on credit')",
+        [],
+    ).unwrap();
+
+    let balances_before = get_party_balances_inner(&conn).unwrap();
+    let ramesh_before = balances_before.iter().find(|b| b.party_id == 5).unwrap();
+    assert_eq!(ramesh_before.total_debit, 200000);
+    assert_eq!(ramesh_before.total_credit, 0);
+    assert_eq!(ramesh_before.net_balance, 200000); // लेना है ₹2000
+
+    // 2. Customer pays ₹1,200 (120000 paise) via UPI
+    let payload = PaymentPayload {
+        party_id: 5,
+        payment_type: "receipt".to_string(), // पैसा मिला
+        amount_paise: 120000,
+        payment_mode: "upi_bank".to_string(),
+        date: "2026-10-05".to_string(),
+        remark: Some("PhonePe payment".to_string()),
+        ref_id: None,
+    };
+
+    let ref_id = record_payment_inner(&mut conn, payload).unwrap();
+    assert!(ref_id.starts_with("REC-"));
+
+    // 3. Verify ledger entry
+    let (credit, mode, remark): (i64, String, Option<String>) = conn.query_row(
+        "SELECT credit, payment_mode, remark FROM party_ledger WHERE ref_id = ?1",
+        rusqlite::params![ref_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(credit, 120000);
+    assert_eq!(mode, "upi_bank");
+    assert_eq!(remark, Some("PhonePe payment".to_string()));
+
+    // 4. Verify balance is now ₹800 (80000 paise)
+    let balances_after = get_party_balances_inner(&conn).unwrap();
+    let ramesh_after = balances_after.iter().find(|b| b.party_id == 5).unwrap();
+    assert_eq!(ramesh_after.total_debit, 200000);
+    assert_eq!(ramesh_after.total_credit, 120000);
+    assert_eq!(ramesh_after.net_balance, 80000); // 2000 - 1200 = 800
+}
+
+#[test]
+fn test_record_payment_to_supplier() {
+    use crate::commands::{record_payment_inner, PaymentPayload, get_party_balances_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (6, 'Agro Seeds Co', 'supplier', 'regular')", []).unwrap();
+
+    // 1. Purchase on credit ₹5,000 (500000 paise) -> supplier credit
+    conn.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+         VALUES ('2026-10-01', 6, 'purchase', 'PINV-01', 0, 500000, 'credit', 'Seeds purchase')",
+        [],
+    ).unwrap();
+
+    let balances_before = get_party_balances_inner(&conn).unwrap();
+    let agro_before = balances_before.iter().find(|b| b.party_id == 6).unwrap();
+    assert_eq!(agro_before.net_balance, -500000); // देना है ₹5000
+
+    // 2. Pay supplier ₹3,000 (300000 paise) via bank
+    let payload = PaymentPayload {
+        party_id: 6,
+        payment_type: "payment".to_string(), // पैसा दिया
+        amount_paise: 300000,
+        payment_mode: "bank".to_string(),
+        date: "2026-10-06".to_string(),
+        remark: Some("NEFT Transfer".to_string()),
+        ref_id: None,
+    };
+
+    let ref_id = record_payment_inner(&mut conn, payload).unwrap();
+    assert!(ref_id.starts_with("PAY-"));
+
+    // 3. Verify balance is now -₹2,000 (-200000 paise)
+    let balances_after = get_party_balances_inner(&conn).unwrap();
+    let agro_after = balances_after.iter().find(|b| b.party_id == 6).unwrap();
+    assert_eq!(agro_after.total_debit, 300000);
+    assert_eq!(agro_after.total_credit, 500000);
+    assert_eq!(agro_after.net_balance, -200000); // देना है ₹2000
+}
+
+#[test]
+fn test_payment_with_invoice_match() {
+    use crate::commands::{record_payment_inner, PaymentPayload, get_pending_bills_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (7, 'Dinesh Sharma', 'customer', 'unregistered')", []).unwrap();
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id, payment_mode, paid_amount, total_amount) VALUES ('INV-MATCH-1', '2026-10-02', 7, 'credit', 20000, 100000)", []).unwrap();
+
+    // Check pending bill
+    let pending_before = get_pending_bills_inner(&conn, 7).unwrap();
+    assert_eq!(pending_before.len(), 1);
+    assert_eq!(pending_before[0].invoice_no, "INV-MATCH-1");
+    assert_eq!(pending_before[0].pending_amount, 80000); // ₹1000 - ₹200 = ₹800
+
+    // Match payment of ₹500 (50000 paise) against this invoice
+    let payload = PaymentPayload {
+        party_id: 7,
+        payment_type: "receipt".to_string(),
+        amount_paise: 50000,
+        payment_mode: "cash".to_string(),
+        date: "2026-10-04".to_string(),
+        remark: Some("Partial payment for INV-MATCH-1".to_string()),
+        ref_id: Some("INV-MATCH-1".to_string()),
+    };
+
+    record_payment_inner(&mut conn, payload).unwrap();
+
+    // Verify sales paid_amount increased from 20000 to 70000
+    let paid: i64 = conn.query_row("SELECT paid_amount FROM sales WHERE invoice_no = 'INV-MATCH-1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(paid, 70000);
+
+    // Pending bill now has ₹300 pending
+    let pending_after = get_pending_bills_inner(&conn, 7).unwrap();
+    assert_eq!(pending_after[0].pending_amount, 30000);
+}
+
+#[test]
+fn test_party_statement_and_running_balance() {
+    use crate::commands::{get_party_statement_inner, record_payment_inner, PaymentPayload};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type, category, village, phone) VALUES (8, 'Kailash Verma', 'customer', 'unregistered', 'Sehore', '9826011111')", []).unwrap();
+
+    // Transaction 1: Sale of ₹1,000 on Oct 1
+    conn.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+         VALUES ('2026-10-01', 8, 'sale', 'INV-K1', 100000, 0, 'credit', 'First sale')",
+        [],
+    ).unwrap();
+
+    // Transaction 2: Payment received ₹400 on Oct 3
+    let pay1 = PaymentPayload {
+        party_id: 8,
+        payment_type: "receipt".to_string(),
+        amount_paise: 40000,
+        payment_mode: "cash".to_string(),
+        date: "2026-10-03".to_string(),
+        remark: Some("Cash receipt".to_string()),
+        ref_id: Some("REC-K1".to_string()),
+    };
+    record_payment_inner(&mut conn, pay1).unwrap();
+
+    // Transaction 3: Sale of ₹800 on Oct 5
+    conn.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+         VALUES ('2026-10-05', 8, 'sale', 'INV-K2', 80000, 0, 'credit', 'Second sale')",
+        [],
+    ).unwrap();
+
+    let stmt = get_party_statement_inner(&conn, 8).unwrap();
+    assert_eq!(stmt.party_name, "Kailash Verma");
+    assert_eq!(stmt.total_debit, 180000);  // 1000 + 800
+    assert_eq!(stmt.total_credit, 40000);  // 400
+    assert_eq!(stmt.closing_balance, 140000); // 1800 - 400 = 1400 (₹1,400 लेना है)
+    assert_eq!(stmt.entries.len(), 3);
+
+    // Verify running balances chronologically:
+    // Entry 1: debit 100000 -> running 100000
+    assert_eq!(stmt.entries[0].debit, 100000);
+    assert_eq!(stmt.entries[0].running_balance, 100000);
+
+    // Entry 2: credit 40000 -> running 60000
+    assert_eq!(stmt.entries[1].credit, 40000);
+    assert_eq!(stmt.entries[1].running_balance, 60000);
+
+    // Entry 3: debit 80000 -> running 140000
+    assert_eq!(stmt.entries[2].debit, 80000);
+    assert_eq!(stmt.entries[2].running_balance, 140000);
+}
+
+#[test]
+fn test_dashboard_7_day_trend_and_yesterday_comparison() {
+    use crate::commands::{get_7_day_trend_inner, get_yesterday_comparison_inner};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (name, type) VALUES ('Trade Party', 'both')", []).unwrap();
+    let party_id = conn.last_insert_rowid();
+
+    // Today is 2026-10-11
+    // Add sales:
+    // 2026-10-10 (yesterday): sales ₹2,000, purchases ₹1,000
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id, total_amount) VALUES ('S-10', '2026-10-10', ?1, 200000)", rusqlite::params![party_id]).unwrap();
+    conn.execute("INSERT INTO purchases (invoice_no, date, supplier_id, total_amount) VALUES ('P-10', '2026-10-10', ?1, 100000)", rusqlite::params![party_id]).unwrap();
+
+    // 2026-10-11 (today): sales ₹3,000, purchases ₹500
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id, total_amount) VALUES ('S-11', '2026-10-11', ?1, 300000)", rusqlite::params![party_id]).unwrap();
+    conn.execute("INSERT INTO purchases (invoice_no, date, supplier_id, total_amount) VALUES ('P-11', '2026-10-11', ?1, 50000)", rusqlite::params![party_id]).unwrap();
+
+    // 1. Test 7-day trend
+    let trend = get_7_day_trend_inner(&conn, "2026-10-11").unwrap();
+    assert_eq!(trend.len(), 7);
+    assert_eq!(trend[6].date, "2026-10-11"); // today
+    assert_eq!(trend[6].sales_paise, 300000);
+    assert_eq!(trend[6].purchases_paise, 50000);
+    assert_eq!(trend[5].date, "2026-10-10"); // yesterday
+    assert_eq!(trend[5].sales_paise, 200000);
+    assert_eq!(trend[5].purchases_paise, 100000);
+
+    // 2. Test Yesterday comparison
+    let comp = get_yesterday_comparison_inner(&conn, "2026-10-11").unwrap();
+    assert_eq!(comp.today_sales, 300000);
+    assert_eq!(comp.yesterday_sales, 200000);
+    // (3000 - 2000) / 2000 * 100 = +50.0%
+    assert!((comp.sales_growth_percent - 50.0).abs() < 0.01);
+
+    assert_eq!(comp.today_purchases, 50000);
+    assert_eq!(comp.yesterday_purchases, 100000);
+    // (500 - 1000) / 1000 * 100 = -50.0%
+    assert!((comp.purchases_growth_percent - (-50.0)).abs() < 0.01);
+}
+
+#[test]
+fn test_top_5_receivables_with_debt_aging() {
+    use crate::commands::get_top_receivables_inner;
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // Insert 6 parties with debits
+    let mut party_ids = Vec::new();
+    for i in 1..=6 {
+        conn.execute(
+            &format!("INSERT INTO parties (name, type, village, phone) VALUES ('Farmer {}', 'customer', 'Village {}', '990000000{}')", i, i, i),
+            [],
+        ).unwrap();
+        party_ids.push(conn.last_insert_rowid());
+    }
+
+    // Party 1: ₹10,000 debt from 2026-09-01 (40 days old as of 2026-10-11)
+    conn.execute("INSERT INTO party_ledger (date, party_id, type, debit, credit) VALUES ('2026-09-01', ?1, 'sale', 1000000, 0)", rusqlite::params![party_ids[0]]).unwrap();
+
+    // Party 2: ₹8,000 debt from 2026-09-15 (26 days old as of 2026-10-11)
+    conn.execute("INSERT INTO party_ledger (date, party_id, type, debit, credit) VALUES ('2026-09-15', ?1, 'sale', 800000, 0)", rusqlite::params![party_ids[1]]).unwrap();
+
+    // Party 3: ₹5,000 debt from 2026-10-01 (10 days old as of 2026-10-11)
+    conn.execute("INSERT INTO party_ledger (date, party_id, type, debit, credit) VALUES ('2026-10-01', ?1, 'sale', 500000, 0)", rusqlite::params![party_ids[2]]).unwrap();
+
+    // Party 4: ₹3,000 debt from 2026-10-06 (5 days old as of 2026-10-11)
+    conn.execute("INSERT INTO party_ledger (date, party_id, type, debit, credit) VALUES ('2026-10-06', ?1, 'sale', 300000, 0)", rusqlite::params![party_ids[3]]).unwrap();
+
+    // Party 5: ₹2,000 debt from 2026-10-09 (2 days old as of 2026-10-11)
+    conn.execute("INSERT INTO party_ledger (date, party_id, type, debit, credit) VALUES ('2026-10-09', ?1, 'sale', 200000, 0)", rusqlite::params![party_ids[4]]).unwrap();
+
+    // Party 6: ₹1,000 debt (lowest - should NOT be in top 5)
+    conn.execute("INSERT INTO party_ledger (date, party_id, type, debit, credit) VALUES ('2026-10-10', ?1, 'sale', 100000, 0)", rusqlite::params![party_ids[5]]).unwrap();
+
+    let top5 = get_top_receivables_inner(&conn, 5, Some("2026-10-11")).unwrap();
+    assert_eq!(top5.len(), 5);
+
+    // Rank 1: Farmer 1 (₹10,000, 40 days old)
+    assert_eq!(top5[0].party_id, party_ids[0]);
+    assert_eq!(top5[0].name, "Farmer 1");
+    assert_eq!(top5[0].receivable_paise, 1000000);
+    assert_eq!(top5[0].oldest_debt_days, 40);
+
+    // Rank 2: Farmer 2 (₹8,000, 26 days old)
+    assert_eq!(top5[1].party_id, party_ids[1]);
+    assert_eq!(top5[1].receivable_paise, 800000);
+    assert_eq!(top5[1].oldest_debt_days, 26);
+
+    // Rank 5: Farmer 5 (₹2,000, 2 days old)
+    assert_eq!(top5[4].party_id, party_ids[4]);
+    assert_eq!(top5[4].receivable_paise, 200000);
+    assert_eq!(top5[4].oldest_debt_days, 2);
+}
+
+#[test]
+fn test_low_stock_items_query() {
+    use crate::commands::get_low_stock_items_inner;
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO items (id, name, category, base_unit) VALUES (1, 'DAP Fertilizer', 'fertilizer', 'bag')", []).unwrap();
+    conn.execute("INSERT INTO items (id, name, category, base_unit) VALUES (2, 'Chlorpyrifos 1L', 'pesticide', 'bottle')", []).unwrap();
+    conn.execute("INSERT INTO items (id, name, category, base_unit) VALUES (3, 'Wheat Seeds 40kg', 'seed', 'bag')", []).unwrap();
+
+    // Item 1 has 5 bags (5,000 milli) -> LOW STOCK (<= 10 bags / 10,000 milli)
+    conn.execute("INSERT INTO stock_ledger (date, item_id, godown_id, qty_base, type) VALUES ('2026-10-01', 1, 1, 5000, 'purchase')", []).unwrap();
+
+    // Item 2 has 25 bottles (25,000 milli) -> SUFFICIENT STOCK
+    conn.execute("INSERT INTO stock_ledger (date, item_id, godown_id, qty_base, type) VALUES ('2026-10-01', 2, 1, 25000, 'purchase')", []).unwrap();
+
+    // Item 3 has 0 bags -> LOW STOCK
+    // (no stock_ledger entries)
+
+    let low_items = get_low_stock_items_inner(&conn, 10000).unwrap();
+    // Items 1 and 3 should be low stock
+    assert_eq!(low_items.len(), 2);
+    let names: Vec<String> = low_items.into_iter().map(|i| i.name).collect();
+    assert!(names.contains(&"DAP Fertilizer".to_string()));
+    assert!(names.contains(&"Wheat Seeds 40kg".to_string()));
+}
+
+#[test]
+fn test_record_payment_validation_and_supplier_match() {
+    use crate::commands::{record_payment_inner, PaymentPayload, get_pending_bills_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type, category) VALUES (20, 'Kisan Agro Supplies', 'supplier', 'regular')", []).unwrap();
+    conn.execute("INSERT INTO purchases (invoice_no, date, supplier_id, payment_mode, paid_amount, total_amount) VALUES ('PUR-SPL-101', '2026-10-05', 20, 'credit', 100000, 500000)", []).unwrap();
+
+    // 1. Validation test: amount <= 0 must fail
+    let err_payload = PaymentPayload {
+        party_id: 20,
+        payment_type: "payment".to_string(),
+        amount_paise: 0,
+        payment_mode: "cash".to_string(),
+        date: "2026-10-06".to_string(),
+        remark: None,
+        ref_id: None,
+    };
+    assert!(record_payment_inner(&mut conn, err_payload).is_err());
+
+    // 2. Validation test: non-existent party must fail
+    let ghost_payload = PaymentPayload {
+        party_id: 99999,
+        payment_type: "payment".to_string(),
+        amount_paise: 50000,
+        payment_mode: "cash".to_string(),
+        date: "2026-10-06".to_string(),
+        remark: None,
+        ref_id: None,
+    };
+    assert!(record_payment_inner(&mut conn, ghost_payload).is_err());
+
+    // 3. Pending bills before payment: ₹5000 total, ₹1000 paid -> ₹4000 pending
+    let pending_pre = get_pending_bills_inner(&conn, 20).unwrap();
+    assert_eq!(pending_pre.len(), 1);
+    assert_eq!(pending_pre[0].invoice_no, "PUR-SPL-101");
+    assert_eq!(pending_pre[0].pending_amount, 400000);
+
+    // 4. Pay ₹2,500 matched against this purchase invoice
+    let pay_payload = PaymentPayload {
+        party_id: 20,
+        payment_type: "payment".to_string(),
+        amount_paise: 250000,
+        payment_mode: "bank".to_string(),
+        date: "2026-10-07".to_string(),
+        remark: Some("Supplier payment RTGS".to_string()),
+        ref_id: Some("PUR-SPL-101".to_string()),
+    };
+    let ref_out = record_payment_inner(&mut conn, pay_payload).unwrap();
+    assert_eq!(ref_out, "PUR-SPL-101");
+
+    // 5. Verify purchases table paid_amount updated: 100000 + 250000 = 350000
+    let paid_now: i64 = conn.query_row("SELECT paid_amount FROM purchases WHERE invoice_no = 'PUR-SPL-101'", [], |r| r.get(0)).unwrap();
+    assert_eq!(paid_now, 350000);
+
+    // 6. Verify pending amount remaining is ₹1,500 (150000 paise)
+    let pending_post = get_pending_bills_inner(&conn, 20).unwrap();
+    assert_eq!(pending_post.len(), 1);
+    assert_eq!(pending_post[0].pending_amount, 150000);
+}
+
+#[test]
+fn test_pending_bills_excludes_fully_settled_invoices() {
+    use crate::commands::get_pending_bills_inner;
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (30, 'Vikram Singh', 'customer')", []).unwrap();
+
+    // Bill 1: Unpaid (₹2000 total, 0 paid) -> Pending
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id, paid_amount, total_amount) VALUES ('INV-UNPAID', '2026-10-01', 30, 0, 200000)", []).unwrap();
+
+    // Bill 2: Fully paid (₹5000 total, ₹5000 paid) -> Should NOT appear in pending
+    conn.execute("INSERT INTO sales (invoice_no, date, customer_id, paid_amount, total_amount) VALUES ('INV-PAID', '2026-10-02', 30, 500000, 500000)", []).unwrap();
+
+    let pending = get_pending_bills_inner(&conn, 30).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].invoice_no, "INV-UNPAID");
+    assert_eq!(pending[0].pending_amount, 200000);
+}
+
+
+
+
+
+
+

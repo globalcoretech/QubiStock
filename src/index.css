@@ -1,0 +1,198 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-paper: #F7F2E8;
+  --color-surface: #FFFDF8;
+  --color-border: #E4DAC6;
+  --color-ink: #1C2B24;
+  --color-muted: #6B766E;
+  --color-forest: #14402F;
+  --color-forest-2: #1F5A43;
+  --color-marigold: #E7A11A;
+  --color-terracotta: #B5412B;
+  --color-leaf: #2F7D4F;
+}
+
+@layer base {
+  html, body {
+    font-size: 16px;
+    font-family: 'Anek Devanagari', 'Mukta', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+    color: #1C2B24;
+    background-color: #F7F2E8;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: 'Noto Serif Devanagari', Georgia, serif;
+    font-weight: 600;
+    color: #1C2B24;
+  }
+
+  button, input, select, textarea {
+    font-size: 1rem;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Interactive touch targets minimum height 44px */
+  button, input[type="button"], input[type="submit"] {
+    min-height: 44px;
+  }
+}
+
+/* Tabular numbers utility for all amounts and data */
+.num-tabular {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Custom subtle scrollbar in warm bahi-khata tones */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D8CEB9;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #C4B89F;
+}
+
+/* Bahi-Khata Primary & Secondary Buttons */
+.btn-primary {
+  background-color: #14402F;
+  color: #FFFDF8;
+  border-radius: 8px;
+  padding: 0.625rem 1.125rem;
+  font-weight: 600;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+  border: 1px solid #0F3325;
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: #1F5A43;
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background-color: #FFFDF8;
+  color: #1C2B24;
+  border: 1px solid #E4DAC6;
+  border-radius: 8px;
+  padding: 0.625rem 1rem;
+  font-weight: 500;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: #F7F2E8;
+  border-color: #D8CEB9;
+}
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  background-color: #FFFDF8;
+  color: #B5412B;
+  border: 1px solid #E4DAC6;
+  border-radius: 8px;
+  padding: 0.625rem 1rem;
+  font-weight: 500;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 150ms ease;
+}
+.btn-danger:hover:not(:disabled) {
+  background-color: #FDF0ED;
+  border-color: #B5412B;
+}
+
+/* Bahi-Khata Card Surface */
+.card-bahi {
+  background-color: #FFFDF8;
+  border: 1px solid #E4DAC6;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(28, 43, 36, 0.04);
+}
+
+/* Ruled ledger lines table */
+.table-bahi tr {
+  border-bottom: 1px solid #EFE8DA;
+}
+.table-bahi tr:last-child {
+  border-bottom: none;
+}
+.table-bahi tr:hover {
+  background-color: #FBF8F1;
+}
+
+/* Print Styles for Bills & Reports */
+@media print {
+  @page {
+    margin: 8mm;
+    size: auto;
+  }
+
+  body {
+    background-color: white !important;
+    color: black !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-area {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    box-shadow: none !important;
+    border: none !important;
+    display: block !important;
+  }
+
+  .report-table {
+    page-break-inside: auto;
+  }
+
+  .report-table tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  .report-table thead {
+    display: table-header-group;
+  }
+
+  .report-table tfoot {
+    display: table-footer-group;
+  }
+}
