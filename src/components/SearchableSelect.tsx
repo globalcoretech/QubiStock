@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { SearchableOption } from "../types";
 import { ChevronDown, X, Check, Search } from "./icons";
 
@@ -24,8 +25,14 @@ export function SearchableSelect({
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number }>({
+    top: 0,
+    left: 0,
+    width: 0,
+  });
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const dropdownMenuRef = useRef<HTMLDivElement>(null);
 
   const selectedOption = options.find((o) => o.value.toString() === value.toString());
 
@@ -41,7 +48,13 @@ export function SearchableSelect({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        dropdownMenuRef.current &&
+        !dropdownMenuRef.current.contains(target)
+      ) {
         setIsOpen(false);
       }
     };
@@ -51,6 +64,17 @@ export function SearchableSelect({
 
   useEffect(() => {
     if (isOpen) {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const menuHeight = 240;
+        const openUpwards = spaceBelow < menuHeight && rect.top > menuHeight;
+        setMenuPos({
+          top: openUpwards ? Math.max(8, rect.top - menuHeight - 4) : rect.bottom + 4,
+          left: rect.left,
+          width: Math.max(rect.width, 220),
+        });
+      }
       setHighlightedIndex(0);
       setTimeout(() => {
         searchInputRef.current?.focus();
@@ -143,65 +167,81 @@ export function SearchableSelect({
         </div>
       </div>
 
-      {isOpen && (
-        <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 overflow-hidden">
-          <div className="p-2 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
-            <Search size={14} className="text-slate-400 flex-shrink-0" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setHighlightedIndex(0);
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder="खोजें / Search..."
-              className="w-full bg-transparent text-sm focus:outline-none text-slate-800"
-            />
-          </div>
+      {isOpen &&
+        createPortal(
+          <div
+            ref={dropdownMenuRef}
+            data-testid="searchable-select-dropdown"
+            style={{
+              position: "fixed",
+              top: `${menuPos.top}px`,
+              left: `${menuPos.left}px`,
+              width: `${menuPos.width}px`,
+              zIndex: 9999,
+            }}
+            className="bg-white border border-slate-200 rounded-lg shadow-2xl overflow-hidden"
+          >
+            <div className="p-2 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
+              <Search size={14} className="text-slate-400 flex-shrink-0" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setHighlightedIndex(0);
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="खोजें / Search..."
+                className="w-full bg-transparent text-sm focus:outline-none text-slate-800"
+              />
+            </div>
 
-          <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
-            {filteredOptions.length === 0 ? (
-              <div className="p-3 text-center text-xs text-slate-400">
-                कोई परिणाम नहीं मिला
-              </div>
-            ) : (
-              filteredOptions.map((opt, idx) => {
-                const isSelected = opt.value.toString() === value.toString();
-                const isHighlighted = idx === highlightedIndex;
-                return (
-                  <div
-                    key={opt.value}
-                    onClick={() => handleSelect(opt.value)}
-                    onMouseEnter={() => setHighlightedIndex(idx)}
-                    className={`px-3.5 py-2.5 cursor-pointer text-sm flex items-center justify-between transition-colors ${
-                      isHighlighted
-                        ? "bg-slate-50 text-slate-900"
-                        : "text-slate-700 hover:bg-slate-50"
-                    } ${isSelected ? "bg-emerald-50 text-emerald-800 font-medium" : ""}`}
-                  >
-                    <div className="truncate pr-2">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate">{opt.label}</span>
-                        {opt.badge && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600">
-                            {opt.badge}
-                          </span>
+            <div
+              className="max-h-56 overflow-y-auto divide-y divide-slate-50"
+              data-scroll="true"
+            >
+              {filteredOptions.length === 0 ? (
+                <div className="p-3 text-center text-xs text-slate-400">
+                  कोई परिणाम नहीं मिला
+                </div>
+              ) : (
+                filteredOptions.map((opt, idx) => {
+                  const isSelected = opt.value.toString() === value.toString();
+                  const isHighlighted = idx === highlightedIndex;
+                  return (
+                    <div
+                      key={opt.value}
+                      onClick={() => handleSelect(opt.value)}
+                      onMouseEnter={() => setHighlightedIndex(idx)}
+                      className={`px-3.5 py-2.5 cursor-pointer text-sm flex items-center justify-between transition-colors ${
+                        isHighlighted
+                          ? "bg-slate-50 text-slate-900"
+                          : "text-slate-700 hover:bg-slate-50"
+                      } ${isSelected ? "bg-emerald-50 text-emerald-800 font-medium" : ""}`}
+                    >
+                      <div className="truncate pr-2">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate">{opt.label}</span>
+                          {opt.badge && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600">
+                              {opt.badge}
+                            </span>
+                          )}
+                        </div>
+                        {opt.subLabel && (
+                          <div className="text-xs text-slate-400 truncate mt-0.5">{opt.subLabel}</div>
                         )}
                       </div>
-                      {opt.subLabel && (
-                        <div className="text-xs text-slate-400 truncate mt-0.5">{opt.subLabel}</div>
-                      )}
+                      {isSelected && <Check size={14} className="text-emerald-600 flex-shrink-0" />}
                     </div>
-                    {isSelected && <Check size={14} className="text-emerald-600 flex-shrink-0" />}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
+                  );
+                })
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

@@ -2,6 +2,82 @@ export interface IconProps {
   size?: number;
   strokeWidth?: number;
   className?: string;
+  fillOpacity?: number;
+}
+
+// Phosphor Duotone Style Icons (Two-tone with fill and stroke)
+export function DuotoneHouse({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M218.83,103.77l-80-75.48a16,16,0,0,0-21.66,0l-80,75.48A16,16,0,0,0,32,115.55V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V115.55A16,16,0,0,0,218.83,103.77Z" opacity="0.2" />
+      <path d="M218.83,103.77l-80-75.48a16,16,0,0,0-21.66,0l-80,75.48A16,16,0,0,0,32,115.55V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V115.55A16,16,0,0,0,218.83,103.77ZM208,208H152V152H104v56H48V115.55l80-75.49,80,75.49Z" />
+    </svg>
+  );
+}
+
+export function DuotoneReceipt({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M224,48V216a8,8,0,0,1-12.8,6.4L184,202.67l-27.2,19.73a8,8,0,0,1-9.6,0L120,202.67,92.8,222.4a8,8,0,0,1-9.6,0L56,202.67,28.8,222.4A8,8,0,0,1,16,216V48A16,16,0,0,1,32,32H208A16,16,0,0,1,224,48Z" opacity="0.2" />
+      <path d="M216,32H40A16,16,0,0,0,24,48V216a8,8,0,0,0,12.8,6.4L64,202.67l27.2,19.73a8,8,0,0,0,9.6,0L128,202.67l27.2,19.73a8,8,0,0,0,9.6,0L192,202.67l27.2,19.73A8,8,0,0,0,232,216V48A16,16,0,0,0,216,32Zm0,169.33L196.8,187.47a8,8,0,0,0-9.6,0L160,207.2l-27.2-19.73a8,8,0,0,0-9.6,0L96,207.2,68.8,187.47a8,8,0,0,0-9.6,0L40,201.33V48H216ZM80,88a8,8,0,0,1,8-8h80a8,8,0,0,1,0,16H88A8,8,0,0,1,80,88Zm0,32a8,8,0,0,1,8-8h80a8,8,0,0,1,0,16H88A8,8,0,0,1,80,120Zm0,32a8,8,0,0,1,8-8h48a8,8,0,0,1,0,16H88A8,8,0,0,1,80,152Z" />
+    </svg>
+  );
+}
+
+export function DuotoneTruck({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M248,120h-8V72a8,8,0,0,0-8-8H16a8,8,0,0,0-8,8V184a8,8,0,0,0,8,8H33.06a36,36,0,0,0,70.88,0h48.12a36,36,0,0,0,70.88,0H248a8,8,0,0,0,8-8V128A8,8,0,0,0,248,120Z" opacity="0.2" />
+      <path d="M255.42,117.84l-24-48A8,8,0,0,0,224.26,65.6l-48-16A8,8,0,0,0,166,57.19V80H24a16,16,0,0,0-16,16V184a16,16,0,0,0,16,16H33.06a36,36,0,0,0,70.88,0h48.12a36,36,0,0,0,70.88,0H248a16,16,0,0,0,16-16V124.8A15.86,15.86,0,0,0,255.42,117.84ZM68.5,212a20,20,0,1,1,20-20A20,20,0,0,1,68.5,212Zm120,0a20,20,0,1,1,20-20A20,20,0,0,1,188.5,212ZM248,184H239.5a36,36,0,0,0-62,0H152.06a36,36,0,0,0-62,0H24V96H166v40a8,8,0,0,0,8,8h66.94l7.06,14.12Zm-66-88h40.31l12,24H182Z" />
+    </svg>
+  );
+}
+
+export function DuotoneWallet({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M216,72V48a16,16,0,0,0-16-16H48A24,24,0,0,0,24,56V192a24,24,0,0,0,24,24H208a16,16,0,0,0,16-16V168h-48a32,32,0,0,1,0-64h48V72Z" opacity="0.2" />
+      <path d="M216,40H48A32,32,0,0,0,16,72V192a32,32,0,0,0,32,32H208a24,24,0,0,0,24-24V168h-8a24,24,0,0,1,0-48h8V72A24,24,0,0,0,216,40ZM32,72A16,16,0,0,1,48,56H208a8,8,0,0,1,8,8V96H48A32.06,32.06,0,0,0,32,102.26Zm184,128a8,8,0,0,1-8,8H48a16,16,0,0,1-16-16V124.64A31.83,31.83,0,0,0,48,128H216Zm0-48h-8a40,40,0,0,0,0,80h8ZM184,144a12,12,0,1,1,12,12A12,12,0,0,1,184,144Z" />
+    </svg>
+  );
+}
+
+export function DuotoneWarehouse({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M232,104V208a8,8,0,0,1-8,8H32a8,8,0,0,1-8-8V104L128,40Z" opacity="0.2" />
+      <path d="M240,99.64,133.64,34.07a11.94,11.94,0,0,0-11.28,0L16,99.64A8,8,0,0,0,12,106.51V208a16,16,0,0,0,16,16H228a16,16,0,0,0,16-16V106.51A8,8,0,0,0,240,99.64ZM228,208H176V144H80v64H28V111.45l100-61.64,100,61.64ZM96,208V160h64v48Z" />
+    </svg>
+  );
+}
+
+export function DuotoneBook({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M208,32H64A24,24,0,0,0,40,56V208a16,16,0,0,0,16,16H208a8,8,0,0,0,8-8V40A8,8,0,0,0,208,32Z" opacity="0.2" />
+      <path d="M208,24H64A32,32,0,0,0,32,56V208a24,24,0,0,0,24,24H208a16,16,0,0,0,16-16V40A16,16,0,0,0,208,24Zm-8,184H56a8,8,0,0,1-8-8V56A16,16,0,0,1,64,40H200ZM88,88a8,8,0,0,1,8-8h64a8,8,0,0,1,0,16H96A8,8,0,0,1,88,88Zm0,32a8,8,0,0,1,8-8h64a8,8,0,0,1,0,16H96A8,8,0,0,1,88,120Zm0,32a8,8,0,0,1,8-8h40a8,8,0,0,1,0,16H96A8,8,0,0,1,88,152Z" />
+    </svg>
+  );
+}
+
+export function DuotoneChart({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <path d="M224,208H32V48a8,8,0,0,0-16,0V216a8,8,0,0,0,8,8H224a8,8,0,0,0,0-16Z" opacity="0.2" />
+      <path d="M224,208H40V48a8,8,0,0,0-16,0V216a8,8,0,0,0,8,8H224a8,8,0,0,0,0-16ZM72,120a8,8,0,0,1,8-8H96a8,8,0,0,1,8,8v80H72ZM88,128v64H88ZM120,80a8,8,0,0,1,8-8h16a8,8,0,0,1,8,8v120H120ZM136,88v104h0ZM168,144a8,8,0,0,1,8-8h16a8,8,0,0,1,8,8v56H168Zm16,8v40h0Z" />
+    </svg>
+  );
+}
+
+export function DuotoneDotsThree({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 256 256" fill="currentColor" className={className}>
+      <circle cx="128" cy="128" r="40" opacity="0.2" />
+      <circle cx="128" cy="128" r="16" />
+      <circle cx="64" cy="128" r="16" />
+      <circle cx="192" cy="128" r="16" />
+    </svg>
+  );
 }
 
 export function LayoutDashboard({ size = 18, strokeWidth = 1.75, className = "" }: IconProps) {
@@ -238,6 +314,52 @@ export function ChevronDown({ size = 18, strokeWidth = 1.75, className = "" }: I
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+export function ChevronLeft({ size = 18, strokeWidth = 1.75, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m15 18-6-6 6-6" />
+    </svg>
+  );
+}
+
+export function ChevronRight({ size = 18, strokeWidth = 1.75, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+export function PanelLeftClose({ size = 18, strokeWidth = 1.75, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M9 3v18" />
+      <path d="m16 15-3-3 3-3" />
+    </svg>
+  );
+}
+
+export function PanelLeftOpen({ size = 18, strokeWidth = 1.75, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M9 3v18" />
+      <path d="m14 9 3 3-3 3" />
+    </svg>
+  );
+}
+
+export function Menu({ size = 18, strokeWidth = 1.75, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <line x1="4" x2="20" y1="12" y2="12" />
+      <line x1="4" x2="20" y1="6" y2="6" />
+      <line x1="4" x2="20" y1="18" y2="18" />
     </svg>
   );
 }
@@ -550,5 +672,25 @@ export function BoriDrawing({ size = 56, className = "" }: { size?: number; clas
     </svg>
   );
 }
+
+export function Image({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+      <circle cx="9" cy="9" r="2" />
+      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+    </svg>
+  );
+}
+
+export function Eye({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 
 

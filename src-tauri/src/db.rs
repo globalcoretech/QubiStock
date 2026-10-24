@@ -23,6 +23,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             category TEXT,
             hsn TEXT,
             gst_rate INTEGER, -- milli-percent (e.g. 5000 = 5.0%)
+            gst_status TEXT DEFAULT 'not_set', -- 'taxable', 'nil_rated', 'exempt', 'not_set'
             base_unit TEXT NOT NULL
         );
 
@@ -171,6 +172,42 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             record TEXT NOT NULL,
             time TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            shop_name TEXT NOT NULL DEFAULT 'श्री राम कृषि केंद्र',
+            gstin TEXT DEFAULT '23AAAAA0000A1Z5',
+            state_code TEXT DEFAULT '23',
+            phone TEXT DEFAULT '+91 98765 43210',
+            address TEXT DEFAULT 'मुख्य बाजार, कृषि उपज मंडी रोड, सीहोर (म.प्र.) - 466001',
+            bank_name TEXT DEFAULT 'State Bank of India (भारतीय स्टेट बैंक)',
+            bank_account_no TEXT DEFAULT '30291827364',
+            bank_ifsc TEXT DEFAULT 'SBIN0001234',
+            bank_branch TEXT DEFAULT 'सीहोर मुख्य शाखा (Sehore Main)',
+            upi_id TEXT DEFAULT 'ramkrishi@sbi',
+            terms_and_conditions TEXT DEFAULT '1. बिका हुआ माल वापस नहीं होगा।
+2. खाद-बीज की शुद्धता की गारंटी संबंधित निर्माता कंपनी की होगी।
+3. किसी भी विवाद की स्थिति में न्याय क्षेत्र सीहोर होगा।
+4. नियत समय के पश्चात भुगतान पर 18% वार्षिक ब्याज देय होगा।',
+            signature_text TEXT DEFAULT 'अधिकृत हस्ताक्षरकर्ता (Authorized Signatory)',
+            signature_data TEXT DEFAULT '',
+            logo_data TEXT DEFAULT '',
+            default_bill_format TEXT DEFAULT 'A4',
+            bill_language TEXT DEFAULT 'both',
+            visible_columns TEXT DEFAULT '{\"hsn\":true,\"unit\":true,\"discount\":true,\"gstRate\":true,\"taxable\":true}',
+            fy_prefix TEXT DEFAULT 'KK',
+            low_stock_threshold INTEGER DEFAULT 10,
+            footer_note TEXT DEFAULT 'बिका हुआ माल वापस नहीं होगा। हमारे यहाँ सभी प्रकार के उन्नत खाद, बीज एवं कीटनाशक उपलब्ध हैं। धन्यवाद!',
+            selected_printer TEXT DEFAULT '',
+            printer_paper_size TEXT DEFAULT 'A4',
+            print_offset_x_mm REAL DEFAULT 0,
+            print_offset_y_mm REAL DEFAULT 0,
+            print_mode TEXT DEFAULT 'dialog',
+            is_gst_registered INTEGER NOT NULL DEFAULT 1,
+            is_composition INTEGER NOT NULL DEFAULT 0,
+            silent_print_beta INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT
+        );
         "
     )?;
 
@@ -185,10 +222,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE sale_lines ADD COLUMN cost_paise INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE party_ledger ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'cash'", []);
     let _ = conn.execute("ALTER TABLE party_ledger ADD COLUMN remark TEXT", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN is_gst_registered INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN is_composition INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN silent_print_beta INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
+    let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);
+    let _ = conn.execute("UPDATE items SET gst_status = 'nil_rated' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate = 0", []);
 
     // Create Default "Cash Sale (Walk-in)" party if not exists
     let _ = conn.execute(
         "INSERT OR IGNORE INTO parties (id, name, type, category) VALUES (1, 'Cash Sale (Walk-in)', 'both', 'unregistered')",
+        []
+    );
+
+    // Initialize Default Settings row (id = 1) if not exists
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO settings (id) VALUES (1)",
         []
     );
 

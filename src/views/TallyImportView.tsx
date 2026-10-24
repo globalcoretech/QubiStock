@@ -121,15 +121,15 @@ export function TallyImportView({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0 space-y-3 overflow-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-100">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2.5 border-b border-slate-100 flex-shrink-0">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <FileSpreadsheet size={20} strokeWidth={1.75} className="text-emerald-700" />
+          <h2 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <FileSpreadsheet size={18} strokeWidth={1.75} className="text-emerald-700" />
             <span>{t.tallyImport.title}</span>
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-500">
             {t.tallyImport.subtitle}
           </p>
         </div>
@@ -139,9 +139,9 @@ export function TallyImportView({
           type="button"
           onClick={handleCleanAccountingParties}
           disabled={isCleaning}
-          className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
         >
-          <Trash2 size={14} strokeWidth={1.75} />
+          <Trash2 size={13} strokeWidth={1.75} />
           <span>{isCleaning ? t.common.saving : t.tallyImport.cleanAccountingPartiesBtn}</span>
         </button>
       </div>
@@ -149,7 +149,7 @@ export function TallyImportView({
       <FeedbackBanner feedback={feedback} />
 
       {/* File Select Card */}
-      <div className="max-w-2xl bg-white border border-slate-200/80 rounded-xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-4">
+      <div className="max-w-2xl bg-white border border-slate-200/80 rounded-xl p-4 sm:p-5 shadow-2xs space-y-3 flex-shrink-0">
         <label className="block text-xs font-semibold text-slate-700 mb-1">
           {t.tallyImport.selectXmlFile} *
         </label>

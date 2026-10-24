@@ -11,7 +11,20 @@ export type View =
   | "Payment"
   | "Reports"
   | "Tally Import"
-  | "Settings";
+  | "Settings"
+  | "PrinterSetup";
+
+export type BillFormat = "A4" | "A5" | "A6";
+export type BillType = "TAX INVOICE" | "BILL OF SUPPLY" | "CASH MEMO";
+export type BillLanguage = "hi" | "en" | "both";
+
+export interface BillVisibleColumns {
+  hsn: boolean;
+  unit: boolean;
+  discount: boolean;
+  gstRate: boolean;
+  taxable: boolean;
+}
 
 export interface AppSettings {
   shopName: string;
@@ -21,17 +34,168 @@ export interface AppSettings {
   address: string;
   lowStockThreshold: number;
   footerNote: string;
+  // Bill Settings & Bank Info
+  logoData?: string;
+  bankName?: string;
+  bankAccountNo?: string;
+  bankIfsc?: string;
+  bankBranch?: string;
+  upiId?: string;
+  termsAndConditions?: string;
+  signatureText?: string;
+  signatureData?: string;
+  defaultBillFormat?: BillFormat;
+  billLanguage?: BillLanguage;
+  visibleColumns?: BillVisibleColumns;
+  fyPrefix?: string;
+  // Printer Setup & Alignment
+  selectedPrinter?: string;
+  printerPaperSize?: BillFormat;
+  printOffsetXMm?: number;
+  printOffsetYMm?: number;
+  printOffsetXmm?: number; // legacy alias
+  printOffsetYmm?: number; // legacy alias
+  printMode?: "dialog" | "silent";
+  // GST Scheme & Shop Registration
+  isGstRegistered?: boolean;
+  isComposition?: boolean;
+  silentPrintBeta?: boolean;
 }
+
+export const DEFAULT_VISIBLE_COLUMNS: BillVisibleColumns = {
+  hsn: true,
+  unit: true,
+  discount: true,
+  gstRate: true,
+  taxable: true,
+};
 
 export const DEFAULT_SETTINGS: AppSettings = {
   shopName: "श्री राम कृषि केंद्र",
   gstin: "23AAAAA0000A1Z5",
   stateCode: "23",
-  phone: "9876543210",
-  address: "मुख्य बाजार, कृषि उपज मंडी रोड, सीहोर (म.प्र.)",
+  phone: "+91 98765 43210",
+  address: "मुख्य बाजार, कृषि उपज मंडी रोड, सीहोर (म.प्र.) - 466001",
   lowStockThreshold: 10,
   footerNote: "बिका हुआ माल वापस नहीं होगा। हमारे यहाँ सभी प्रकार के उन्नत खाद, बीज एवं कीटनाशक उपलब्ध हैं। धन्यवाद!",
+  logoData: "",
+  bankName: "State Bank of India (भारतीय स्टेट बैंक)",
+  bankAccountNo: "30291827364",
+  bankIfsc: "SBIN0001234",
+  bankBranch: "सीहोर मुख्य शाखा (Sehore Main)",
+  upiId: "ramkrishi@sbi",
+  termsAndConditions: "1. बिका हुआ माल वापस नहीं होगा।\n2. खाद-बीज की शुद्धता की गारंटी संबंधित निर्माता कंपनी की होगी।\n3. किसी भी विवाद की स्थिति में न्याय क्षेत्र सीहोर होगा।\n4. नियत समय के पश्चात भुगतान पर 18% वार्षिक ब्याज देय होगा।",
+  signatureText: "अधिकृत हस्ताक्षरकर्ता (Authorized Signatory)",
+  signatureData: "",
+  defaultBillFormat: "A4",
+  billLanguage: "both",
+  visibleColumns: DEFAULT_VISIBLE_COLUMNS,
+  fyPrefix: "KK",
+  selectedPrinter: "",
+  printerPaperSize: "A4",
+  printOffsetXMm: 0,
+  printOffsetYMm: 0,
+  printMode: "dialog",
+  isGstRegistered: true,
+  isComposition: false,
+  silentPrintBeta: false,
 };
+
+
+export interface BillLineItem {
+  srNo: number;
+  name: string;
+  hsn: string;
+  qty: number;
+  unit: string;
+  rate: number; // in ₹ e.g. 266.50
+  discount?: number; // in ₹
+  taxableAmount: number; // in ₹
+  gstRate: number; // 0, 5, 12, 18, 28
+  cgstRate?: number;
+  cgstAmount: number; // in ₹
+  sgstRate?: number;
+  sgstAmount: number; // in ₹
+  igstRate?: number;
+  igstAmount: number; // in ₹
+  totalAmount: number; // in ₹
+  gst_status?: GstStatus;
+}
+
+export interface BillHsnSummary {
+  hsn: string;
+  taxableAmount: number;
+  cgstRate: number;
+  cgstAmount: number;
+  sgstRate: number;
+  sgstAmount: number;
+  igstRate: number;
+  igstAmount: number;
+  totalTax: number;
+}
+
+export interface BillData {
+  shop: {
+    name: string;
+    logoData?: string;
+    logoUrl?: string;
+    address: string;
+    gstin: string;
+    phone: string;
+    stateCode: string;
+    bankName: string;
+    bankAccountNo: string;
+    bankIfsc: string;
+    bankBranch: string;
+    upiId: string;
+    termsAndConditions: string;
+    signatureText: string;
+    signatureData?: string;
+    signatureUrl?: string;
+    footerNote?: string;
+  };
+  party: {
+    name: string;
+    address?: string;
+    village?: string;
+    gstin?: string | null;
+    phone?: string | null;
+    stateCode?: string;
+    category?: string;
+  };
+  invoice: {
+    invoiceNo: string;
+    date: string;
+    billType: BillType;
+    isDuplicate?: boolean;
+    isCancelled?: boolean;
+    paymentMode?: string;
+    poNumber?: string;
+    ewayBill?: string;
+    reverseCharge?: "Yes" | "No";
+  };
+  lines: BillLineItem[];
+  totals: {
+    totalQty: number;
+    totalTaxable: number;
+    totalCgst: number;
+    totalSgst: number;
+    totalIgst: number;
+    totalTax: number;
+    roundOff: number;
+    grandTotal: number;
+    amountInWordsHindi: string;
+    amountInWordsEnglish: string;
+  };
+  hsnSummary: BillHsnSummary[];
+  customization?: {
+    format?: BillFormat;
+    language?: BillLanguage;
+    visibleColumns?: BillVisibleColumns;
+  };
+}
+
+export type GstStatus = "taxable" | "nil_rated" | "exempt" | "not_set";
 
 export interface Item {
   id: number;
@@ -39,6 +203,7 @@ export interface Item {
   base_unit: string;
   hsn: string | null;
   gst_rate: number | null;
+  gst_status?: GstStatus;
 }
 
 export interface StockItem {
@@ -120,10 +285,13 @@ export interface RecentEntry {
 
 export interface InvoicePrintLine {
   item_name: string;
+  hsn?: string;
   qty: number;      // milli
   unit: string;
   rate: number;     // paise
   taxable: number;  // paise
+  gst_rate?: number | null;
+  gst_status?: GstStatus;
   gst_amount: number; // paise
   total: number;    // paise
 }

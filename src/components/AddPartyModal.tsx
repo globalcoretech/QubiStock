@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { X, Plus, AlertCircle } from "./icons";
 import { Translations } from "../i18n";
@@ -38,6 +39,15 @@ export function AddPartyModal({
     }
   }, [isOpen, defaultType]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -74,9 +84,16 @@ export function AddPartyModal({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print">
-      <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-xl border border-slate-200">
+  return createPortal(
+    <div
+      data-testid="add-party-modal"
+      data-scroll="true"
+      className="fixed inset-0 z-[9999] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print"
+    >
+      <div
+        className="bg-white rounded-xl p-4 sm:p-5 w-full max-w-lg shadow-xl border border-slate-200 max-h-[94vh] overflow-y-auto"
+        data-scroll="true"
+      >
         <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-5">
           <div className="flex items-center gap-2">
             <Plus size={18} className="text-emerald-600" />
@@ -86,6 +103,7 @@ export function AddPartyModal({
           </div>
           <button
             type="button"
+            data-testid="add-party-close-btn"
             onClick={onClose}
             className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
           >
@@ -198,6 +216,7 @@ export function AddPartyModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

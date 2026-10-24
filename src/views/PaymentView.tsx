@@ -198,38 +198,38 @@ export function PaymentView({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0 space-y-2 overflow-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-200">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-slate-200 flex-shrink-0">
         <div>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
-              <Wallet size={18} strokeWidth={2} />
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+              <Wallet size={16} strokeWidth={2} />
             </div>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">
               {t.payment.title}
             </h2>
           </div>
-          <p className="text-sm text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-500">
             {t.payment.subtitle}
           </p>
         </div>
 
         {/* Voucher Type Tabs (पैसा मिला vs पैसा दिया) */}
-        <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80">
+        <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/80 text-xs">
           <button
             type="button"
             onClick={() => {
               setPaymentType("receipt");
               setMatchedInvoiceNo("");
             }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
               paymentType === "receipt"
-                ? "bg-white text-emerald-700 shadow-sm border border-emerald-200/60"
+                ? "bg-white text-emerald-700 shadow-2xs border border-emerald-200/60"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <ArrowDownLeft size={15} strokeWidth={2.5} className="text-emerald-600" />
+            <ArrowDownLeft size={14} strokeWidth={2.5} className="text-emerald-600" />
             <span>{t.payment.receiptTab}</span>
           </button>
           <button
@@ -238,13 +238,13 @@ export function PaymentView({
               setPaymentType("payment");
               setMatchedInvoiceNo("");
             }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
               paymentType === "payment"
-                ? "bg-white text-rose-700 shadow-sm border border-rose-200/60"
+                ? "bg-white text-rose-700 shadow-2xs border border-rose-200/60"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <ArrowUpRight size={15} strokeWidth={2.5} className="text-rose-600" />
+            <ArrowUpRight size={14} strokeWidth={2.5} className="text-rose-600" />
             <span>{t.payment.paymentTab}</span>
           </button>
         </div>
@@ -253,8 +253,11 @@ export function PaymentView({
       <FeedbackBanner feedback={feedback} />
 
       {/* Main Entry Form Grid */}
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-6">
+      <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div
+          data-scroll="true"
+          className="flex-1 min-h-0 overflow-y-auto bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-4"
+        >
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {/* 1. Party Selector */}
             <div className="space-y-1.5">

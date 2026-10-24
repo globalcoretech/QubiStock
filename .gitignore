@@ -14,3 +14,5 @@ preview_test.html
 .env
 .vscode/
 SESSION_LOG.md
+screenshots/
+bills-preview/

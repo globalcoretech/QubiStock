@@ -1664,6 +1664,251 @@ fn test_pending_bills_excludes_fully_settled_invoices() {
     assert_eq!(pending[0].pending_amount, 200000);
 }
 
+#[test]
+fn test_settings_sqlite_crud() {
+    use crate::commands::{get_settings_inner, set_settings_inner, AppSettingsPayload};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Initial get should return default settings seeded by migration
+    let default_settings = get_settings_inner(&conn).expect("get_settings failed");
+    assert_eq!(default_settings.shop_name, "श्री राम कृषि केंद्र");
+    assert_eq!(default_settings.gstin.as_deref(), Some("23AAAAA0000A1Z5"));
+    assert!(default_settings.is_gst_registered, "Default shop should be GST registered");
+    assert!(!default_settings.is_composition, "Default shop should not be in composition");
+
+    // 2. Update settings via set_settings_inner
+    let updated_payload = AppSettingsPayload {
+        shop_name: "किसान सेवा केंद्र सीहोर".to_string(),
+        gstin: Some("23AAACK1425H1Z4".to_string()),
+        state_code: Some("23".to_string()),
+        phone: Some("+91 99887 76655".to_string()),
+        address: Some("मंडी गेट, सीहोर".to_string()),
+        bank_name: Some("Bank of Baroda".to_string()),
+        bank_account_no: Some("1234567890".to_string()),
+        bank_ifsc: Some("BARB0SEHORE".to_string()),
+        bank_branch: Some("Sehore".to_string()),
+        upi_id: Some("kisankendra@bob".to_string()),
+        terms_and_conditions: Some("नियम व शर्तें लागू".to_string()),
+        signature_text: Some("संचालक".to_string()),
+        signature_data: Some("data:image/png;base64,mock".to_string()),
+        logo_data: Some("data:image/png;base64,mocklogo".to_string()),
+        default_bill_format: Some("A5".to_string()),
+        bill_language: Some("hi".to_string()),
+        visible_columns: Some(serde_json::json!({"hsn": true, "unit": true})),
+        fy_prefix: Some("KSK".to_string()),
+        low_stock_threshold: Some(15),
+        footer_note: Some("शुभ लाभ".to_string()),
+        selected_printer: Some("Canon LBP2900".to_string()),
+        printer_paper_size: Some("A5".to_string()),
+        print_offset_x_mm: Some(2.5),
+        print_offset_y_mm: Some(-1.0),
+        print_mode: Some("dialog".to_string()),
+        is_gst_registered: true,
+        is_composition: true,
+        silent_print_beta: false,
+    };
+
+    let saved = set_settings_inner(&conn, updated_payload).expect("set_settings failed");
+    assert_eq!(saved.shop_name, "किसान सेवा केंद्र सीहोर");
+    assert_eq!(saved.gstin.as_deref(), Some("23AAACK1425H1Z4"));
+    assert_eq!(saved.fy_prefix.as_deref(), Some("KSK"));
+    assert!(saved.is_composition);
+    assert_eq!(saved.print_offset_x_mm, Some(2.5));
+
+    // 3. Re-read to confirm persistence in SQLite
+    let persisted = get_settings_inner(&conn).expect("re-fetch failed");
+    assert_eq!(persisted.shop_name, "किसान सेवा केंद्र सीहोर");
+    assert_eq!(persisted.gstin.as_deref(), Some("23AAACK1425H1Z4"));
+    assert!(persisted.is_composition);
+}
+
+#[test]
+fn test_settings_frontend_json_roundtrip() {
+    use crate::commands::{get_settings_inner, set_settings_inner, AppSettingsPayload};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // Exact JSON serialization matching frontend DEFAULT_SETTINGS with logoData
+    let frontend_json = r#"{
+        "shopName": "श्री राम कृषि केंद्र",
+        "gstin": "23AAAAA0000A1Z5",
+        "stateCode": "23",
+        "phone": "+91 98765 43210",
+        "address": "मंडी रोड, कृषि उपज मंडी के सामने, हरदा (म.प्र.) - 461331",
+        "bankName": "State Bank of India",
+        "bankAccountNo": "31234567890",
+        "bankIfsc": "SBIN0001234",
+        "bankBranch": "Harda Main",
+        "upiId": "9876543210@sbi",
+        "termsAndConditions": "1. माल की वापसी 7 दिन के भीतर मूल रसीद के साथ ही मान्य होगी।",
+        "signatureText": "अधिकृत हस्ताक्षरकर्ता",
+        "signatureData": "",
+        "logoData": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "defaultBillFormat": "A4",
+        "billLanguage": "both",
+        "visibleColumns": {
+            "hsn": true,
+            "unit": true,
+            "discount": true,
+            "gstRate": true,
+            "taxable": true
+        },
+        "fyPrefix": "KK",
+        "lowStockThreshold": 10,
+        "footerNote": "पधारने के लिए धन्यवाद!",
+        "selectedPrinter": "",
+        "printerPaperSize": "A4",
+        "printOffsetXMm": 0.0,
+        "printOffsetYMm": 0.0,
+        "silentPrintBeta": false,
+        "printMode": "dialog",
+        "isGstRegistered": true,
+        "isComposition": false
+    }"#;
+
+    // 1. Deserialize exact frontend JSON
+    let payload: AppSettingsPayload = serde_json::from_str(frontend_json)
+        .expect("Failed to deserialize frontend JSON into AppSettingsPayload");
+    assert_eq!(payload.shop_name, "श्री राम कृषि केंद्र");
+    assert!(payload.logo_data.is_some());
+
+    // 2. Persist via set_settings_inner
+    let saved = set_settings_inner(&conn, payload).expect("set_settings_inner failed");
+    assert_eq!(saved.shop_name, "श्री राम कृषि केंद्र");
+    assert!(saved.logo_data.unwrap().starts_with("data:image/png;base64"));
+
+    // 3. Fetch via get_settings_inner and assert roundtrip equality
+    let retrieved = get_settings_inner(&conn).expect("get_settings_inner failed");
+    assert_eq!(retrieved.shop_name, "श्री राम कृषि केंद्र");
+    assert_eq!(retrieved.gstin.as_deref(), Some("23AAAAA0000A1Z5"));
+    assert_eq!(retrieved.state_code.as_deref(), Some("23"));
+    assert_eq!(retrieved.phone.as_deref(), Some("+91 98765 43210"));
+    assert!(retrieved.logo_data.unwrap().starts_with("data:image/png;base64"));
+}
+
+#[test]
+fn test_financial_year_calculation_and_bill_numbering() {
+    use crate::commands::{calculate_financial_year, get_next_bill_number_inner};
+
+    // 1. Verify exact FY calculation from date:
+    // Oct 2026 -> 26-27
+    assert_eq!(calculate_financial_year("2026-10-24").unwrap(), "26-27");
+    // Feb 2027 -> 26-27
+    assert_eq!(calculate_financial_year("2027-02-15").unwrap(), "26-27");
+    // April 2027 -> 27-28
+    assert_eq!(calculate_financial_year("2027-04-01").unwrap(), "27-28");
+    // March 2027 -> 26-27
+    assert_eq!(calculate_financial_year("2027-03-31").unwrap(), "26-27");
+    // May 2025 -> 25-26
+    assert_eq!(calculate_financial_year("2025-05-10").unwrap(), "25-26");
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO parties (id, name, type) VALUES (50, 'Radheshyam', 'customer')", []).unwrap();
+
+    // 2. First bill in Oct 2026 should be 0001
+    let b1 = get_next_bill_number_inner(&conn, "sale", "2026-10-24", Some("KK")).unwrap();
+    assert_eq!(b1, "KK/26-27/0001");
+
+    // Insert bill 1
+    conn.execute(
+        "INSERT INTO sales (invoice_no, date, customer_id, total_amount) VALUES (?1, '2026-10-24', 50, 10000)",
+        [&b1],
+    ).unwrap();
+
+    // Next bill in same FY (Feb 2027) should be 0002
+    let b2 = get_next_bill_number_inner(&conn, "sale", "2027-02-15", Some("KK")).unwrap();
+    assert_eq!(b2, "KK/26-27/0002");
+
+    // Insert bill 2
+    conn.execute(
+        "INSERT INTO sales (invoice_no, date, customer_id, total_amount) VALUES (?1, '2027-02-15', 50, 20000)",
+        [&b2],
+    ).unwrap();
+
+    // 3. New FY in April 2027: Series MUST restart from 0001
+    let b3 = get_next_bill_number_inner(&conn, "sale", "2027-04-01", Some("KK")).unwrap();
+    assert_eq!(b3, "KK/27-28/0001");
+
+    // Insert bill 3 in new FY
+    conn.execute(
+        "INSERT INTO sales (invoice_no, date, customer_id, total_amount) VALUES (?1, '2027-04-01', 50, 30000)",
+        [&b3],
+    ).unwrap();
+
+    // Subsequent bill in 27-28 FY
+    let b4 = get_next_bill_number_inner(&conn, "sale", "2027-05-10", Some("KK")).unwrap();
+    assert_eq!(b4, "KK/27-28/0002");
+}
+
+#[test]
+fn test_item_gst_status_defaults_and_queries() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Taxable item (e.g. Urea 5%)
+    crate::commands::add_item_inner(
+        &conn,
+        "Urea".to_string(),
+        Some("fertilizer".to_string()),
+        Some("3102".to_string()),
+        Some(5000),
+        "bag".to_string(),
+        Some("taxable".to_string()),
+    ).unwrap();
+
+    // 2. Nil-rated item (e.g. Certified Seed 0%)
+    crate::commands::add_item_inner(
+        &conn,
+        "Wheat Seeds".to_string(),
+        Some("seed".to_string()),
+        Some("1209".to_string()),
+        Some(0),
+        "kg".to_string(),
+        Some("nil_rated".to_string()),
+    ).unwrap();
+
+    // 3. Exempt item
+    crate::commands::add_item_inner(
+        &conn,
+        "Organic Compost".to_string(),
+        Some("bio".to_string()),
+        None,
+        Some(0),
+        "bag".to_string(),
+        Some("exempt".to_string()),
+    ).unwrap();
+
+    // 4. Not-set item (rate is None, status None -> defaults to not_set)
+    crate::commands::add_item_inner(
+        &conn,
+        "Unknown Item".to_string(),
+        None,
+        None,
+        None,
+        "piece".to_string(),
+        None,
+    ).unwrap();
+
+    let items = crate::commands::get_items_inner(&conn).unwrap();
+    assert_eq!(items.len(), 4);
+
+    let urea = items.iter().find(|i| i.name == "Urea").unwrap();
+    assert_eq!(urea.gst_status.as_deref(), Some("taxable"));
+    assert_eq!(urea.gst_rate, Some(5000));
+
+    let seed = items.iter().find(|i| i.name == "Wheat Seeds").unwrap();
+    assert_eq!(seed.gst_status.as_deref(), Some("nil_rated"));
+    assert_eq!(seed.gst_rate, Some(0));
+
+    let compost = items.iter().find(|i| i.name == "Organic Compost").unwrap();
+    assert_eq!(compost.gst_status.as_deref(), Some("exempt"));
+
+    let unknown = items.iter().find(|i| i.name == "Unknown Item").unwrap();
+    assert_eq!(unknown.gst_status.as_deref(), Some("not_set"));
+}
+
+
+
 
 
 

@@ -70,23 +70,18 @@ export function isDemoMode(): boolean {
   );
 }
 
+let mockSettings: any = {
+  ...DEMO_SETTINGS,
+  isGstRegistered: true,
+  isComposition: false,
+  silentPrintBeta: false,
+  printMode: "dialog",
+};
+
 /**
  * Installs Tauri IPC mock layer that intercepts all commands with realistic Krishi Kendra data
  */
 export function setupDemoMocks() {
-  // Ensure default demo settings in localStorage if none or default
-  try {
-    const existing = localStorage.getItem("krishi_kendra_settings");
-    if (!existing || existing.includes("श्री राम")) {
-      localStorage.setItem(
-        "krishi_kendra_settings",
-        JSON.stringify(DEMO_SETTINGS)
-      );
-    }
-  } catch (e) {
-    console.warn("Could not set demo settings in localStorage:", e);
-  }
-
   // Set mockIPC from @tauri-apps/api/mocks
   mockIPC((cmd: string, payload: any = {}) => {
     switch (cmd) {
@@ -103,7 +98,8 @@ export function setupDemoMocks() {
           name: payload.name || "नया सामान",
           base_unit: payload.baseUnit || payload.base_unit || "बोरी",
           hsn: payload.hsn || null,
-          gst_rate: payload.gstRate ?? payload.gst_rate ?? 5,
+          gst_rate: payload.gstRate ?? payload.gst_rate ?? null,
+          gst_status: payload.gstStatus || (payload.gstRate > 0 ? "taxable" : payload.gstRate === 0 ? "nil_rated" : "not_set"),
         };
         store.items.push(newItem);
         return newId;
@@ -386,6 +382,43 @@ export function setupDemoMocks() {
 
       case "add_ledger_entry_cmd":
         return "ok";
+
+      case "get_settings_cmd":
+        return mockSettings;
+
+      case "set_settings_cmd":
+        if (payload.settings) {
+          mockSettings = { ...mockSettings, ...payload.settings };
+        }
+        return mockSettings;
+
+      case "get_next_bill_number_cmd": {
+        const pfx = payload.prefix || (payload.billType === "purchase" ? "PUR" : "KK");
+        const nextIdx = store.recentEntries.length + 1;
+        const fy = payload.date ? payload.date.slice(2, 4) + "-" + (parseInt(payload.date.slice(2, 4)) + 1) : "26-27";
+        return `${pfx}/${fy}/${String(nextIdx).padStart(4, "0")}`;
+      }
+
+      case "list_printers":
+        return [
+          { name: "Canon MF3010", is_default: true, status: "Ready", port_name: "USB001" },
+          { name: "Microsoft Print to PDF", is_default: false, status: "Ready", port_name: "PORTPROMPT:" },
+          { name: "EPSON LX-310 (Dot Matrix)", is_default: false, status: "Ready", port_name: "LPT1:" },
+        ];
+
+      case "get_default_printer":
+        return "Canon MF3010";
+
+      case "print_bill":
+        return {
+          success: true,
+          message: payload.req?.silent
+            ? "साइलेंट प्रिंटिंग (बीटा): '--kiosk-printing' के माध्यम से डिफ़ॉल्ट प्रिंटर पर भेजा गया (असली प्रिंटर पर टेस्ट नहीं हुआ)।"
+            : "प्रिंट डायलॉग तैयार है।",
+          printer_used: payload.req?.printer_name || "Canon MF3010",
+          method_used: payload.req?.silent ? "kiosk_printing_beta" : "dialog",
+          raw_error: undefined,
+        };
 
       default:
         console.warn(`[mockInvoke] Unhandled command: ${cmd}`, payload);

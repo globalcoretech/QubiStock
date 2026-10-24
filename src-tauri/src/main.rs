@@ -6,6 +6,7 @@ mod inventory;
 mod tally_import;
 mod invoice;
 mod commands;
+mod printer;
 
 #[cfg(test)]
 mod tests;
@@ -50,7 +51,13 @@ fn main() {
             commands::get_7_day_trend_cmd,
             commands::get_yesterday_comparison_cmd,
             commands::get_top_receivables_cmd,
-            commands::get_low_stock_items_cmd
+            commands::get_low_stock_items_cmd,
+            commands::list_printers,
+            commands::get_default_printer,
+            commands::print_bill,
+            commands::get_settings_cmd,
+            commands::set_settings_cmd,
+            commands::get_next_bill_number_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

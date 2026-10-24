@@ -14,9 +14,8 @@
       {
         "label": "main",
         "title": "Krishi Kendra Inventory",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1000,
+        "maximized": true,
+        "minWidth": 1024,
         "minHeight": 600,
         "visible": true
       }

@@ -265,17 +265,18 @@ pub fn get_last_rates_cmd(app: AppHandle, item_id: i64) -> Result<LastRates, Str
     get_last_rates_inner(&conn, item_id)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Item {
     pub id: i64,
     pub name: String,
     pub base_unit: String,
     pub hsn: Option<String>,
     pub gst_rate: Option<i64>,
+    pub gst_status: Option<String>,
 }
 
 pub fn get_items_inner(conn: &Connection) -> Result<Vec<Item>, String> {
-    let mut stmt = conn.prepare("SELECT id, name, base_unit, hsn, gst_rate FROM items").map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, name, base_unit, hsn, gst_rate, COALESCE(gst_status, CASE WHEN gst_rate > 0 THEN 'taxable' WHEN gst_rate = 0 THEN 'nil_rated' ELSE 'not_set' END) FROM items").map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], |row| {
         Ok(Item {
             id: row.get(0)?,
@@ -283,6 +284,7 @@ pub fn get_items_inner(conn: &Connection) -> Result<Vec<Item>, String> {
             base_unit: row.get(2)?,
             hsn: row.get(3)?,
             gst_rate: row.get(4)?,
+            gst_status: row.get(5)?,
         })
     }).map_err(|e| e.to_string())?;
     let mut items = Vec::new();
@@ -298,18 +300,41 @@ pub fn get_items_cmd(app: AppHandle) -> Result<Vec<Item>, String> {
     get_items_inner(&conn)
 }
 
-pub fn add_item_inner(conn: &Connection, name: String, category: Option<String>, hsn: Option<String>, gst_rate: Option<i64>, base_unit: String) -> Result<i64, String> {
+pub fn add_item_inner(
+    conn: &Connection,
+    name: String,
+    category: Option<String>,
+    hsn: Option<String>,
+    gst_rate: Option<i64>,
+    base_unit: String,
+    gst_status: Option<String>,
+) -> Result<i64, String> {
+    let effective_status = gst_status.unwrap_or_else(|| {
+        match gst_rate {
+            Some(r) if r > 0 => "taxable".to_string(),
+            Some(r) if r == 0 => "nil_rated".to_string(),
+            _ => "not_set".to_string(),
+        }
+    });
     conn.execute(
-        "INSERT INTO items (name, category, hsn, gst_rate, base_unit) VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![name, category, hsn, gst_rate, base_unit]
+        "INSERT INTO items (name, category, hsn, gst_rate, base_unit, gst_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![name, category, hsn, gst_rate, base_unit, effective_status]
     ).map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
 }
 
 #[command]
-pub fn add_item_cmd(app: AppHandle, name: String, category: Option<String>, hsn: Option<String>, gst_rate: Option<i64>, base_unit: String) -> Result<i64, String> {
+pub fn add_item_cmd(
+    app: AppHandle,
+    name: String,
+    category: Option<String>,
+    hsn: Option<String>,
+    gst_rate: Option<i64>,
+    base_unit: String,
+    gst_status: Option<String>,
+) -> Result<i64, String> {
     let conn = get_conn(&app)?;
-    add_item_inner(&conn, name, category, hsn, gst_rate, base_unit)
+    add_item_inner(&conn, name, category, hsn, gst_rate, base_unit, gst_status)
 }
 
 #[command]
@@ -362,12 +387,13 @@ mod tests {
     fn test_commands_inner_logic() {
         let conn = init_db(":memory:").unwrap();
         
-        let item_id = add_item_inner(&conn, "Urea".to_string(), None, None, Some(5000), "kg".to_string()).unwrap();
+        let item_id = add_item_inner(&conn, "Urea".to_string(), None, None, Some(5000), "kg".to_string(), Some("taxable".to_string())).unwrap();
         assert_eq!(item_id, 1);
         
         let items = get_items_inner(&conn).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "Urea");
+        assert_eq!(items[0].gst_status.as_deref(), Some("taxable"));
         
         conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main')", []).unwrap();
         add_stock_ledger_entry(&conn, "2026-10-09", item_id, 1, 100000, "purchase", None, None, None, None).unwrap();
@@ -2125,3 +2151,283 @@ pub fn get_low_stock_items_cmd(app: AppHandle, threshold_milli: Option<i64>) -> 
     let conn = get_conn(&app)?;
     get_low_stock_items_inner(&conn, threshold_milli.unwrap_or(10_000))
 }
+
+#[command]
+pub fn list_printers() -> Result<Vec<crate::printer::PrinterInfo>, String> {
+    crate::printer::list_printers_impl()
+}
+
+#[command]
+pub fn get_default_printer() -> Result<Option<String>, String> {
+    crate::printer::get_default_printer_impl()
+}
+
+#[command]
+pub fn print_bill(req: crate::printer::PrintBillRequest) -> Result<crate::printer::PrintBillResponse, String> {
+    crate::printer::print_bill_impl(req)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsPayload {
+    pub shop_name: String,
+    pub gstin: Option<String>,
+    pub state_code: Option<String>,
+    pub phone: Option<String>,
+    pub address: Option<String>,
+    pub bank_name: Option<String>,
+    pub bank_account_no: Option<String>,
+    pub bank_ifsc: Option<String>,
+    pub bank_branch: Option<String>,
+    pub upi_id: Option<String>,
+    pub terms_and_conditions: Option<String>,
+    pub signature_text: Option<String>,
+    #[serde(alias = "signatureUrl")]
+    pub signature_data: Option<String>,
+    #[serde(alias = "logoUrl")]
+    pub logo_data: Option<String>,
+    pub default_bill_format: Option<String>,
+    pub bill_language: Option<String>,
+    pub visible_columns: Option<serde_json::Value>,
+    pub fy_prefix: Option<String>,
+    pub low_stock_threshold: Option<i64>,
+    pub footer_note: Option<String>,
+    pub selected_printer: Option<String>,
+    pub printer_paper_size: Option<String>,
+    pub print_offset_x_mm: Option<f64>,
+    pub print_offset_y_mm: Option<f64>,
+    pub print_mode: Option<String>,
+    #[serde(default = "default_true")]
+    pub is_gst_registered: bool,
+    #[serde(default)]
+    pub is_composition: bool,
+    #[serde(default)]
+    pub silent_print_beta: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub fn get_settings_inner(conn: &Connection) -> Result<AppSettingsPayload, String> {
+    let mut stmt = conn.prepare(
+        "SELECT shop_name, gstin, state_code, phone, address,
+                bank_name, bank_account_no, bank_ifsc, bank_branch, upi_id,
+                terms_and_conditions, signature_text, signature_data, logo_data,
+                default_bill_format, bill_language, visible_columns, fy_prefix,
+                low_stock_threshold, footer_note, selected_printer, printer_paper_size,
+                print_offset_x_mm, print_offset_y_mm, print_mode,
+                is_gst_registered, is_composition, silent_print_beta
+         FROM settings WHERE id = 1 LIMIT 1"
+    ).map_err(|e| e.to_string())?;
+
+    stmt.query_row([], |row| {
+        let vis_col_str: String = row.get(16)?;
+        let visible_columns: Option<serde_json::Value> = serde_json::from_str(&vis_col_str).ok();
+
+        let is_reg: i64 = row.get(25)?;
+        let is_comp: i64 = row.get(26)?;
+        let silent_b: i64 = row.get(27)?;
+
+        Ok(AppSettingsPayload {
+            shop_name: row.get(0)?,
+            gstin: row.get(1)?,
+            state_code: row.get(2)?,
+            phone: row.get(3)?,
+            address: row.get(4)?,
+            bank_name: row.get(5)?,
+            bank_account_no: row.get(6)?,
+            bank_ifsc: row.get(7)?,
+            bank_branch: row.get(8)?,
+            upi_id: row.get(9)?,
+            terms_and_conditions: row.get(10)?,
+            signature_text: row.get(11)?,
+            signature_data: row.get(12)?,
+            logo_data: row.get(13)?,
+            default_bill_format: row.get(14)?,
+            bill_language: row.get(15)?,
+            visible_columns,
+            fy_prefix: row.get(17)?,
+            low_stock_threshold: row.get(18)?,
+            footer_note: row.get(19)?,
+            selected_printer: row.get(20)?,
+            printer_paper_size: row.get(21)?,
+            print_offset_x_mm: row.get(22)?,
+            print_offset_y_mm: row.get(23)?,
+            print_mode: row.get(24)?,
+            is_gst_registered: is_reg != 0,
+            is_composition: is_comp != 0,
+            silent_print_beta: silent_b != 0,
+        })
+    }).map_err(|e| e.to_string())
+}
+
+pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<AppSettingsPayload, String> {
+    let vis_col_str = s.visible_columns.as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "{\"hsn\":true,\"unit\":true,\"discount\":true,\"gstRate\":true,\"taxable\":true}".to_string());
+
+    conn.execute(
+        "INSERT INTO settings (
+            id, shop_name, gstin, state_code, phone, address,
+            bank_name, bank_account_no, bank_ifsc, bank_branch, upi_id,
+            terms_and_conditions, signature_text, signature_data, logo_data,
+            default_bill_format, bill_language, visible_columns, fy_prefix,
+            low_stock_threshold, footer_note, selected_printer, printer_paper_size,
+            print_offset_x_mm, print_offset_y_mm, print_mode,
+            is_gst_registered, is_composition, silent_print_beta, updated_at
+        ) VALUES (
+            1, ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14,
+            ?15, ?16, ?17, ?18,
+            ?19, ?20, ?21, ?22,
+            ?23, ?24, ?25,
+            ?26, ?27, ?28, ?29
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            shop_name = excluded.shop_name,
+            gstin = excluded.gstin,
+            state_code = excluded.state_code,
+            phone = excluded.phone,
+            address = excluded.address,
+            bank_name = excluded.bank_name,
+            bank_account_no = excluded.bank_account_no,
+            bank_ifsc = excluded.bank_ifsc,
+            bank_branch = excluded.bank_branch,
+            upi_id = excluded.upi_id,
+            terms_and_conditions = excluded.terms_and_conditions,
+            signature_text = excluded.signature_text,
+            signature_data = excluded.signature_data,
+            logo_data = excluded.logo_data,
+            default_bill_format = excluded.default_bill_format,
+            bill_language = excluded.bill_language,
+            visible_columns = excluded.visible_columns,
+            fy_prefix = excluded.fy_prefix,
+            low_stock_threshold = excluded.low_stock_threshold,
+            footer_note = excluded.footer_note,
+            selected_printer = excluded.selected_printer,
+            printer_paper_size = excluded.printer_paper_size,
+            print_offset_x_mm = excluded.print_offset_x_mm,
+            print_offset_y_mm = excluded.print_offset_y_mm,
+            print_mode = excluded.print_mode,
+            is_gst_registered = excluded.is_gst_registered,
+            is_composition = excluded.is_composition,
+            silent_print_beta = excluded.silent_print_beta,
+            updated_at = excluded.updated_at",
+        rusqlite::params![
+            s.shop_name,
+            s.gstin,
+            s.state_code,
+            s.phone,
+            s.address,
+            s.bank_name,
+            s.bank_account_no,
+            s.bank_ifsc,
+            s.bank_branch,
+            s.upi_id,
+            s.terms_and_conditions,
+            s.signature_text,
+            s.signature_data.unwrap_or_default(),
+            s.logo_data.unwrap_or_default(),
+            s.default_bill_format.unwrap_or_else(|| "A4".to_string()),
+            s.bill_language.unwrap_or_else(|| "both".to_string()),
+            vis_col_str,
+            s.fy_prefix.unwrap_or_else(|| "KK".to_string()),
+            s.low_stock_threshold.unwrap_or(10),
+            s.footer_note,
+            s.selected_printer.unwrap_or_default(),
+            s.printer_paper_size.unwrap_or_else(|| "A4".to_string()),
+            s.print_offset_x_mm.unwrap_or(0.0),
+            s.print_offset_y_mm.unwrap_or(0.0),
+            s.print_mode.unwrap_or_else(|| "dialog".to_string()),
+            if s.is_gst_registered { 1 } else { 0 },
+            if s.is_composition { 1 } else { 0 },
+            if s.silent_print_beta { 1 } else { 0 },
+            "2026-10-24"
+        ]
+    ).map_err(|e| e.to_string())?;
+
+    get_settings_inner(conn)
+}
+
+#[command]
+pub fn get_settings_cmd(app: AppHandle) -> Result<AppSettingsPayload, String> {
+    let conn = get_conn(&app)?;
+    get_settings_inner(&conn)
+}
+
+#[command]
+pub fn set_settings_cmd(app: AppHandle, settings: AppSettingsPayload) -> Result<AppSettingsPayload, String> {
+    let conn = get_conn(&app)?;
+    set_settings_inner(&conn, settings)
+}
+
+pub fn calculate_financial_year(date_str: &str) -> Result<String, String> {
+    let clean = date_str.split('T').next().unwrap_or(date_str).trim();
+    let parts: Vec<&str> = clean.split('-').collect();
+    if parts.len() < 2 {
+        return Err(format!("अमान्य तारीख: {}", date_str));
+    }
+    let year: i32 = parts[0].trim().parse().map_err(|e| format!("अमान्य वर्ष: {}", e))?;
+    let month: u32 = parts[1].trim().parse().map_err(|e| format!("अमान्य माह: {}", e))?;
+
+    let (start_year, end_year) = if month < 4 {
+        (year - 1, year)
+    } else {
+        (year, year + 1)
+    };
+
+    let start_yy = (start_year.rem_euclid(100)) as u32;
+    let end_yy = (end_year.rem_euclid(100)) as u32;
+
+    Ok(format!("{:02}-{:02}", start_yy, end_yy))
+}
+
+pub fn get_next_bill_number_inner(
+    conn: &Connection,
+    bill_type: &str,
+    date_str: &str,
+    prefix: Option<&str>,
+) -> Result<String, String> {
+    let fy = calculate_financial_year(date_str)?;
+    let clean_prefix = prefix
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .unwrap_or(if bill_type == "purchase" { "PUR" } else { "KK" });
+
+    let pattern = format!("{}/{}/%", clean_prefix, fy);
+    let table = if bill_type == "purchase" { "purchases" } else { "sales" };
+    let query = format!("SELECT invoice_no FROM {} WHERE invoice_no LIKE ?1", table);
+
+    let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([&pattern], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+
+    let mut max_seq: i64 = 0;
+    for r in rows.flatten() {
+        let segs: Vec<&str> = r.split('/').collect();
+        if segs.len() >= 3 {
+            if let Ok(seq) = segs[segs.len() - 1].parse::<i64>() {
+                if seq > max_seq {
+                    max_seq = seq;
+                }
+            }
+        }
+    }
+
+    let next_seq = max_seq + 1;
+    Ok(format!("{}/{}/{:04}", clean_prefix, fy, next_seq))
+}
+
+#[command]
+pub fn get_next_bill_number_cmd(
+    app: AppHandle,
+    bill_type: String,
+    date: String,
+    prefix: Option<String>,
+) -> Result<String, String> {
+    let conn = get_conn(&app)?;
+    get_next_bill_number_inner(&conn, &bill_type, &date, prefix.as_deref())
+}
+
+

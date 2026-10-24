@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AppSettings,
@@ -10,17 +10,14 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
+import { Pagination } from "../components/Pagination";
 import {
-  ReceiptText,
-  Landmark,
-  Tag,
-  TrendingUp,
+  DuotoneChart,
   Download,
   Printer,
   Search,
-  X,
 } from "../components/icons";
-import { formatCurrency, formatDate, formatPaymentMode } from "../utils/formatters";
+import { formatCurrency, formatDate } from "../utils/formatters";
 
 type ReportTab = "purchase_reg" | "sales_reg" | "gst_summary" | "hsn_summary" | "profit_report";
 
@@ -31,7 +28,7 @@ interface ReportsViewProps {
   lang: Language;
 }
 
-// CSV Export Helper with UTF-8 BOM for Excel
+// CSV Export Helper with UTF-8 BOM
 function exportToCsv(filename: string, headers: string[], rows: (string | number)[][]) {
   const csvContent = [
     headers.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(","),
@@ -54,7 +51,7 @@ function exportToCsv(filename: string, headers: string[], rows: (string | number
 export function ReportsView({
   settings,
   refreshTrigger,
-  t,
+  t: _t,
   lang,
 }: ReportsViewProps) {
   const [activeTab, setActiveTab] = useState<ReportTab>("sales_reg");
@@ -69,10 +66,15 @@ export function ReportsView({
   const initial = getInitialDates();
   const [fromDate, setFromDate] = useState(initial.from);
   const [toDate, setToDate] = useState(initial.to);
+  const [activeDatePreset, setActiveDatePreset] = useState<string>("this_month");
   const [withGst, setWithGst] = useState<boolean>(true);
   const [searchFilter, setSearchFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(6);
 
   const [purchaseReg, setPurchaseReg] = useState<RegisterReport | null>(null);
   const [salesReg, setSalesReg] = useState<RegisterReport | null>(null);
@@ -80,17 +82,29 @@ export function ReportsView({
   const [hsnSummary, setHsnSummary] = useState<HsnSummaryReport | null>(null);
   const [profitReport, setProfitReport] = useState<ProfitReport | null>(null);
 
+  const setToday = () => {
+    const today = new Date().toISOString().split("T")[0];
+    setFromDate(today);
+    setToDate(today);
+    setActiveDatePreset("today");
+    setPage(1);
+  };
+
+  const setLast7Days = () => {
+    const now = new Date();
+    const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    setFromDate(past.toISOString().split("T")[0]);
+    setToDate(now.toISOString().split("T")[0]);
+    setActiveDatePreset("7_days");
+    setPage(1);
+  };
+
   const setThisMonth = () => {
     const now = new Date();
     setFromDate(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0]);
     setToDate(now.toISOString().split("T")[0]);
-  };
-
-  const setLast30Days = () => {
-    const now = new Date();
-    const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    setFromDate(past.toISOString().split("T")[0]);
-    setToDate(now.toISOString().split("T")[0]);
+    setActiveDatePreset("this_month");
+    setPage(1);
   };
 
   const setThisFiscalYear = () => {
@@ -98,6 +112,8 @@ export function ReportsView({
     const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
     setFromDate(`${year}-04-01`);
     setToDate(now.toISOString().split("T")[0]);
+    setActiveDatePreset("fiscal_year");
+    setPage(1);
   };
 
   const fetchReportData = async () => {
@@ -157,240 +173,48 @@ export function ReportsView({
 
   const handleExportCsv = () => {
     const gstSuffix = withGst ? "GST" : "NoGST";
-    if (activeTab === "purchase_reg") {
+    if (activeTab === "sales_reg") {
       const headers = [
-        lang === "hi" ? "तारीख" : "Date",
-        lang === "hi" ? "बिल नं" : "Invoice No",
-        lang === "hi" ? "सप्लायर का नाम" : "Supplier Name",
+        "तारीख",
+        "बिल नं",
+        "ग्राहक का नाम",
         "GSTIN",
-        lang === "hi" ? "राज्य प्रकार" : "State Type",
-        lang === "hi" ? "कर योग्य मूल्य (₹)" : "Taxable (₹)",
-        ...(withGst ? ["CGST (₹)", "SGST (₹)", "IGST (₹)"] : []),
-        lang === "hi" ? "कुल बिल राशि (₹)" : "Total Bill (₹)",
-        lang === "hi" ? "भुगतान माध्यम" : "Payment Mode",
-        lang === "hi" ? "चुकाई गई राशि (₹)" : "Paid Amount (₹)",
-      ];
-      const rows = (purchaseReg?.entries || []).map((e) => [
-        formatDate(e.date),
-        e.invoice_no,
-        e.party_name,
-        e.party_gstin || (lang === "hi" ? "अपंजीकृत" : "Unregistered"),
-        e.state_type === "interstate" ? "IGST" : "CGST+SGST",
-        (e.taxable / 100).toFixed(2),
-        ...(withGst
-          ? [
-              (e.cgst / 100).toFixed(2),
-              (e.sgst / 100).toFixed(2),
-              (e.igst / 100).toFixed(2),
-            ]
-          : []),
-        (e.total / 100).toFixed(2),
-        formatPaymentMode(e.payment_mode, lang),
-        (e.paid_amount / 100).toFixed(2),
-      ]);
-      rows.push([
-        lang === "hi" ? "कुल योग" : "TOTAL",
-        "",
-        "",
-        "",
-        "",
-        ((purchaseReg?.total_taxable || 0) / 100).toFixed(2),
-        ...(withGst
-          ? [
-              ((purchaseReg?.total_cgst || 0) / 100).toFixed(2),
-              ((purchaseReg?.total_sgst || 0) / 100).toFixed(2),
-              ((purchaseReg?.total_igst || 0) / 100).toFixed(2),
-            ]
-          : []),
-        ((purchaseReg?.grand_total || 0) / 100).toFixed(2),
-        "",
-        "",
-      ]);
-      exportToCsv(`Purchase_Register_${fromDate}_to_${toDate}_${gstSuffix}.csv`, headers, rows);
-    } else if (activeTab === "sales_reg") {
-      const headers = [
-        lang === "hi" ? "तारीख" : "Date",
-        lang === "hi" ? "बिल नं" : "Invoice No",
-        lang === "hi" ? "ग्राहक / किसान" : "Customer Name",
-        "GSTIN",
-        lang === "hi" ? "राज्य प्रकार" : "State Type",
-        lang === "hi" ? "कर योग्य बिक्री (₹)" : "Taxable Sales (₹)",
-        ...(withGst ? ["CGST (₹)", "SGST (₹)", "IGST (₹)"] : []),
-        lang === "hi" ? "कुल बिल राशि (₹)" : "Total Bill (₹)",
-        lang === "hi" ? "भुगतान माध्यम" : "Payment Mode",
-        lang === "hi" ? "प्राप्त राशि (₹)" : "Received Amount (₹)",
+        "कर योग्य (₹)",
+        ...(withGst ? ["टैक्स (₹)"] : []),
+        "कुल बिल राशि (₹)",
+        "माध्यम",
       ];
       const rows = (salesReg?.entries || []).map((e) => [
         formatDate(e.date),
         e.invoice_no,
         e.party_name,
-        e.party_gstin || (lang === "hi" ? "अपंजीकृत" : "Unregistered"),
-        e.state_type === "interstate" ? "IGST" : "CGST+SGST",
+        e.party_gstin || "अपंजीकृत",
         (e.taxable / 100).toFixed(2),
-        ...(withGst
-          ? [
-              (e.cgst / 100).toFixed(2),
-              (e.sgst / 100).toFixed(2),
-              (e.igst / 100).toFixed(2),
-            ]
-          : []),
+        ...(withGst ? [((e.cgst + e.sgst + e.igst) / 100).toFixed(2)] : []),
         (e.total / 100).toFixed(2),
-        formatPaymentMode(e.payment_mode, lang),
-        (e.paid_amount / 100).toFixed(2),
-      ]);
-      rows.push([
-        lang === "hi" ? "कुल योग" : "TOTAL",
-        "",
-        "",
-        "",
-        "",
-        ((salesReg?.total_taxable || 0) / 100).toFixed(2),
-        ...(withGst
-          ? [
-              ((salesReg?.total_cgst || 0) / 100).toFixed(2),
-              ((salesReg?.total_sgst || 0) / 100).toFixed(2),
-              ((salesReg?.total_igst || 0) / 100).toFixed(2),
-            ]
-          : []),
-        ((salesReg?.grand_total || 0) / 100).toFixed(2),
-        "",
-        "",
+        e.payment_mode,
       ]);
       exportToCsv(`Sales_Register_${fromDate}_to_${toDate}_${gstSuffix}.csv`, headers, rows);
-    } else if (activeTab === "gst_summary") {
+    } else if (activeTab === "purchase_reg") {
       const headers = [
-        lang === "hi" ? "विवरण" : "Description",
-        lang === "hi" ? "कर योग्य मूल्य (₹)" : "Taxable (₹)",
-        "CGST (₹)",
-        "SGST (₹)",
-        "IGST (₹)",
-        lang === "hi" ? "कुल जीएसटी (₹)" : "Total GST (₹)",
+        "तारीख",
+        "बिल नं",
+        "सप्लायर का नाम",
+        "GSTIN",
+        "कर योग्य (₹)",
+        ...(withGst ? ["टैक्स (₹)"] : []),
+        "कुल राशि (₹)",
       ];
-      const rows = [
-        [
-          lang === "hi" ? "1. आउटपुट जीएसटी (बिक्री कर দেনदारी)" : "1. Output GST (Sales Tax)",
-          ((gstSummary?.output_taxable || 0) / 100).toFixed(2),
-          ((gstSummary?.output_cgst || 0) / 100).toFixed(2),
-          ((gstSummary?.output_sgst || 0) / 100).toFixed(2),
-          ((gstSummary?.output_igst || 0) / 100).toFixed(2),
-          ((gstSummary?.output_total_gst || 0) / 100).toFixed(2),
-        ],
-        [
-          lang === "hi" ? "2. इनपुट जीएसटी (पात्र खरीदी - ITC)" : "2. Input GST (Eligible ITC)",
-          ((gstSummary?.input_taxable_eligible || 0) / 100).toFixed(2),
-          ((gstSummary?.input_cgst || 0) / 100).toFixed(2),
-          ((gstSummary?.input_sgst || 0) / 100).toFixed(2),
-          ((gstSummary?.input_igst || 0) / 100).toFixed(2),
-          ((gstSummary?.input_total_gst || 0) / 100).toFixed(2),
-        ],
-        [
-          lang === "hi" ? "3. कम्पोजिशन / अपंजीकृत खरीदी (अपात्र ITC)" : "3. Ineligible Purchases (No ITC)",
-          ((gstSummary?.input_taxable_ineligible || 0) / 100).toFixed(2),
-          "0.00",
-          "0.00",
-          "0.00",
-          "0.00",
-        ],
-        [
-          lang === "hi" ? "4. शुद्ध देय जीएसटी / (आईटीसी शेष)" : "4. Net Payable / (ITC Balance)",
-          "",
-          ((gstSummary?.net_cgst_payable || 0) / 100).toFixed(2),
-          ((gstSummary?.net_sgst_payable || 0) / 100).toFixed(2),
-          ((gstSummary?.net_igst_payable || 0) / 100).toFixed(2),
-          ((gstSummary?.net_total_payable || 0) / 100).toFixed(2),
-        ],
-      ];
-      exportToCsv(`GST_Summary_${fromDate}_to_${toDate}.csv`, headers, rows);
-    } else if (activeTab === "hsn_summary") {
-      const headers = [
-        "HSN",
-        lang === "hi" ? "सामान का विवरण" : "Item Description",
-        lang === "hi" ? "कुल मात्रा" : "Total Qty",
-        lang === "hi" ? "इकाई" : "Unit",
-        lang === "hi" ? "कर योग्य मूल्य (₹)" : "Taxable (₹)",
-        ...(withGst ? ["CGST (₹)", "SGST (₹)", "IGST (₹)", lang === "hi" ? "कुल कर (₹)" : "Total Tax (₹)"] : []),
-        lang === "hi" ? "कुल मूल्य (₹)" : "Total Value (₹)",
-      ];
-      const rows = (hsnSummary?.items || []).map((h) => [
-        h.hsn,
-        h.item_names,
-        (h.total_qty / 1000).toFixed(2),
-        h.base_unit,
-        (h.taxable_value / 100).toFixed(2),
-        ...(withGst
-          ? [
-              (h.cgst / 100).toFixed(2),
-              (h.sgst / 100).toFixed(2),
-              (h.igst / 100).toFixed(2),
-              (h.total_tax / 100).toFixed(2),
-            ]
-          : []),
-        (h.total_value / 100).toFixed(2),
+      const rows = (purchaseReg?.entries || []).map((e) => [
+        formatDate(e.date),
+        e.invoice_no,
+        e.party_name,
+        e.party_gstin || "-",
+        (e.taxable / 100).toFixed(2),
+        ...(withGst ? [((e.cgst + e.sgst + e.igst) / 100).toFixed(2)] : []),
+        (e.total / 100).toFixed(2),
       ]);
-      rows.push([
-        lang === "hi" ? "कुल योग" : "TOTAL",
-        "",
-        "",
-        "",
-        ((hsnSummary?.total_taxable || 0) / 100).toFixed(2),
-        ...(withGst ? ["", "", "", ((hsnSummary?.total_tax || 0) / 100).toFixed(2)] : []),
-        ((hsnSummary?.grand_total || 0) / 100).toFixed(2),
-      ]);
-      exportToCsv(`HSN_Summary_${fromDate}_to_${toDate}_${gstSuffix}.csv`, headers, rows);
-    } else if (activeTab === "profit_report") {
-      const headers = withGst
-        ? [
-            lang === "hi" ? "सामान का नाम" : "Item Name",
-            lang === "hi" ? "बेची गई मात्रा" : "Sold Qty",
-            lang === "hi" ? "इकाई" : "Unit",
-            lang === "hi" ? "कर योग्य बिक्री (₹)" : "Taxable Sale (₹)",
-            lang === "hi" ? "सकल बिक्री (₹)" : "Gross Sale (₹)",
-            lang === "hi" ? "खरीदी लागत (WAC ₹)" : "Cost (WAC ₹)",
-            lang === "hi" ? "सकल लाभ (₹)" : "Gross Profit (₹)",
-            lang === "hi" ? "प्रति इकाई भाव" : "Unit Price",
-            lang === "hi" ? "प्रति इकाई लागत" : "Unit Cost",
-            lang === "hi" ? "मार्जिन (%)" : "Margin (%)",
-          ]
-        : [
-            lang === "hi" ? "सामान का नाम" : "Item Name",
-            lang === "hi" ? "बेची गई मात्रा" : "Sold Qty",
-            lang === "hi" ? "इकाई" : "Unit",
-            lang === "hi" ? "बिक्री मूल्य (₹)" : "Sale Value (₹)",
-            lang === "hi" ? "खरीदी लागत (WAC ₹)" : "Cost (WAC ₹)",
-            lang === "hi" ? "शुद्ध लाभ (₹)" : "Net Profit (₹)",
-            lang === "hi" ? "प्रति इकाई भाव" : "Unit Price",
-            lang === "hi" ? "प्रति इकाई लागत" : "Unit Cost",
-            lang === "hi" ? "प्रति इकाई लाभ" : "Unit Profit",
-            lang === "hi" ? "मार्जिन (%)" : "Margin (%)",
-          ];
-      const rows = (profitReport?.items || []).map((p) =>
-        withGst
-          ? [
-              p.item_name,
-              (p.qty_sold / 1000).toFixed(2),
-              p.base_unit,
-              (p.taxable_sale / 100).toFixed(2),
-              (p.gross_sale / 100).toFixed(2),
-              (p.cost_amount / 100).toFixed(2),
-              (p.gross_profit / 100).toFixed(2),
-              (p.unit_sale_price / 100).toFixed(2),
-              (p.unit_cost / 100).toFixed(2),
-              p.margin_percent.toFixed(2) + "%",
-            ]
-          : [
-              p.item_name,
-              (p.qty_sold / 1000).toFixed(2),
-              p.base_unit,
-              (p.taxable_sale / 100).toFixed(2),
-              (p.cost_amount / 100).toFixed(2),
-              (p.profit_without_gst / 100).toFixed(2),
-              (p.unit_sale_price / 100).toFixed(2),
-              (p.unit_cost / 100).toFixed(2),
-              (p.unit_profit / 100).toFixed(2),
-              p.margin_percent.toFixed(2) + "%",
-            ]
-      );
-      exportToCsv(`Profit_Report_${fromDate}_to_${toDate}_${gstSuffix}.csv`, headers, rows);
+      exportToCsv(`Purchase_Register_${fromDate}_to_${toDate}_${gstSuffix}.csv`, headers, rows);
     }
   };
 
@@ -398,734 +222,440 @@ export function ReportsView({
     window.print();
   };
 
-  const tabs: { id: ReportTab; title: string; icon: React.ReactNode }[] = [
-    {
-      id: "purchase_reg",
-      title: t.reports.tabs.purchaseReg,
-      icon: <ReceiptText size={16} strokeWidth={1.75} />,
-    },
-    {
-      id: "sales_reg",
-      title: t.reports.tabs.salesReg,
-      icon: <ReceiptText size={16} strokeWidth={1.75} />,
-    },
-    {
-      id: "gst_summary",
-      title: t.reports.tabs.gstSummary,
-      icon: <Landmark size={16} strokeWidth={1.75} />,
-    },
-    {
-      id: "hsn_summary",
-      title: t.reports.tabs.hsnSummary,
-      icon: <Tag size={16} strokeWidth={1.75} />,
-    },
-    {
-      id: "profit_report",
-      title: t.reports.tabs.profitReport,
-      icon: <TrendingUp size={16} strokeWidth={1.75} />,
-    },
+  const tabs: { id: ReportTab; title: string; testId: string }[] = [
+    { id: "sales_reg", title: "बिक्री", testId: "report-tab-sales_reg" },
+    { id: "purchase_reg", title: "खरीदी", testId: "report-tab-purchase_reg" },
+    { id: "gst_summary", title: "GST", testId: "report-tab-gst_summary" },
+    { id: "hsn_summary", title: "HSN", testId: "report-tab-hsn_summary" },
+    { id: "profit_report", title: "लाभ", testId: "report-tab-profit_report" },
   ];
 
+  const gstRows = gstSummary
+    ? [
+        {
+          invoice_no: "GST-OUT",
+          party_name: "बिक्री (Output Taxable)",
+          taxable: gstSummary.output_taxable,
+          total_tax: gstSummary.output_total_gst,
+          total_amount: gstSummary.output_taxable + gstSummary.output_total_gst,
+          payment_mode: "output",
+        },
+        {
+          invoice_no: "GST-IN",
+          party_name: "खरीदी (Input Eligible)",
+          taxable: gstSummary.input_taxable_eligible,
+          total_tax: gstSummary.input_total_gst,
+          total_amount: gstSummary.input_taxable_eligible + gstSummary.input_total_gst,
+          payment_mode: "input",
+        },
+        {
+          invoice_no: "GST-NET",
+          party_name: "शुद्ध देयता (Net GST Payable)",
+          taxable: 0,
+          total_tax: gstSummary.net_total_payable,
+          total_amount: gstSummary.net_total_payable,
+          payment_mode: "payable",
+        },
+      ]
+    : [];
+
+  // Current active dataset for table & chart
+  let activeDataEntries: any[] = [];
+  if (activeTab === "sales_reg") activeDataEntries = salesReg?.entries || [];
+  else if (activeTab === "purchase_reg") activeDataEntries = purchaseReg?.entries || [];
+  else if (activeTab === "gst_summary") activeDataEntries = gstRows;
+  else if (activeTab === "hsn_summary") activeDataEntries = hsnSummary?.items || [];
+  else if (activeTab === "profit_report") activeDataEntries = profitReport?.items || [];
+
+  const filteredEntries = activeDataEntries.filter((item) => {
+    if (!searchFilter.trim()) return true;
+    const s = searchFilter.toLowerCase();
+    return (
+      (item.party_name && item.party_name.toLowerCase().includes(s)) ||
+      (item.invoice_no && item.invoice_no.toLowerCase().includes(s)) ||
+      (item.item_name && item.item_name.toLowerCase().includes(s)) ||
+      (item.hsn && item.hsn.toLowerCase().includes(s))
+    );
+  });
+
+  const totalEntries = filteredEntries.length;
+  const paginatedEntries = filteredEntries.slice((page - 1) * pageSize, page * pageSize);
+
+  // Totals for KPI cards
+  const currentTotal = activeTab === "sales_reg" ? salesReg?.grand_total || 0 : purchaseReg?.grand_total || 0;
+  const currentTaxable = activeTab === "sales_reg" ? salesReg?.total_taxable || 0 : purchaseReg?.total_taxable || 0;
+  const currentTax =
+    activeTab === "sales_reg"
+      ? (salesReg?.total_cgst || 0) + (salesReg?.total_sgst || 0) + (salesReg?.total_igst || 0)
+      : (purchaseReg?.total_cgst || 0) + (purchaseReg?.total_sgst || 0) + (purchaseReg?.total_igst || 0);
+
   return (
-    <div className="space-y-6">
-      {/* Page Header (no-print) */}
-      <div className="pb-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 no-print">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-            {t.reports.title}
+    <div className="h-full max-h-full flex flex-col justify-between overflow-hidden gap-2 text-ink font-body select-none">
+      {/* 1. Header with Indigo Color Strip + Tabs on One Line + Export Buttons */}
+      <div className="bg-surface border border-border border-t-4 border-t-indigo-600 rounded-panel p-2 px-3.5 shadow-2xs flex items-center justify-between gap-3 flex-shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-800 flex items-center justify-center flex-shrink-0">
+            <DuotoneChart size={20} />
+          </div>
+          <h2 className="font-serif text-base sm:text-lg font-bold tracking-tight text-ink whitespace-nowrap">
+            {lang === "hi" ? "व्यापार रिपोर्ट्स" : "Reports"}
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            {t.reports.subtitle}
-          </p>
+
+          {/* 5 Tabs on One Line */}
+          <div className="flex items-center gap-1 bg-paper border border-border p-0.5 rounded-lg ml-2 overflow-x-auto">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                data-testid={tab.testId}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  setPage(1);
+                }}
+                className={`px-3 py-1 text-xs font-bold rounded-md transition-all whitespace-nowrap ${
+                  activeTab === tab.id
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "text-muted hover:text-ink hover:bg-forest/5"
+                }`}
+              >
+                {tab.title}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Export Buttons on Top Right */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           <button
+            type="button"
+            data-testid="report-csv-btn"
             onClick={handleExportCsv}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold shadow-xs transition-colors"
+            className="px-2.5 py-1.5 rounded-lg border border-border bg-paper hover:bg-forest/10 text-ink text-xs font-bold flex items-center gap-1 shadow-2xs transition-colors"
           >
-            <Download size={14} strokeWidth={1.75} />
-            <span>{t.common.exportExcel}</span>
+            <Download size={14} />
+            <span className="hidden sm:inline">CSV</span>
           </button>
-
           <button
+            type="button"
+            data-testid="report-print-btn"
             onClick={handlePrint}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+            className="px-2.5 py-1.5 rounded-lg border border-border bg-paper hover:bg-forest/10 text-ink text-xs font-bold flex items-center gap-1 shadow-2xs transition-colors"
           >
-            <Printer size={14} strokeWidth={1.75} />
-            <span>{t.common.exportPdf}</span>
+            <Printer size={14} />
+            <span className="hidden sm:inline">प्रिंट</span>
           </button>
         </div>
       </div>
 
       <FeedbackBanner feedback={feedback} />
 
-      {/* Tabs Bar */}
-      <div className="flex border-b border-slate-200 overflow-x-auto gap-1 no-print">
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              data-testid={`report-tab-${tab.id}`}
-              onClick={() => {
-                setActiveTab(tab.id);
-                setSearchFilter("");
-              }}
-              className={`pb-2.5 px-3.5 text-xs font-semibold whitespace-nowrap transition-colors flex items-center gap-2 border-b-2 -mb-px ${
-                isActive
-                  ? "border-emerald-600 text-emerald-800"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              <span>{tab.icon}</span>
-              <span>{tab.title}</span>
-            </button>
-          );
-        })}
+      {/* 2. One-Line Filter Strip: Date chips + Custom range + GST toggle */}
+      <div className="bg-surface border border-border rounded-panel p-2 px-3 shadow-2xs flex flex-wrap items-center justify-between gap-2 flex-shrink-0 text-xs">
+        {/* Left: Date Chips */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={setToday}
+            className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
+              activeDatePreset === "today"
+                ? "bg-forest text-white border-forest shadow-xs"
+                : "bg-paper border-border text-muted hover:text-ink"
+            }`}
+          >
+            आज
+          </button>
+          <button
+            type="button"
+            onClick={setLast7Days}
+            className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
+              activeDatePreset === "7_days"
+                ? "bg-forest text-white border-forest shadow-xs"
+                : "bg-paper border-border text-muted hover:text-ink"
+            }`}
+          >
+            7 दिन
+          </button>
+          <button
+            type="button"
+            onClick={setThisMonth}
+            className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
+              activeDatePreset === "this_month"
+                ? "bg-forest text-white border-forest shadow-xs"
+                : "bg-paper border-border text-muted hover:text-ink"
+            }`}
+          >
+            इस महीने
+          </button>
+          <button
+            type="button"
+            onClick={setThisFiscalYear}
+            className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
+              activeDatePreset === "fiscal_year"
+                ? "bg-forest text-white border-forest shadow-xs"
+                : "bg-paper border-border text-muted hover:text-ink"
+            }`}
+          >
+            वित्तीय वर्ष
+          </button>
+        </div>
+
+        {/* Center: Custom Date Range */}
+        <div className="flex items-center gap-1.5 font-mono">
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => {
+              setFromDate(e.target.value);
+              setActiveDatePreset("custom");
+              setPage(1);
+            }}
+            className="px-2 py-0.5 border border-border bg-paper rounded text-xs font-bold"
+          />
+          <span className="text-muted font-sans text-xs">से</span>
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => {
+              setToDate(e.target.value);
+              setActiveDatePreset("custom");
+              setPage(1);
+            }}
+            className="px-2 py-0.5 border border-border bg-paper rounded text-xs font-bold"
+          />
+        </div>
+
+        {/* Right: GST Toggle Buttons */}
+        <div className="flex items-center bg-paper border border-border rounded-lg p-0.5">
+          <button
+            type="button"
+            data-testid="report-toggle-with-gst"
+            onClick={() => setWithGst(true)}
+            className={`px-2.5 py-0.5 rounded text-xs font-bold transition-all ${
+              withGst ? "bg-emerald-600 text-white shadow-2xs" : "text-muted hover:text-ink"
+            }`}
+          >
+            GST के साथ
+          </button>
+          <button
+            type="button"
+            data-testid="report-toggle-no-gst"
+            onClick={() => setWithGst(false)}
+            className={`px-2.5 py-0.5 rounded text-xs font-bold transition-all ${
+              !withGst ? "bg-emerald-600 text-white shadow-2xs" : "text-muted hover:text-ink"
+            }`}
+          >
+            बिना GST
+          </button>
+        </div>
       </div>
 
-      {/* Filter and Controls Toolbar (no-print) */}
-      <div className="bg-slate-50/70 p-4 rounded-xl border border-slate-200/80 space-y-3 no-print">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* Date Pickers with DD/MM/YYYY formatting */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs font-semibold text-slate-600">
-                {t.reports.fromDate}:
-              </label>
-              <div className="relative">
-                <input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono bg-white outline-none"
-                />
-              </div>
-              <span className="text-xs font-mono text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">
-                {formatDate(fromDate)}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs font-semibold text-slate-600">
-                {t.reports.toDate}:
-              </label>
-              <div className="relative">
-                <input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono bg-white outline-none"
-                />
-              </div>
-              <span className="text-xs font-mono text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">
-                {formatDate(toDate)}
-              </span>
-            </div>
-
-            {/* Quick Presets */}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={setThisMonth}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded text-xs font-medium text-slate-600 transition"
-              >
-                {t.reports.presetThisMonth}
-              </button>
-              <button
-                type="button"
-                onClick={setLast30Days}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded text-xs font-medium text-slate-600 transition"
-              >
-                {t.reports.presetLast30Days}
-              </button>
-              <button
-                type="button"
-                onClick={setThisFiscalYear}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded text-xs font-medium text-slate-600 transition"
-              >
-                {t.reports.presetFiscalYear}
-              </button>
-            </div>
-          </div>
-
-          {/* GST Toggle Pill */}
-          <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-white text-xs">
-            <button
-              type="button"
-              data-testid="report-toggle-no-gst"
-              onClick={() => setWithGst(false)}
-              className={`px-3 py-1 rounded-md transition-all font-medium ${
-                !withGst
-                  ? "bg-slate-800 text-white font-semibold shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              {t.reports.viewWithoutGst}
-            </button>
-            <button
-              type="button"
-              data-testid="report-toggle-with-gst"
-              onClick={() => setWithGst(true)}
-              className={`px-3 py-1 rounded-md transition-all font-medium ${
-                withGst
-                  ? "bg-emerald-600 text-white font-semibold shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              {t.reports.viewWithGst}
-            </button>
+      {/* 3. KPI Strip: 4 Vibrant Cards with Light Gradient */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-shrink-0">
+        <div className="bg-gradient-to-br from-indigo-50/90 to-indigo-100/50 border border-indigo-200/90 rounded-panel p-2.5 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-900 block">
+            कुल बिल राशि
+          </span>
+          <div className="text-xl sm:text-2xl font-serif font-bold text-indigo-950 num-tabular mt-0.5">
+            {formatCurrency(currentTotal)}
           </div>
         </div>
 
-        {/* Search Input for Current Tab */}
-        {(activeTab === "purchase_reg" ||
-          activeTab === "sales_reg" ||
-          activeTab === "hsn_summary" ||
-          activeTab === "profit_report") && (
-          <div className="relative max-w-sm">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-              <Search size={14} strokeWidth={1.75} />
+        <div className="bg-gradient-to-br from-blue-50/90 to-blue-100/50 border border-blue-200/90 rounded-panel p-2.5 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-900 block">
+            कर योग्य मूल्य
+          </span>
+          <div className="text-xl sm:text-2xl font-serif font-bold text-blue-950 num-tabular mt-0.5">
+            {formatCurrency(currentTaxable)}
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-emerald-50/90 to-emerald-100/50 border border-emerald-200/90 rounded-panel p-2.5 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-900 block">
+            कुल जीएसटी (टैक्स)
+          </span>
+          <div className="text-xl sm:text-2xl font-serif font-bold text-emerald-950 num-tabular mt-0.5">
+            {formatCurrency(currentTax)}
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-amber-50/90 to-amber-100/50 border border-amber-200/90 rounded-panel p-2.5 shadow-2xs">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 block">
+            कुल प्रविष्टियां
+          </span>
+          <div className="text-xl sm:text-2xl font-serif font-bold text-amber-950 num-tabular mt-0.5">
+            {activeDataEntries.length} बिल / मद
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Lower Area: Left Chart + Right Paginated Table (Zero Page Scroll) */}
+      <div className="grid grid-cols-12 gap-2.5 flex-1 min-h-0 overflow-hidden">
+        {/* Left Column: Visual Summary Chart (col-span-4) */}
+        <div className="col-span-12 lg:col-span-4 bg-surface border border-border rounded-panel p-3 flex flex-col justify-between overflow-y-auto shadow-2xs" data-scroll="true">
+          <div className="flex items-center justify-between pb-1.5 border-b border-border/70 flex-shrink-0">
+            <span className="font-serif font-bold text-xs text-ink">
+              {lang === "hi" ? "व्यापार सारांश ग्राफ" : "Summary Chart"}
             </span>
-            <input
-              type="text"
-              placeholder={t.common.search}
-              value={searchFilter}
-              onChange={(e) => setSearchFilter(e.target.value)}
-              className="w-full pl-8 pr-7 py-1.5 border border-slate-200 rounded-lg text-xs bg-white outline-none"
-            />
-            {searchFilter && (
-              <button
-                type="button"
-                onClick={() => setSearchFilter("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X size={12} strokeWidth={2} />
-              </button>
-            )}
+            <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded">
+              {withGst ? "GST सहित" : "बिना GST"}
+            </span>
           </div>
-        )}
-      </div>
 
-      {loading && (
-        <div className="py-12 text-center text-slate-400 text-xs">
-          {t.common.loading}
-        </div>
-      )}
-
-      {/* 1. PURCHASE REGISTER */}
-      {!loading && activeTab === "purchase_reg" && purchaseReg && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 no-print">
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{lang === "hi" ? "बिल संख्या" : "Invoices"}</span>
-              <span className="text-xl font-bold font-mono text-slate-900 mt-1 block">
-                {purchaseReg.entries.length}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{t.common.taxable}</span>
-              <span className="text-xl font-bold font-mono text-slate-800 mt-1 block">
-                {formatCurrency(purchaseReg.total_taxable)}
-              </span>
-            </div>
-            {withGst && (
-              <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-                <span className="text-xs text-slate-500 font-medium">CGST + SGST + IGST</span>
-                <span className="text-xl font-bold font-mono text-slate-800 mt-1 block">
-                  {formatCurrency(purchaseReg.total_cgst + purchaseReg.total_sgst + purchaseReg.total_igst)}
-                </span>
+          {/* SVG Ratio / Bar Graphic */}
+          <div className="flex-1 min-h-0 flex flex-col justify-center items-center py-2">
+            <div className="w-full space-y-2.5 px-2">
+              <div>
+                <div className="flex justify-between text-[11px] font-bold text-muted mb-0.5">
+                  <span>कर योग्य मूल्य</span>
+                  <span className="font-mono text-ink">{formatCurrency(currentTaxable)}</span>
+                </div>
+                <div className="h-3 w-full bg-border/50 rounded-full overflow-hidden">
+                  <div
+                    style={{
+                      width: `${currentTotal > 0 ? Math.min(100, (currentTaxable / currentTotal) * 100) : 0}%`,
+                    }}
+                    className="h-full bg-blue-600 rounded-full"
+                  />
+                </div>
               </div>
-            )}
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{t.common.total}</span>
-              <span className="text-xl font-bold font-mono text-emerald-800 mt-1 block">
-                {formatCurrency(purchaseReg.grand_total)}
-              </span>
-            </div>
-          </div>
 
-          <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200">
-                    <th className="py-2.5 px-3">{t.common.date}</th>
-                    <th className="py-2.5 px-3">{t.dashboard.invoiceNo}</th>
-                    <th className="py-2.5 px-3">{t.common.supplier}</th>
-                    <th className="py-2.5 px-3">{t.common.gstin}</th>
-                    <th className="py-2.5 px-3 text-right">{t.common.taxable}</th>
-                    {withGst && (
-                      <>
-                        <th className="py-2.5 px-3 text-right">CGST</th>
-                        <th className="py-2.5 px-3 text-right">SGST</th>
-                        <th className="py-2.5 px-3 text-right">IGST</th>
-                      </>
-                    )}
-                    <th className="py-2.5 px-3 text-right font-bold text-slate-900">{t.common.total}</th>
-                    <th className="py-2.5 px-3">{t.common.paymentMode}</th>
-                    <th className="py-2.5 px-3 text-right">{t.common.paid}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {purchaseReg.entries
-                    .filter((e) => {
-                      if (!searchFilter.trim()) return true;
-                      const term = searchFilter.toLowerCase();
-                      return (
-                        e.party_name.toLowerCase().includes(term) ||
-                        e.invoice_no.toLowerCase().includes(term)
-                      );
-                    })
-                    .map((e, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-2.5 px-3 font-mono text-slate-600">{formatDate(e.date)}</td>
-                        <td className="py-2.5 px-3 font-mono font-medium text-slate-800">{e.invoice_no}</td>
-                        <td className="py-2.5 px-3 font-medium text-slate-900">{e.party_name}</td>
-                        <td className="py-2.5 px-3 font-mono text-slate-500">{e.party_gstin || "-"}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">{formatCurrency(e.taxable)}</td>
-                        {withGst && (
-                          <>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(e.cgst)}</td>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(e.sgst)}</td>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(e.igst)}</td>
-                          </>
-                        )}
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">{formatCurrency(e.total)}</td>
-                        <td className="py-2.5 px-3 text-slate-600">{formatPaymentMode(e.payment_mode, lang)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">{formatCurrency(e.paid_amount)}</td>
-                      </tr>
-                    ))}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-slate-50 font-bold border-t border-slate-200">
-                    <td colSpan={4} className="py-2.5 px-3 text-slate-700">{lang === "hi" ? "कुल योग" : "TOTAL"}</td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-900">{formatCurrency(purchaseReg.total_taxable)}</td>
-                    {withGst && (
-                      <>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(purchaseReg.total_cgst)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(purchaseReg.total_sgst)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(purchaseReg.total_igst)}</td>
-                      </>
-                    )}
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-800">{formatCurrency(purchaseReg.grand_total)}</td>
-                    <td colSpan={2} className="py-2.5 px-3"></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. SALES REGISTER */}
-      {!loading && activeTab === "sales_reg" && salesReg && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 no-print">
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{lang === "hi" ? "बिल संख्या" : "Invoices"}</span>
-              <span className="text-xl font-bold font-mono text-slate-900 mt-1 block">
-                {salesReg.entries.length}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{t.common.taxable}</span>
-              <span className="text-xl font-bold font-mono text-slate-800 mt-1 block">
-                {formatCurrency(salesReg.total_taxable)}
-              </span>
-            </div>
-            {withGst && (
-              <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-                <span className="text-xs text-slate-500 font-medium">CGST + SGST + IGST</span>
-                <span className="text-xl font-bold font-mono text-slate-800 mt-1 block">
-                  {formatCurrency(salesReg.total_cgst + salesReg.total_sgst + salesReg.total_igst)}
-                </span>
+              <div>
+                <div className="flex justify-between text-[11px] font-bold text-muted mb-0.5">
+                  <span>टैक्स (GST)</span>
+                  <span className="font-mono text-ink">{formatCurrency(currentTax)}</span>
+                </div>
+                <div className="h-3 w-full bg-border/50 rounded-full overflow-hidden">
+                  <div
+                    style={{
+                      width: `${currentTotal > 0 ? Math.min(100, (currentTax / currentTotal) * 100) : 0}%`,
+                    }}
+                    className="h-full bg-emerald-600 rounded-full"
+                  />
+                </div>
               </div>
-            )}
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{t.common.total}</span>
-              <span className="text-xl font-bold font-mono text-emerald-800 mt-1 block">
-                {formatCurrency(salesReg.grand_total)}
-              </span>
-            </div>
-          </div>
 
-          <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200">
-                    <th className="py-2.5 px-3">{t.common.date}</th>
-                    <th className="py-2.5 px-3">{t.dashboard.invoiceNo}</th>
-                    <th className="py-2.5 px-3">{t.common.customer}</th>
-                    <th className="py-2.5 px-3">{t.common.gstin}</th>
-                    <th className="py-2.5 px-3 text-right">{t.common.taxable}</th>
-                    {withGst && (
-                      <>
-                        <th className="py-2.5 px-3 text-right">CGST</th>
-                        <th className="py-2.5 px-3 text-right">SGST</th>
-                        <th className="py-2.5 px-3 text-right">IGST</th>
-                      </>
-                    )}
-                    <th className="py-2.5 px-3 text-right font-bold text-slate-900">{t.common.total}</th>
-                    <th className="py-2.5 px-3">{t.common.paymentMode}</th>
-                    <th className="py-2.5 px-3 text-right">{t.common.paid}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {salesReg.entries
-                    .filter((e) => {
-                      if (!searchFilter.trim()) return true;
-                      const term = searchFilter.toLowerCase();
-                      return (
-                        e.party_name.toLowerCase().includes(term) ||
-                        e.invoice_no.toLowerCase().includes(term)
-                      );
-                    })
-                    .map((e, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-2.5 px-3 font-mono text-slate-600">{formatDate(e.date)}</td>
-                        <td className="py-2.5 px-3 font-mono font-medium text-slate-800">{e.invoice_no}</td>
-                        <td className="py-2.5 px-3 font-medium text-slate-900">{e.party_name}</td>
-                        <td className="py-2.5 px-3 font-mono text-slate-500">{e.party_gstin || "-"}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">{formatCurrency(e.taxable)}</td>
-                        {withGst && (
-                          <>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(e.cgst)}</td>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(e.sgst)}</td>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(e.igst)}</td>
-                          </>
-                        )}
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">{formatCurrency(e.total)}</td>
-                        <td className="py-2.5 px-3 text-slate-600">{formatPaymentMode(e.payment_mode, lang)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">{formatCurrency(e.paid_amount)}</td>
-                      </tr>
-                    ))}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-slate-50 font-bold border-t border-slate-200">
-                    <td colSpan={4} className="py-2.5 px-3 text-slate-700">{lang === "hi" ? "कुल योग" : "TOTAL"}</td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-900">{formatCurrency(salesReg.total_taxable)}</td>
-                    {withGst && (
-                      <>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(salesReg.total_cgst)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(salesReg.total_sgst)}</td>
-                        <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(salesReg.total_igst)}</td>
-                      </>
-                    )}
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-800">{formatCurrency(salesReg.grand_total)}</td>
-                    <td colSpan={2} className="py-2.5 px-3"></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 3. GST SUMMARY */}
-      {!loading && activeTab === "gst_summary" && gstSummary && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 no-print">
-            <div className="bg-white border border-slate-200/80 p-5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs font-medium text-slate-500">
-                {lang === "hi" ? "आउटपुट जीएसटी (बिक्री कर)" : "Output GST (Sales)"}
-              </span>
-              <span className="text-2xl font-bold font-mono text-slate-900 mt-2 block">
-                {formatCurrency(gstSummary.output_total_gst)}
-              </span>
-              <span className="text-xs text-slate-500 mt-1 block">
-                {lang === "hi" ? "कर योग्य बिक्री: " : "Taxable Sales: "}
-                {formatCurrency(gstSummary.output_taxable)}
-              </span>
-            </div>
-
-            <div className="bg-white border border-slate-200/80 p-5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs font-medium text-slate-500">
-                {lang === "hi" ? "इनपुट जीएसटी (ITC - खरीदी)" : "Input GST (Eligible ITC)"}
-              </span>
-              <span className="text-2xl font-bold font-mono text-slate-900 mt-2 block">
-                {formatCurrency(gstSummary.input_total_gst)}
-              </span>
-              <span className="text-xs text-slate-500 mt-1 block">
-                {lang === "hi" ? "पात्र खरीदी: " : "Eligible Purchases: "}
-                {formatCurrency(gstSummary.input_taxable_eligible)}
-              </span>
-            </div>
-
-            <div className="bg-white border border-slate-200/80 p-5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs font-medium text-slate-500">
-                {gstSummary.net_total_payable >= 0
-                  ? (lang === "hi" ? "शुद्ध देय जीएसटी" : "Net Payable GST")
-                  : (lang === "hi" ? "आईटीसी शेष (क्रेडिट)" : "ITC Credit Balance")}
-              </span>
-              <span
-                className={`text-2xl font-bold font-mono mt-2 block ${
-                  gstSummary.net_total_payable >= 0 ? "text-rose-700" : "text-emerald-700"
-                }`}
-              >
-                {formatCurrency(Math.abs(gstSummary.net_total_payable))}
-              </span>
-              <span className="text-xs text-slate-500 mt-1 block">
-                {gstSummary.net_total_payable >= 0
-                  ? (lang === "hi" ? "आउटपुट जीएसटी > इनपुट आईटीसी" : "Output GST > Input ITC")
-                  : (lang === "hi" ? "इनपुट आईटीसी > आउटपुट जीएसटी" : "Input ITC > Output GST")}
-              </span>
-            </div>
-          </div>
-
-          <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200">
-                    <th className="py-3 px-4">{lang === "hi" ? "कर विवरण" : "Description"}</th>
-                    <th className="py-3 px-4 text-right">{t.common.taxable}</th>
-                    <th className="py-3 px-4 text-right">CGST</th>
-                    <th className="py-3 px-4 text-right">SGST</th>
-                    <th className="py-3 px-4 text-right">IGST</th>
-                    <th className="py-3 px-4 text-right font-bold text-slate-900">{t.common.tax}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  <tr className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-3 px-4 font-semibold text-slate-900">
-                      1. {lang === "hi" ? "आउटपुट जीएसटी (बिक्री দেনदारी)" : "Output GST (Sales Tax Liability)"}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-700">{formatCurrency(gstSummary.output_taxable)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.output_cgst)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.output_sgst)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.output_igst)}</td>
-                    <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">{formatCurrency(gstSummary.output_total_gst)}</td>
-                  </tr>
-
-                  <tr className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-3 px-4 font-semibold text-slate-900">
-                      2. {lang === "hi" ? "इनपुट जीएसटी (पात्र खरीदी - ITC)" : "Input GST (Eligible Purchases - ITC)"}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-700">{formatCurrency(gstSummary.input_taxable_eligible)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.input_cgst)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.input_sgst)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.input_igst)}</td>
-                    <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">{formatCurrency(gstSummary.input_total_gst)}</td>
-                  </tr>
-
-                  <tr className="hover:bg-slate-50/70 bg-slate-50/40">
-                    <td className="py-3 px-4 text-slate-600">
-                      3. {lang === "hi" ? "कम्पोजिशन / अपंजीकृत खरीदी (अपात्र ITC)" : "Ineligible / Composition Purchases (No ITC)"}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-600">{formatCurrency(gstSummary.input_taxable_ineligible)}</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-400">₹0.00</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-400">₹0.00</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-400">₹0.00</td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-400">₹0.00</td>
-                  </tr>
-                </tbody>
-                <tfoot>
-                  <tr className="bg-slate-50 font-bold border-t border-slate-200">
-                    <td className="py-3 px-4 text-slate-900">
-                      4. {lang === "hi" ? "शुद्ध देय जीएसटी / (आईटीसी शेष)" : "Net Payable / (Credit Balance)"}
-                    </td>
-                    <td className="py-3 px-4"></td>
-                    <td className="py-3 px-4 text-right font-mono">{formatCurrency(gstSummary.net_cgst_payable)}</td>
-                    <td className="py-3 px-4 text-right font-mono">{formatCurrency(gstSummary.net_sgst_payable)}</td>
-                    <td className="py-3 px-4 text-right font-mono">{formatCurrency(gstSummary.net_igst_payable)}</td>
-                    <td
-                      className={`py-3 px-4 text-right font-mono font-bold ${
-                        gstSummary.net_total_payable >= 0 ? "text-rose-700" : "text-emerald-700"
-                      }`}
-                    >
-                      {formatCurrency(gstSummary.net_total_payable)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. HSN SUMMARY */}
-      {!loading && activeTab === "hsn_summary" && hsnSummary && (
-        <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200">
-                  <th className="py-2.5 px-3">HSN</th>
-                  <th className="py-2.5 px-3">{lang === "hi" ? "सामान का नाम" : "Items"}</th>
-                  <th className="py-2.5 px-3 text-right">{t.common.qty}</th>
-                  <th className="py-2.5 px-3">{t.common.unit}</th>
-                  <th className="py-2.5 px-3 text-right">{t.common.taxable}</th>
-                  {withGst && (
-                    <>
-                      <th className="py-2.5 px-3 text-right">CGST</th>
-                      <th className="py-2.5 px-3 text-right">SGST</th>
-                      <th className="py-2.5 px-3 text-right">IGST</th>
-                      <th className="py-2.5 px-3 text-right">{t.common.tax}</th>
-                    </>
+              <div className="p-2.5 bg-paper rounded-xl border border-border/70 text-center">
+                <span className="text-[10px] font-bold text-muted uppercase block">औसत बिल राशि</span>
+                <span className="text-lg font-serif font-bold text-indigo-950 font-mono">
+                  {formatCurrency(
+                    activeDataEntries.length > 0 ? Math.round(currentTotal / activeDataEntries.length) : 0
                   )}
-                  <th className="py-2.5 px-3 text-right font-bold text-slate-900">{t.common.total}</th>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[10px] text-muted text-center border-t border-border/60 pt-1.5 flex-shrink-0">
+            {fromDate} से {toDate} का रिकॉर्ड
+          </div>
+        </div>
+
+        {/* Right Column: Table with Search & Pagination (col-span-8) */}
+        <div
+          className="col-span-12 lg:col-span-8 bg-surface border border-border rounded-panel flex flex-col justify-between min-h-0 overflow-hidden shadow-2xs"
+          data-scroll="true"
+        >
+          {/* Search Bar on Top */}
+          <div className="p-2 border-b border-border/80 flex items-center justify-between gap-2 flex-shrink-0 bg-paper/40">
+            <span className="text-xs font-bold text-ink truncate">
+              {tabs.find((t) => t.id === activeTab)?.title} प्रविष्टियां ({filteredEntries.length})
+            </span>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder={lang === "hi" ? "तालिका में खोजें..." : "Search..."}
+                value={searchFilter}
+                onChange={(e) => {
+                  setSearchFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="text-xs px-2.5 py-1 pl-6 bg-surface border border-border rounded-lg text-ink focus:outline-none focus:ring-1 focus:ring-forest w-36 sm:w-48"
+              />
+              <Search size={12} className="absolute left-2 top-2 text-muted pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Table Body (Fixed Header, Fits available height) */}
+          <div className="flex-1 min-h-0 overflow-y-auto" data-scroll="true">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead className="bg-paper sticky top-0 border-b border-border text-muted font-bold z-10">
+                <tr>
+                  <th className="py-2 px-2.5">तारीख / नं</th>
+                  <th className="py-2 px-2">पार्टी / सामान</th>
+                  <th className="py-2 px-2 text-right">कर योग्य</th>
+                  {withGst && <th className="py-2 px-2 text-right">टैक्स</th>}
+                  <th className="py-2 px-2.5 text-right">कुल रकम</th>
+                  <th className="py-2 px-2 text-center">माध्यम/स्थिति</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {hsnSummary.items
-                  .filter((h) => {
-                    if (!searchFilter.trim()) return true;
-                    const term = searchFilter.toLowerCase();
-                    return h.hsn.toLowerCase().includes(term) || h.item_names.toLowerCase().includes(term);
-                  })
-                  .map((h, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{h.hsn}</td>
-                      <td className="py-2.5 px-3 font-medium text-slate-900">{h.item_names}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-slate-700">{(h.total_qty / 1000).toFixed(2)}</td>
-                      <td className="py-2.5 px-3 text-slate-500">{h.base_unit}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-slate-700">{formatCurrency(h.taxable_value)}</td>
-                      {withGst && (
-                        <>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(h.cgst)}</td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(h.sgst)}</td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(h.igst)}</td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-700">{formatCurrency(h.total_tax)}</td>
-                        </>
-                      )}
-                      <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">{formatCurrency(h.total_value)}</td>
-                    </tr>
-                  ))}
-              </tbody>
-              <tfoot>
-                <tr className="bg-slate-50 font-bold border-t border-slate-200">
-                  <td colSpan={4} className="py-2.5 px-3 text-slate-700">{lang === "hi" ? "कुल योग" : "TOTAL"}</td>
-                  <td className="py-2.5 px-3 text-right font-mono text-slate-900">{formatCurrency(hsnSummary.total_taxable)}</td>
-                  {withGst && (
-                    <>
-                      <td colSpan={3} className="py-2.5 px-3"></td>
-                      <td className="py-2.5 px-3 text-right font-mono">{formatCurrency(hsnSummary.total_tax)}</td>
-                    </>
-                  )}
-                  <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-800">{formatCurrency(hsnSummary.grand_total)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-      )}
+              <tbody className="divide-y divide-border/60">
+                {paginatedEntries.length > 0 ? (
+                  paginatedEntries.map((row, idx) => {
+                    const rowDate = row.date ? formatDate(row.date) : row.hsn || "-";
+                    const rowName = row.party_name || row.item_name || row.rate_label || "-";
+                    const rowTaxable = row.taxable ?? row.taxable_value ?? row.taxable_sale ?? 0;
+                    const rowTax = (row.cgst || 0) + (row.sgst || 0) + (row.igst || 0) || row.total_tax || 0;
+                    const rowTotal = row.total_amount ?? row.total_value ?? row.gross_sale ?? rowTaxable + rowTax;
 
-      {/* 5. PROFIT REPORT */}
-      {!loading && activeTab === "profit_report" && profitReport && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 no-print">
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">
-                {withGst ? (lang === "hi" ? "कुल बिक्री (सकल)" : "Gross Sales") : (lang === "hi" ? "कर योग्य बिक्री" : "Taxable Sales")}
-              </span>
-              <span className="text-xl font-bold font-mono text-slate-900 mt-1 block">
-                {formatCurrency(withGst ? profitReport.total_gross_sale : profitReport.total_taxable_sale)}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{lang === "hi" ? "खरीदी लागत (WAC)" : "Cost (WAC)"}</span>
-              <span className="text-xl font-bold font-mono text-slate-800 mt-1 block">
-                {formatCurrency(profitReport.total_cost)}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{lang === "hi" ? "कुल लाभ" : "Total Profit"}</span>
-              <span className="text-xl font-bold font-mono text-emerald-800 mt-1 block">
-                {formatCurrency(withGst ? profitReport.total_gross_profit : profitReport.total_profit_without_gst)}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-200/80 p-3.5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <span className="text-xs text-slate-500 font-medium">{lang === "hi" ? "औसत मार्जिन" : "Average Margin"}</span>
-              <span className="text-xl font-bold font-mono text-slate-900 mt-1 block">
-                {profitReport.total_taxable_sale > 0
-                  ? ((profitReport.total_profit_without_gst * 100) / profitReport.total_taxable_sale).toFixed(2)
-                  : "0.00"}%
-              </span>
-            </div>
-          </div>
-
-          <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200">
-                    <th className="py-2.5 px-3">{t.common.item}</th>
-                    <th className="py-2.5 px-3 text-right">{t.common.qty}</th>
-                    <th className="py-2.5 px-3 text-right">{withGst ? (lang === "hi" ? "सकल बिक्री" : "Gross Sale") : (lang === "hi" ? "बिक्री मूल्य" : "Sale Value")}</th>
-                    <th className="py-2.5 px-3 text-right">{lang === "hi" ? "लागत (WAC)" : "Cost (WAC)"}</th>
-                    <th className="py-2.5 px-3 text-right font-bold text-slate-900">{lang === "hi" ? "लाभ" : "Profit"}</th>
-                    <th className="py-2.5 px-3 text-right">{lang === "hi" ? "प्रति इकाई बिक्री" : "Unit Price"}</th>
-                    <th className="py-2.5 px-3 text-right">{lang === "hi" ? "प्रति इकाई लागत" : "Unit Cost"}</th>
-                    <th className="py-2.5 px-3 text-right">{lang === "hi" ? "प्रति इकाई लाभ" : "Unit Profit"}</th>
-                    <th className="py-2.5 px-3 text-right">{lang === "hi" ? "मार्जिन (%)" : "Margin (%)"}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {profitReport.items
-                    .filter((p) => {
-                      if (!searchFilter.trim()) return true;
-                      return p.item_name.toLowerCase().includes(searchFilter.toLowerCase());
-                    })
-                    .map((p, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-2.5 px-3 font-semibold text-slate-900">{p.item_name}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">
-                          {(p.qty_sold / 1000).toFixed(2)} {p.base_unit}
+                    return (
+                      <tr key={idx} className="hover:bg-paper/40 transition-colors">
+                        <td className="py-1.5 px-2.5 font-mono text-muted whitespace-nowrap">
+                          <span className="font-bold text-ink block">{row.invoice_no || rowDate}</span>
+                          <span className="text-[10px]">{rowDate}</span>
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">
-                          {formatCurrency(withGst ? p.gross_sale : p.taxable_sale)}
+                        <td className="py-1.5 px-2 font-bold text-ink truncate max-w-[140px]">
+                          {rowName}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-700">
-                          {formatCurrency(p.cost_amount)}
+                        <td className="py-1.5 px-2 text-right font-mono text-ink">
+                          {formatCurrency(rowTaxable)}
                         </td>
-                        <td
-                          className={`py-2.5 px-3 text-right font-mono font-bold ${
-                            (withGst ? p.gross_profit : p.profit_without_gst) >= 0
-                              ? "text-emerald-700"
-                              : "text-rose-700"
-                          }`}
-                        >
-                          {formatCurrency(withGst ? p.gross_profit : p.profit_without_gst)}
+                        {withGst && (
+                          <td className="py-1.5 px-2 text-right font-mono text-emerald-700">
+                            {formatCurrency(rowTax)}
+                          </td>
+                        )}
+                        <td className="py-1.5 px-2.5 text-right font-mono font-bold text-ink">
+                          {formatCurrency(rowTotal)}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                          {formatCurrency(p.unit_sale_price)}/{p.base_unit}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                          {formatCurrency(p.unit_cost)}/{p.base_unit}
-                        </td>
-                        <td
-                          className={`py-2.5 px-3 text-right font-mono font-semibold ${
-                            p.unit_profit >= 0 ? "text-emerald-700" : "text-rose-700"
-                          }`}
-                        >
-                          {formatCurrency(p.unit_profit)}/{p.base_unit}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono">
+                        <td className="py-1.5 px-2 text-center">
                           <span
-                            className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${
-                              p.margin_percent >= 15
-                                ? "bg-emerald-50 text-emerald-700"
-                                : p.margin_percent >= 5
-                                ? "bg-amber-50 text-amber-700"
-                                : "bg-rose-50 text-rose-700"
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              row.payment_mode === "credit"
+                                ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                : "bg-emerald-100 text-emerald-800 border border-emerald-300"
                             }`}
                           >
-                            {p.margin_percent.toFixed(2)}%
+                            {row.payment_mode === "credit" ? "उधार" : "नकद"}
                           </span>
                         </td>
                       </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-muted">
+                      {loading ? "डेटा लोड हो रहा है..." : "कोई रिकॉर्ड नहीं मिला"}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
+
+          {/* Pagination at bottom */}
+          <Pagination
+            currentPage={page}
+            totalItems={totalEntries}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            pageSizeOptions={[6, 10, 20]}
+            lang={lang}
+            compact
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -113,13 +113,13 @@ export function OpeningStockView({
   }));
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0 space-y-3 overflow-hidden">
       {/* Header */}
-      <div className="pb-4 border-b border-slate-100">
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+      <div className="pb-2.5 border-b border-slate-100 flex-shrink-0">
+        <h2 className="text-lg font-bold text-slate-900 tracking-tight">
           {t.openingStock.title}
         </h2>
-        <p className="text-xs text-slate-500 mt-1">
+        <p className="text-xs text-slate-500">
           {t.openingStock.subtitle}
         </p>
       </div>
@@ -127,8 +127,8 @@ export function OpeningStockView({
       <FeedbackBanner feedback={feedback} />
 
       {/* Form Card */}
-      <div className="max-w-2xl bg-white border border-slate-200/80 rounded-xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-        <form onSubmit={handleSave} className="space-y-5">
+      <div data-scroll="true" className="max-w-2xl bg-white border border-slate-200/80 rounded-xl p-4 sm:p-5 shadow-2xs space-y-4 overflow-y-auto min-h-0">
+        <form onSubmit={handleSave} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">

@@ -1,0 +1,168 @@
+/* Bill Template Styling & Print Rules */
+
+@media print {
+  body {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    background: #ffffff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  /* Repeated table header on multi-page bills */
+  .bill-table thead {
+    display: table-header-group;
+  }
+
+  .bill-table tfoot {
+    display: table-footer-group;
+  }
+
+  .bill-table tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  html, body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  #root,
+  .min-h-screen,
+  #bill-print-target,
+  .bill-container {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  /* When printing bill, cleanly hide main app and strip modal background */
+  body.printing-bill #root {
+    display: none !important;
+  }
+
+  body.printing-bill {
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  .bill-modal-overlay {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    inset: auto !important;
+  }
+
+  .bill-modal-card {
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: transparent !important;
+  }
+
+
+  /* Specific Paper Sizes with zero-overflow margins */
+  @page {
+    margin: 0;
+  }
+
+  .screen-preview-a4,
+  .screen-preview-a5,
+  .screen-preview-a6 {
+    width: 100% !important;
+    min-height: 0 !important;
+    height: auto !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .bill-page {
+    display: block !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    width: 100% !important;
+    min-height: 0 !important;
+    height: auto !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .bill-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+}
+
+.bill-page {
+  box-sizing: border-box;
+}
+
+/* Watermarks for Duplicate & Cancelled */
+.watermark-duplicate {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-30deg);
+  font-size: 4rem;
+  font-weight: 900;
+  color: rgba(220, 38, 38, 0.12);
+  border: 5px dashed rgba(220, 38, 38, 0.2);
+  padding: 10px 40px;
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: 10;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.watermark-cancelled {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-35deg);
+  font-size: 4.5rem;
+  font-weight: 900;
+  color: rgba(185, 28, 28, 0.16);
+  border: 6px solid rgba(185, 28, 28, 0.25);
+  padding: 12px 50px;
+  border-radius: 16px;
+  pointer-events: none;
+  z-index: 10;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Print Page Container Dimensions for screen view */
+.screen-preview-a4 {
+  width: 210mm;
+  min-height: 297mm;
+}
+
+.screen-preview-a5 {
+  width: 148mm;
+  min-height: 210mm;
+}
+
+.screen-preview-a6 {
+  width: 105mm;
+  min-height: 148mm;
+}

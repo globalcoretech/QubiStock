@@ -5,6 +5,7 @@ import { Translations, Language } from "../i18n";
 import { Search, X, ArrowDownLeft, ArrowUpRight, BookOpen, Wallet } from "../components/icons";
 import { EmptyTableMessage } from "../components/FeedbackBanner";
 import { StatementModal } from "../components/StatementModal";
+import { Pagination } from "../components/Pagination";
 import { formatCurrency } from "../utils/formatters";
 
 interface LenDenViewProps {
@@ -23,6 +24,8 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
   const [activeFilter, setActiveFilter] = useState<BalanceFilter>("all");
   const [selectedPartyId, setSelectedPartyId] = useState<number | null>(null);
   const [isStatementOpen, setIsStatementOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 6;
 
   const loadBalances = async () => {
     try {
@@ -53,6 +56,8 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
     return true;
   });
 
+  const paginatedBalances = filteredBalances.slice((page - 1) * pageSize, page * pageSize);
+
   const totalReceivable = balances
     .filter((b) => b.net_balance > 0)
     .reduce((sum, b) => sum + b.net_balance, 0);
@@ -62,25 +67,25 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
     .reduce((sum, b) => sum + Math.abs(b.net_balance), 0);
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0 space-y-2.5 overflow-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-100">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-slate-100 flex-shrink-0">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+          <h2 className="text-lg font-bold text-slate-900 tracking-tight">
             {t.lenDen.title}
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            {t.lenDen.subtitle} • {lang === "hi" ? "किसी भी पार्टी पर क्लिक करके पूरा खाता इतिहास देखें" : "Click on any party to inspect full transaction ledger"}
+          <p className="text-xs text-slate-500">
+            {t.lenDen.subtitle} • {lang === "hi" ? "पार्टी पर क्लिक करके खाता देखें" : "Click party to view ledger"}
           </p>
         </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           {/* Quick Payment Action Button */}
           {onOpenPayment && (
             <button
               type="button"
               onClick={() => onOpenPayment(undefined, "receipt")}
-              className="btn-primary py-2 px-3 text-xs flex items-center gap-1.5 whitespace-nowrap shadow-sm"
+              className="btn-primary py-1.5 px-2.5 text-xs flex items-center gap-1.5 whitespace-nowrap shadow-xs"
             >
               <Wallet size={14} strokeWidth={2} />
               <span>{lang === "hi" ? "पैसा मिला / दिया" : "Payment / Receipt"}</span>
@@ -88,24 +93,30 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
           )}
 
           {/* Search */}
-          <div className="relative w-full sm:w-64">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-              <Search size={16} strokeWidth={1.75} />
+          <div className="relative w-full sm:w-60">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+              <Search size={14} strokeWidth={1.75} />
             </span>
             <input
               type="text"
-              className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50/50 hover:bg-white focus:bg-white focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-colors"
+              className="w-full pl-8 pr-7 py-1.5 border border-slate-200 rounded-lg text-xs bg-slate-50/50 hover:bg-white focus:bg-white focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-colors"
               placeholder={lang === "hi" ? "पार्टी या गांव खोजें..." : "Search party or village..."}
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setPage(1);
+              }}
             />
             {searchTerm && (
               <button
                 type="button"
-                onClick={() => setSearchTerm("")}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                onClick={() => {
+                  setSearchTerm("");
+                  setPage(1);
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
               >
-                <X size={14} strokeWidth={2} />
+                <X size={12} strokeWidth={2} />
               </button>
             )}
           </div>
@@ -113,40 +124,40 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 flex-shrink-0">
         {/* Receivable */}
-        <div className="bg-white border border-slate-200/80 p-5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">
+        <div className="bg-white border border-slate-200/80 p-3 rounded-lg shadow-2xs flex items-center justify-between">
+          <div>
+            <span className="text-xs font-medium text-slate-500 block">
               {t.lenDen.receivableTotal}
             </span>
-            <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-              <ArrowDownLeft size={24} strokeWidth={1.75} />
+            <span className="text-xl font-bold font-mono text-emerald-800 mt-0.5 block">
+              {formatCurrency(totalReceivable)}
             </span>
           </div>
-          <span className="text-2xl font-bold font-mono text-emerald-800 mt-2 block">
-            {formatCurrency(totalReceivable)}
+          <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+            <ArrowDownLeft size={20} strokeWidth={1.75} />
           </span>
         </div>
 
         {/* Payable */}
-        <div className="bg-white border border-slate-200/80 p-5 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">
+        <div className="bg-white border border-slate-200/80 p-3 rounded-lg shadow-2xs flex items-center justify-between">
+          <div>
+            <span className="text-xs font-medium text-slate-500 block">
               {t.lenDen.payableTotal}
             </span>
-            <span className="p-2 bg-rose-50 text-rose-600 rounded-lg">
-              <ArrowUpRight size={24} strokeWidth={1.75} />
+            <span className="text-xl font-bold font-mono text-rose-800 mt-0.5 block">
+              {formatCurrency(totalPayable)}
             </span>
           </div>
-          <span className="text-2xl font-bold font-mono text-rose-800 mt-2 block">
-            {formatCurrency(totalPayable)}
+          <span className="p-2 bg-rose-50 text-rose-600 rounded-lg">
+            <ArrowUpRight size={20} strokeWidth={1.75} />
           </span>
         </div>
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center gap-1.5 border-b border-slate-200 text-xs">
+      <div className="flex items-center gap-1.5 border-b border-slate-200 text-xs flex-shrink-0">
         {[
           { key: "all", label: t.lenDen.filterAll },
           { key: "receivable", label: t.lenDen.filterReceivable },
@@ -156,8 +167,11 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
           <button
             key={tab.key}
             type="button"
-            onClick={() => setActiveFilter(tab.key as BalanceFilter)}
-            className={`pb-2.5 px-3 font-semibold transition-colors border-b-2 -mb-px ${
+            onClick={() => {
+              setActiveFilter(tab.key as BalanceFilter);
+              setPage(1);
+            }}
+            className={`pb-1.5 px-3 font-semibold transition-colors border-b-2 -mb-px text-xs ${
               activeFilter === tab.key
                 ? "border-emerald-600 text-emerald-700"
                 : "border-transparent text-slate-500 hover:text-slate-800"
@@ -168,9 +182,9 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
         ))}
       </div>
 
-      {/* Table */}
-      <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-        <div className="overflow-x-auto">
+      {/* Table Container */}
+      <div className="flex-1 min-h-0 border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-2xs flex flex-col">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200 text-xs">
@@ -189,14 +203,14 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredBalances.length === 0 ? (
+              {paginatedBalances.length === 0 ? (
                 <tr>
                   <td colSpan={8}>
                     <EmptyTableMessage message={t.common.emptyMessage} />
                   </td>
                 </tr>
               ) : (
-                filteredBalances.map((b) => {
+                paginatedBalances.map((b) => {
                   const typeLabel =
                     b.party_type === "customer"
                       ? t.common.customer
@@ -311,6 +325,15 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
               )}
             </tbody>
           </table>
+        </div>
+        <div className="border-t border-slate-100 flex-shrink-0">
+          <Pagination
+            currentPage={page}
+            totalItems={filteredBalances.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            lang={lang}
+          />
         </div>
       </div>
 

@@ -5,6 +5,7 @@ import { Translations, Language } from "../i18n";
 import { AddPartyModal } from "../components/AddPartyModal";
 import { FeedbackBanner, EmptyTableMessage } from "../components/FeedbackBanner";
 import { Plus, Search, X, Trash2 } from "../components/icons";
+import { Pagination } from "../components/Pagination";
 
 interface PartiesViewProps {
   refreshTrigger: number;
@@ -26,6 +27,9 @@ export function PartiesView({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isCleaning, setIsCleaning] = useState(false);
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(7);
+
   const loadParties = async () => {
     try {
       const res = await invoke<Party[]>("get_parties_cmd", { partyType: "all" });
@@ -38,6 +42,10 @@ export function PartiesView({
   useEffect(() => {
     loadParties();
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterType]);
 
   const handleCleanAccountingParties = async () => {
     const ok = window.confirm(t.parties.cleanConfirm);
@@ -73,37 +81,43 @@ export function PartiesView({
     return matchesType && matchesSearch;
   });
 
+  const totalItems = filteredParties.length;
+  const paginatedParties = filteredParties.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0 space-y-2.5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-100">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-slate-100 flex-shrink-0">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+          <h2 className="text-lg font-bold text-slate-900 tracking-tight">
             {t.parties.title}
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-500">
             {t.parties.subtitle}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={handleCleanAccountingParties}
             disabled={isCleaning}
-            className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
             title={t.parties.cleanConfirm}
           >
-            <Trash2 size={14} strokeWidth={1.75} />
+            <Trash2 size={13} strokeWidth={1.75} />
             <span>{isCleaning ? t.common.saving : t.parties.cleanLedgersBtn}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
           >
-            <Plus size={15} strokeWidth={2} />
+            <Plus size={14} strokeWidth={2} />
             <span>{t.parties.addPartyBtn}</span>
           </button>
         </div>
@@ -112,82 +126,69 @@ export function PartiesView({
       <FeedbackBanner feedback={feedback} />
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        {/* Search */}
-        <div className="relative min-w-[260px]">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 flex-shrink-0">
+        <div className="relative min-w-[240px] flex-1">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-            <Search size={16} strokeWidth={1.75} />
+            <Search size={14} strokeWidth={1.75} />
           </span>
           <input
             type="text"
-            className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50/50 hover:bg-white focus:bg-white focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-colors"
-            placeholder={lang === "hi" ? "नाम, फोन या गांव से खोजें..." : "Search name, phone or village..."}
+            placeholder={lang === "hi" ? "पार्टी या गांव खोजें..." : "Search party or village..."}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-8 pr-7 py-1.5 border border-slate-200 rounded-lg text-xs bg-slate-50/50 hover:bg-white focus:bg-white focus:ring-1 focus:ring-emerald-500 outline-none transition-colors"
           />
           {searchTerm && (
             <button
               type="button"
               onClick={() => setSearchTerm("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
             >
-              <X size={14} strokeWidth={2} />
+              <X size={12} strokeWidth={2} />
             </button>
           )}
         </div>
 
-        {/* Party Type Filter */}
-        <div className="flex items-center gap-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50 text-xs">
+        {/* Filter Pills */}
+        <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-medium self-start sm:self-auto">
           {[
-            { key: "all", label: t.parties.allParties },
-            { key: "customer", label: t.parties.customers },
-            { key: "supplier", label: t.parties.suppliers },
-          ].map((item) => (
+            { id: "all", label: t.parties.allParties },
+            { id: "customer", label: t.parties.customers },
+            { id: "supplier", label: t.parties.suppliers },
+          ].map((tab) => (
             <button
-              key={item.key}
+              key={tab.id}
               type="button"
-              onClick={() => setFilterType(item.key)}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-                filterType === item.key
-                  ? "bg-white text-emerald-800 font-semibold shadow-xs"
+              onClick={() => setFilterType(tab.id)}
+              className={`px-3 py-1 rounded-md transition-all text-[11px] ${
+                filterType === tab.id
+                  ? "bg-white text-slate-900 font-bold shadow-2xs"
                   : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              {item.label}
+              {tab.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Modal */}
-      <AddPartyModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSuccess={() => {
-          loadParties();
-          if (onRefresh) onRefresh();
-        }}
-        t={t}
-      />
-
-
-      {/* Table */}
-      <div className="border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="bg-slate-50/75 text-slate-600 font-semibold border-b border-slate-200">
-                <th className="py-3 px-4 w-16">#</th>
-                <th className="py-3 px-4">{t.common.party}</th>
-                <th className="py-3 px-4">{t.common.category}</th>
-                <th className="py-3 px-4">{t.parties.taxCategory}</th>
-                <th className="py-3 px-4">{t.common.gstin}</th>
-                <th className="py-3 px-4">{t.common.village}</th>
-                <th className="py-3 px-4">{t.common.phone}</th>
+      {/* Paginated Parties Table Card */}
+      <div className="flex-1 min-h-0 flex flex-col border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-2xs">
+        <div className="flex-1 min-h-0 overflow-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead className="sticky top-0 bg-slate-50/90 backdrop-blur-xs text-slate-600 font-semibold border-b border-slate-200 z-10">
+              <tr>
+                <th className="py-2 px-3 w-12">#</th>
+                <th className="py-2 px-3">{t.common.party}</th>
+                <th className="py-2 px-3">{lang === "hi" ? "प्रकार" : "Type"}</th>
+                <th className="py-2 px-3">{t.common.category}</th>
+                <th className="py-2 px-3">GSTIN</th>
+                <th className="py-2 px-3">{t.common.village}</th>
+                <th className="py-2 px-3">{t.common.phone}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredParties.length === 0 ? (
+              {paginatedParties.length === 0 ? (
                 <tr>
                   <td colSpan={7}>
                     <EmptyTableMessage
@@ -198,7 +199,7 @@ export function PartiesView({
                   </td>
                 </tr>
               ) : (
-                filteredParties.map((p) => {
+                paginatedParties.map((p) => {
                   const typeLabel =
                     p.party_type === "customer"
                       ? t.common.customer
@@ -208,20 +209,20 @@ export function PartiesView({
 
                   return (
                     <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-4 font-mono text-slate-400 text-xs">
+                      <td className="py-2 px-3 font-mono text-slate-400 text-[11px]">
                         {p.id}
                       </td>
-                      <td className="py-3 px-4 font-semibold text-slate-900">
+                      <td className="py-2 px-3 font-semibold text-slate-900 truncate max-w-[200px]">
                         {p.name}
                       </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-xs font-medium">
+                      <td className="py-2 px-3">
+                        <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-medium">
                           {typeLabel}
                         </span>
                       </td>
-                      <td className="py-3 px-4">
+                      <td className="py-2 px-3">
                         <span
-                          className={`px-2 py-0.5 rounded text-xs font-medium border ${
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
                             p.category === "regular"
                               ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                               : p.category === "composition"
@@ -236,11 +237,13 @@ export function PartiesView({
                             : t.common.unregistered}
                         </span>
                       </td>
-                      <td className="py-3 px-4 font-mono text-slate-600 text-xs">
+                      <td className="py-2 px-3 font-mono text-slate-600 text-[11px]">
                         {p.gstin || "-"}
                       </td>
-                      <td className="py-3 px-4 text-slate-600 text-xs">{p.village || "-"}</td>
-                      <td className="py-3 px-4 font-mono text-slate-700 text-xs">
+                      <td className="py-2 px-3 text-slate-600 text-[11px] truncate max-w-[120px]">
+                        {p.village || "-"}
+                      </td>
+                      <td className="py-2 px-3 font-mono text-slate-700 text-[11px]">
                         {p.phone || "-"}
                       </td>
                     </tr>
@@ -250,7 +253,29 @@ export function PartiesView({
             </tbody>
           </table>
         </div>
+
+        {/* Pagination at bottom */}
+        <Pagination
+          currentPage={currentPage}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          pageSizeOptions={[5, 7, 10, 20]}
+          lang={lang}
+          compact={false}
+        />
       </div>
+
+      <AddPartyModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSuccess={() => {
+          loadParties();
+          if (onRefresh) onRefresh();
+        }}
+        t={t}
+      />
     </div>
   );
 }

@@ -1,19 +1,23 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { AppSettings, Item, Godown, Party, Feedback, LastRates, SearchableOption } from "../types";
 import { Translations, Language } from "../i18n";
-import { formatCurrency, formatPaymentMode } from "../utils/formatters";
+import { formatCurrency } from "../utils/formatters";
+import { formatBillNumber } from "../utils/billNumber";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { AddPartyModal } from "../components/AddPartyModal";
+import { Pagination } from "../components/Pagination";
 import {
-  ShoppingCart,
-  PackagePlus,
+  DuotoneReceipt,
+  DuotoneTruck,
   Plus,
   Trash2,
   Printer,
   X,
   AlertCircle,
+  Search,
 } from "../components/icons";
 
 interface TransactionViewProps {
@@ -40,7 +44,11 @@ export function TransactionView({
   const [parties, setParties] = useState<Party[]>([]);
 
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
-  const [invoiceNo, setInvoiceNo] = useState("");
+  const [billSeq, setBillSeq] = useState(1);
+  const [invoiceNo, setInvoiceNo] = useState(() => {
+    const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
+    return formatBillNumber(1, prefix, new Date());
+  });
   const [partyId, setPartyId] = useState("");
   const [godownId, setGodownId] = useState("1");
   const [paymentMode, setPaymentMode] = useState<"cash" | "credit" | "upi_bank">("cash");
@@ -48,7 +56,55 @@ export function TransactionView({
 
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [lastSavedInvoiceNo, setLastSavedInvoiceNo] = useState("");
-  const [lines, setLines] = useState<any[]>([]);
+  const [lines, setLines] = useState<any[]>([
+    {
+      itemId: "",
+      qty: "",
+      unit: "kg",
+      rate: "",
+      gst: 0,
+      availableStock: 0,
+      lastRates: null,
+    },
+  ]);
+
+  // Quick item search filter state
+  const [quickItemSearch, setQuickItemSearch] = useState("");
+  const [isQuickItemDropdownOpen, setIsQuickItemDropdownOpen] = useState(false);
+  const [quickSearchPos, setQuickSearchPos] = useState({ top: 0, left: 0, width: 0 });
+  const quickSearchInputRef = useRef<HTMLInputElement>(null);
+  const quickSearchDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isQuickItemDropdownOpen && quickSearchInputRef.current) {
+      const rect = quickSearchInputRef.current.getBoundingClientRect();
+      setQuickSearchPos({
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: Math.max(rect.width, 240),
+      });
+    }
+  }, [isQuickItemDropdownOpen, quickItemSearch]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        quickSearchDropdownRef.current &&
+        !quickSearchDropdownRef.current.contains(target) &&
+        quickSearchInputRef.current &&
+        !quickSearchInputRef.current.contains(target)
+      ) {
+        setIsQuickItemDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Pagination for lines if lines > 5
+  const [linesPage, setLinesPage] = useState(1);
+  const LINES_PER_PAGE = 5;
 
   const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
@@ -78,6 +134,15 @@ export function TransactionView({
     try {
       const ptRes = await invoke<Party[]>("get_parties_cmd", { partyType: pType });
       setParties(ptRes);
+      // Auto-prefill default walk-in cash party for sale
+      if (!partyId && ptRes.length > 0) {
+        if (type === "sale") {
+          const walkin = ptRes.find((p) => p.id === 1) || ptRes[0];
+          setPartyId(walkin.id.toString());
+        } else {
+          setPartyId(ptRes[0].id.toString());
+        }
+      }
     } catch (e) {
       console.error("get_parties_cmd error:", e);
     }
@@ -98,19 +163,30 @@ export function TransactionView({
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, [lines, items]);
 
-  const addLine = () => {
+  const addLine = (prefillItemId?: string) => {
+    const targetItem = prefillItemId ? items.find((i) => i.id.toString() === prefillItemId) : null;
+    const newIdx = lines.length;
+
     setLines((prev) => [
       ...prev,
       {
-        itemId: "",
+        itemId: prefillItemId || "",
         qty: "",
-        unit: "kg",
+        unit: targetItem?.base_unit || "kg",
         rate: "",
-        gst: 0,
+        gst: isCompositionSupplier ? 0 : targetItem?.gst_rate ? targetItem.gst_rate / 1000 : 0,
         availableStock: 0,
         lastRates: null,
       },
     ]);
+
+    if (prefillItemId) {
+      fetchLineInfo(newIdx, prefillItemId, godownId);
+    }
+
+    // Adjust linesPage to view the newly added line
+    const targetPage = Math.ceil((lines.length + 1) / LINES_PER_PAGE);
+    setLinesPage(targetPage);
   };
 
   const fetchLineInfo = async (idx: number, itemIdVal: string, gIdVal: string) => {
@@ -220,6 +296,17 @@ export function TransactionView({
         setFeedback({ message: t.salePurchase.validationError, isError: true });
         return;
       }
+      const it = items.find((x) => x.id.toString() === l.itemId);
+      if (it && (it.gst_status === "not_set" || (it.gst_status === undefined && it.gst_rate === null))) {
+        setFeedback({
+          message:
+            lang === "hi"
+              ? `सामान "${it.name}" का GST निर्धारित नहीं है (not_set)। बिल नहीं बन सकता!`
+              : `Item "${it.name}" has GST status 'not_set'. Bill cannot be created!`,
+          isError: true,
+        });
+        return;
+      }
     }
 
     setIsConfirmModalOpen(true);
@@ -238,15 +325,28 @@ export function TransactionView({
     const formattedLines = lines.map((l) => {
       const q = parseFloat(l.qty) * 1000;
       const r = parseFloat(l.rate) * 100;
-      const taxb = Math.round((q / 1000) * r);
+      const taxb = Math.round(parseFloat(l.qty) * parseFloat(l.rate) * 100);
       const effectiveGst = isCompositionSupplier ? 0 : l.gst || 0;
-      const taxAmt = Math.round(taxb * (effectiveGst / 100));
-      const cgst = isInterstate ? 0 : Math.round(taxAmt / 2);
-      const sgst = isInterstate ? 0 : taxAmt - cgst;
-      const igst = isInterstate ? taxAmt : 0;
+      const totalTax = Math.round(taxb * (effectiveGst / 100));
+
+      let cgst = 0;
+      let sgst = 0;
+      let igst = 0;
+
+      if (effectiveGst > 0) {
+        if (isInterstate) {
+          igst = totalTax;
+        } else {
+          cgst = Math.round(totalTax / 2);
+          sgst = totalTax - cgst;
+        }
+      }
+
       return {
         item_id: parseInt(l.itemId),
         itemId: parseInt(l.itemId),
+        godown_id: parseInt(godownId),
+        godownId: parseInt(godownId),
         qty: Math.round(q),
         unit: l.unit,
         rate: Math.round(r),
@@ -288,9 +388,23 @@ export function TransactionView({
         message: `${t.salePurchase.saveSuccess} (${savedInv} • ${formatCurrency(Math.round(grandTotalRupees * 100))})`,
         isError: false,
       });
-      setLines([]);
-      setInvoiceNo("");
-      setPartyId("");
+
+      // Reset for next bill with sequential FY bill number
+      const nextSeq = billSeq + 1;
+      setBillSeq(nextSeq);
+      const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
+      setInvoiceNo(formatBillNumber(nextSeq, prefix, new Date()));
+      setLines([
+        {
+          itemId: "",
+          qty: "",
+          unit: "kg",
+          rate: "",
+          gst: 0,
+          availableStock: 0,
+          lastRates: null,
+        },
+      ]);
       setPaidAmountRupees("");
       setPaymentMode("cash");
       setDate(new Date().toISOString().split("T")[0]);
@@ -314,114 +428,50 @@ export function TransactionView({
     subLabel: `${i.base_unit}${i.gst_rate ? ` • ${i.gst_rate / 1000}%` : ""}`,
   }));
 
+  // Quick items filtered by search
+  const filteredQuickItems = quickItemSearch
+    ? items.filter((i) => i.name.toLowerCase().includes(quickItemSearch.toLowerCase()))
+    : items.slice(0, 8);
+
+  // Paginated visible lines (5 per page) to guarantee zero vertical page scroll
+  const paginatedLines = lines.slice((linesPage - 1) * LINES_PER_PAGE, linesPage * LINES_PER_PAGE);
+
+  const isSale = type === "sale";
+  const accentColor = isSale ? "border-t-emerald-600" : "border-t-blue-600";
+  const primaryBg = isSale ? "bg-emerald-600 hover:bg-emerald-700" : "bg-blue-600 hover:bg-blue-700";
+
   return (
-    <div className="space-y-6">
-      {/* Screen Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-200">
-        <div>
-          <div className="flex items-center gap-2">
-            {type === "sale" ? (
-              <ShoppingCart size={20} className="text-emerald-600" />
-            ) : (
-              <PackagePlus size={20} className="text-slate-700" />
-            )}
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-              {type === "sale" ? t.salePurchase.saleTitle : t.salePurchase.purchaseTitle}
+    <div className="h-full max-h-full flex flex-col justify-between overflow-hidden gap-2 text-ink font-body select-none">
+      {/* 1. Header with Colorful Module Strip on Top */}
+      <div
+        className={`bg-surface border border-border border-t-4 ${accentColor} rounded-panel p-2 px-3.5 shadow-2xs flex items-center justify-between gap-3 flex-shrink-0`}
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div
+            className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+              isSale ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"
+            }`}
+          >
+            {isSale ? <DuotoneReceipt size={20} /> : <DuotoneTruck size={20} />}
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-serif text-base sm:text-lg font-bold tracking-tight text-ink flex items-center gap-2 truncate">
+              <span>{isSale ? "बिल बनाओ (बिक्री)" : "माल आया (खरीदी)"}</span>
+              <span className="text-[11px] font-sans font-semibold bg-paper px-2 py-0.5 rounded text-muted border border-border">
+                {invoiceNo}
+              </span>
             </h2>
           </div>
-          <p className="text-sm text-slate-500 mt-0.5">
-            {type === "sale" ? t.salePurchase.saleSubtitle : t.salePurchase.purchaseSubtitle}
-          </p>
         </div>
 
-        <div className="text-xs text-slate-500 font-medium">
-          {t.salePurchase.shortcutHint}
-        </div>
-      </div>
-
-      <FeedbackBanner feedback={feedback} />
-
-      {/* Post-Save Print Prompt */}
-      {lastSavedInvoiceNo && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-4">
-          <div>
-            <div className="font-semibold text-emerald-950 text-sm">
-              {t.dashboard.invoiceNo}: {lastSavedInvoiceNo}
-            </div>
-            <div className="text-emerald-700 text-xs mt-0.5">
-              {lang === "hi"
-                ? "बिल सुरक्षित हो चुका है। क्या आप बिल प्रिंट करना चाहते हैं?"
-                : "Invoice saved. Would you like to print or export as PDF?"}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onPrintInvoice(lastSavedInvoiceNo)}
-            className="btn-primary py-2 px-4 text-sm"
-          >
-            <Printer size={15} />
-            <span>{t.salePurchase.printBillNow}</span>
-          </button>
-        </div>
-      )}
-
-      {isCompositionSupplier && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3.5 rounded-xl text-sm font-medium flex items-center gap-2">
-          <AlertCircle size={16} className="text-amber-700 flex-shrink-0" />
-          <span>
-            {lang === "hi"
-              ? "कंपोज़िशन सप्लायर: इस बिल पर इनपुट जीएसटी क्रेडिट (ITC) दावा नहीं किया जा सकता।"
-              : "Composition supplier: Input tax credit (ITC) cannot be claimed on this purchase."}
-          </span>
-        </div>
-      )}
-
-      {hasOversell && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-3.5 rounded-xl text-sm font-medium flex items-center gap-2">
-          <AlertCircle size={16} className="text-red-600 flex-shrink-0" />
-          <span>
-            {t.salePurchase.stockError} ({oversoldItemName})
-          </span>
-        </div>
-      )}
-
-      <form onSubmit={handleInitiateSave} className="space-y-6">
-        {/* Invoice Primary Metadata Grid */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-          <div>
-            <label className="block mb-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
-              {t.common.date} *
-            </label>
-            <input
-              required
-              type="date"
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[44px] font-mono"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block mb-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
-              {t.salePurchase.invoiceNo} *
-            </label>
-            <input
-              required
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[44px]"
-              placeholder={type === "purchase" ? "PUR-001" : "BILL-101"}
-              value={invoiceNo}
-              onChange={(e) => setInvoiceNo(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block mb-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
-              {t.common.godown} *
-            </label>
+        {/* Header Right: Godown & Date inline */}
+        <div className="flex items-center gap-2 flex-shrink-0 text-xs">
+          <div className="flex items-center gap-1 bg-paper px-2 py-1 rounded-lg border border-border">
+            <span className="text-muted font-medium">{t.common.godown}:</span>
             <select
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[44px]"
               value={godownId}
               onChange={(e) => handleGodownChange(e.target.value)}
+              className="bg-transparent font-bold text-ink focus:outline-none cursor-pointer"
             >
               {godowns.map((g) => (
                 <option key={g.id} value={g.id}>
@@ -431,383 +481,486 @@ export function TransactionView({
             </select>
           </div>
 
-          <div>
-            <div className="flex justify-between items-center mb-1">
-              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                {type === "purchase" ? t.common.supplier : t.common.customer} *
-              </label>
-              <button
-                type="button"
-                onClick={() => setIsPartyModalOpen(true)}
-                className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold"
-              >
-                {t.common.newParty}
-              </button>
-            </div>
-            <div data-testid="transaction-party-select">
-              <SearchableSelect
-                options={partyOptions}
-                value={partyId}
-                onChange={setPartyId}
-                placeholder={t.salePurchase.partySelectPlaceholder}
-              />
-            </div>
-          </div>
+          <input
+            required
+            type="date"
+            className="px-2 py-1 bg-paper border border-border rounded-lg text-xs font-mono font-bold text-ink focus:outline-none cursor-pointer"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
         </div>
+      </div>
 
-        {/* Items Table */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-          <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-            <h3 className="text-base font-semibold text-slate-900">
-              {t.common.item}
-            </h3>
-            <button
-              type="button"
-              data-testid="transaction-add-line-btn"
-              onClick={addLine}
-              className="btn-secondary text-sm py-2 px-3 min-h-[38px]"
-            >
-              <Plus size={15} />
-              <span>{t.salePurchase.addItemBtn}</span>
-            </button>
+      <FeedbackBanner feedback={feedback} />
+
+      {/* Post-Save Print Prompt */}
+      {lastSavedInvoiceNo && (
+        <div className="p-2 px-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 flex-shrink-0">
+          <div className="text-xs font-semibold text-emerald-950 truncate">
+            {t.dashboard.invoiceNo}: <span className="font-mono font-bold">{lastSavedInvoiceNo}</span> • बिल सुरक्षित हो चुका है।
+          </div>
+          <button
+            type="button"
+            onClick={() => onPrintInvoice(lastSavedInvoiceNo)}
+            className="py-1 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs"
+          >
+            <Printer size={14} />
+            <span>{t.salePurchase.printBillNow}</span>
+          </button>
+        </div>
+      )}
+
+      {hasOversell && (
+        <div className="bg-red-50 border border-red-200 text-red-800 p-2 px-3 rounded-xl text-xs font-bold flex items-center gap-2 flex-shrink-0">
+          <AlertCircle size={15} className="text-red-600 flex-shrink-0" />
+          <span>{t.salePurchase.stockError} ({oversoldItemName})</span>
+        </div>
+      )}
+
+      {/* 2. Main 2-Column Grid (Zero Vertical Page Scroll, 100% Fit) */}
+      <form onSubmit={handleInitiateSave} className="grid grid-cols-12 gap-2.5 flex-1 min-h-0 overflow-hidden">
+        {/* Left Column: ग्राहक selection + Quick Item Search + 5-Line Table with Pagination (col-span-8) */}
+        <div
+          className="col-span-12 lg:col-span-8 h-full flex flex-col justify-between bg-surface border border-border rounded-panel p-3 min-h-0 overflow-hidden shadow-2xs"
+          data-scroll="true"
+        >
+          {/* Top Row: Party Selection + Item Quick Search */}
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pb-2.5 border-b border-border/80 flex-shrink-0">
+            {/* Party Select */}
+            <div className="sm:col-span-6">
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
+                  {isSale ? "ग्राहक (Customer)" : "सप्लायर (Supplier)"} *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsPartyModalOpen(true)}
+                  className="text-[11px] text-forest hover:underline font-bold"
+                >
+                  + {t.common.newParty}
+                </button>
+              </div>
+              <div data-testid="transaction-party-select">
+                <SearchableSelect
+                  options={partyOptions}
+                  value={partyId}
+                  onChange={setPartyId}
+                  placeholder={t.salePurchase.partySelectPlaceholder}
+                />
+              </div>
+            </div>
+
+            {/* Quick Item Search Bar */}
+            <div className="sm:col-span-6 relative">
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
+                  {lang === "hi" ? "सामान खोजें / जोड़ें" : "Search & Add Item"}
+                </label>
+                <button
+                  type="button"
+                  data-testid="transaction-add-line-btn"
+                  onClick={() => addLine()}
+                  className="text-[11px] text-forest font-bold hover:underline"
+                >
+                  + खाली लाइन
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  ref={quickSearchInputRef}
+                  type="text"
+                  placeholder={lang === "hi" ? "टाइप करके तुरंत जोड़ें (उदा. यूरिया)..." : "Type to filter items..."}
+                  value={quickItemSearch}
+                  onFocus={() => setIsQuickItemDropdownOpen(true)}
+                  onChange={(e) => {
+                    setQuickItemSearch(e.target.value);
+                    setIsQuickItemDropdownOpen(true);
+                  }}
+                  className="w-full text-xs px-2.5 py-2 pl-7 bg-paper border border-border rounded-lg text-ink focus:outline-none focus:ring-1 focus:ring-forest"
+                />
+                <Search size={14} className="absolute left-2 top-2.5 text-muted pointer-events-none" />
+
+                {/* Autocomplete Dropdown - Rendered via Portal directly into document.body */}
+                {isQuickItemDropdownOpen &&
+                  quickItemSearch.trim() &&
+                  createPortal(
+                    <div
+                      ref={quickSearchDropdownRef}
+                      data-testid="item-search-dropdown"
+                      data-scroll="true"
+                      style={{
+                        position: "fixed",
+                        top: `${quickSearchPos.top}px`,
+                        left: `${quickSearchPos.left}px`,
+                        width: `${quickSearchPos.width}px`,
+                        zIndex: 9999,
+                      }}
+                      className="bg-surface border border-border rounded-lg shadow-2xl max-h-48 overflow-y-auto divide-y divide-border/60"
+                    >
+                      {filteredQuickItems.length > 0 ? (
+                        filteredQuickItems.map((fi) => (
+                          <div
+                            key={fi.id}
+                            onClick={() => {
+                              addLine(fi.id.toString());
+                              setQuickItemSearch("");
+                              setIsQuickItemDropdownOpen(false);
+                            }}
+                            className="px-3 py-1.5 hover:bg-paper cursor-pointer flex items-center justify-between text-xs"
+                          >
+                            <span className="font-bold text-ink">{fi.name}</span>
+                            <span className="text-[10px] text-muted">
+                              {fi.base_unit} • + जोड़ें
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-2 text-center text-xs text-muted">
+                          सामान नहीं मिला
+                        </div>
+                      )}
+                    </div>,
+                    document.body
+                  )}
+              </div>
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  <th className="py-2.5 px-3 w-5/12">{t.salePurchase.itemsTableHeader.item}</th>
-                  <th className="py-2.5 px-3 w-28 text-right">{t.salePurchase.itemsTableHeader.qty}</th>
-                  <th className="py-2.5 px-3 w-20">{t.salePurchase.itemsTableHeader.unit}</th>
-                  <th className="py-2.5 px-3 w-32 text-right">{t.salePurchase.itemsTableHeader.rate}</th>
-                  <th className="py-2.5 px-3 w-20 text-center">{t.common.tax}</th>
-                  <th className="py-2.5 px-3 w-36 text-right">{t.salePurchase.itemsTableHeader.total}</th>
-                  <th className="py-2.5 px-3 w-14 text-center">{t.common.actions}</th>
+          {/* Lines Table: 5 Rows Max, Table Header Fixed, Zero Page Scroll */}
+          <div className="flex-1 min-h-0 overflow-y-auto my-1" data-scroll="true">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="bg-paper sticky top-0 border-b border-border text-muted font-bold z-10">
+                <tr>
+                  <th className="py-2 px-2.5 w-5/12">{t.salePurchase.itemsTableHeader.item}</th>
+                  <th className="py-2 px-2 w-20 text-right">{t.salePurchase.itemsTableHeader.qty}</th>
+                  <th className="py-2 px-2 w-14 text-center">{t.common.unit}</th>
+                  <th className="py-2 px-2 w-24 text-right">{t.salePurchase.itemsTableHeader.rate}</th>
+                  <th className="py-2 px-2 w-14 text-center">GST%</th>
+                  <th className="py-2 px-2.5 w-24 text-right">{t.common.total}</th>
+                  <th className="py-2 px-1 w-8 text-center" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {lines.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400 text-sm">
-                      {lang === "hi"
-                        ? "बिल में अभी तक कोई सामान नहीं जोड़ा गया है। ऊपर '+ सामान लाइन जोड़ें' दबाएं।"
-                        : "No items added yet. Click '+ Add Item Line' above."}
-                    </td>
-                  </tr>
-                ) : (
-                  lines.map((l, i) => {
-                    const q = parseFloat(l.qty || "0");
-                    const r = parseFloat(l.rate || "0");
-                    const taxb = q * r;
-                    const effectiveGst = isCompositionSupplier ? 0 : l.gst || 0;
-                    const lineAmount = taxb + (taxb * effectiveGst) / 100;
-                    const availBase = (l.availableStock || 0) / 1000;
-                    const isLineOversell =
-                      type === "sale" && l.itemId && q * 1000 > (l.availableStock || 0);
+              <tbody className="divide-y divide-border/60">
+                {paginatedLines.map((l, localIdx) => {
+                  const globalIdx = (linesPage - 1) * LINES_PER_PAGE + localIdx;
+                  const q = parseFloat(l.qty || "0");
+                  const r = parseFloat(l.rate || "0");
+                  const taxb = q * r;
+                  const effectiveGst = isCompositionSupplier ? 0 : l.gst || 0;
+                  const lineAmount = taxb + (taxb * effectiveGst) / 100;
+                  const availBase = (l.availableStock || 0) / 1000;
+                  const isLineOversell = isSale && l.itemId && q * 1000 > (l.availableStock || 0);
 
-                    const lp = l.lastRates?.last_purchase;
-                    const ls = l.lastRates?.last_sale;
-
-                    return (
-                      <tr
-                        key={i}
-                        className={`transition-colors ${
-                          isLineOversell ? "bg-red-50/70" : "hover:bg-slate-50/70"
-                        }`}
-                      >
-                        <td className="py-3 px-3 align-top">
-                          <SearchableSelect
-                            options={itemOptions}
-                            value={l.itemId}
-                            onChange={(val) => updateLine(i, "itemId", val)}
-                            placeholder={t.salePurchase.itemSelectPlaceholder}
-                          />
-
-                          {l.itemId && (
-                            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
-                              <span
-                                className={`px-2 py-0.5 rounded font-medium ${
-                                  isLineOversell
-                                    ? "bg-red-100 text-red-800"
-                                    : "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
-                                }`}
-                              >
-                                {t.salePurchase.stockBadge}: {availBase.toFixed(2)} {l.unit}
-                              </span>
-
-                              {lp && (
-                                <span className="text-slate-500">
-                                  {t.salePurchase.lastPurchaseBadge}: {formatCurrency(lp.rate)}
-                                </span>
-                              )}
-                              {ls && (
-                                <span className="text-slate-500">
-                                  {t.salePurchase.lastSaleBadge}: {formatCurrency(ls.rate)}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-
-                        <td className="py-3 px-3 align-top text-right">
-                          <input
-                            required
-                            type="number"
-                            step="0.01"
-                            className={`w-full px-2.5 py-2 border rounded-lg text-sm font-mono text-right min-h-[44px] ${
-                              isLineOversell
-                                ? "border-red-500 bg-red-50 text-red-900"
-                                : "border-slate-300 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
-                            }`}
-                            placeholder="0.00"
-                            value={l.qty}
-                            onChange={(e) => updateLine(i, "qty", e.target.value)}
-                          />
-                        </td>
-
-                        <td className="py-3 px-3 align-top">
-                          <input
-                            className="w-full px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-700 min-h-[44px]"
-                            value={l.unit}
-                            onChange={(e) => updateLine(i, "unit", e.target.value)}
-                          />
-                        </td>
-
-                        <td className="py-3 px-3 align-top text-right">
-                          <input
-                            required
-                            type="number"
-                            step="0.01"
-                            className="w-full px-2.5 py-2 border border-slate-300 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[44px]"
-                            placeholder="0.00"
-                            value={l.rate}
-                            onChange={(e) => updateLine(i, "rate", e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey && i === lines.length - 1) {
-                                e.preventDefault();
-                                addLine();
-                              }
-                            }}
-                          />
-                        </td>
-
-                        <td className="py-3 px-3 align-top text-center">
-                          <div className="py-2 text-xs text-slate-600 font-mono">
-                            {effectiveGst}%
+                  return (
+                    <tr
+                      key={globalIdx}
+                      className={`hover:bg-paper/40 transition-colors ${
+                        isLineOversell ? "bg-red-50/80" : ""
+                      }`}
+                    >
+                      <td className="py-1.5 px-2 align-middle">
+                        <SearchableSelect
+                          options={itemOptions}
+                          value={l.itemId}
+                          onChange={(val) => updateLine(globalIdx, "itemId", val)}
+                          placeholder={t.salePurchase.itemSelectPlaceholder}
+                        />
+                        {l.itemId && (
+                          <div className="mt-0.5 text-[10px] text-muted flex items-center gap-1.5">
+                            <span
+                              className={`px-1.5 py-0.2 rounded font-bold ${
+                                isLineOversell
+                                  ? "bg-red-100 text-red-800"
+                                  : "bg-emerald-50 text-emerald-800"
+                              }`}
+                            >
+                              उपलब्ध: {availBase.toFixed(1)} {l.unit}
+                            </span>
+                            {l.lastRates?.last_purchase && (
+                              <span>खरीदी: ₹{(l.lastRates.last_purchase.rate / 100).toFixed(0)}</span>
+                            )}
                           </div>
-                        </td>
+                        )}
+                      </td>
 
-                        <td className="py-3 px-3 align-top text-right">
-                          <div className="py-2 font-mono font-semibold text-slate-900">
-                            {formatCurrency(Math.round(lineAmount * 100))}
-                          </div>
-                        </td>
+                      <td className="py-1.5 px-2 align-middle text-right">
+                        <input
+                          required
+                          type="number"
+                          step="0.01"
+                          className={`w-full px-2 py-1.5 border rounded-lg text-xs font-mono font-bold text-right ${
+                            isLineOversell
+                              ? "border-red-500 bg-red-50 text-red-900"
+                              : "border-border bg-paper focus:bg-surface focus:outline-none focus:ring-1 focus:ring-forest"
+                          }`}
+                          placeholder="0.00"
+                          value={l.qty}
+                          onChange={(e) => updateLine(globalIdx, "qty", e.target.value)}
+                        />
+                      </td>
 
-                        <td className="py-3 px-3 align-top text-center">
+                      <td className="py-1.5 px-2 align-middle text-center">
+                        <span className="text-xs font-bold text-muted">{l.unit}</span>
+                      </td>
+
+                      <td className="py-1.5 px-2 align-middle text-right">
+                        <input
+                          required
+                          type="number"
+                          step="0.01"
+                          className="w-full px-2 py-1.5 border border-border bg-paper focus:bg-surface rounded-lg text-xs font-mono font-bold text-right focus:outline-none focus:ring-1 focus:ring-forest"
+                          placeholder="0.00"
+                          value={l.rate}
+                          onChange={(e) => updateLine(globalIdx, "rate", e.target.value)}
+                        />
+                      </td>
+
+                      <td className="py-1.5 px-2 align-middle text-center font-mono text-[11px] font-bold text-muted">
+                        {effectiveGst}%
+                      </td>
+
+                      <td className="py-1.5 px-2.5 align-middle text-right font-mono font-bold text-ink">
+                        {formatCurrency(Math.round(lineAmount * 100))}
+                      </td>
+
+                      <td className="py-1.5 px-1 align-middle text-center">
+                        {lines.length > 1 && (
                           <button
                             type="button"
-                            onClick={() => setLines(lines.filter((_, idx) => idx !== i))}
-                            className="p-2 text-slate-400 hover:text-red-600 rounded-lg transition-colors"
+                            onClick={() => setLines(lines.filter((_, idx) => idx !== globalIdx))}
+                            className="p-1 text-muted hover:text-red-700 transition-colors"
                             title={t.common.delete}
                           >
-                            <Trash2 size={16} />
+                            <Trash2 size={15} />
                           </button>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+
+          {/* Table Bottom: Add Line + Pagination if lines > 5 */}
+          <div className="flex items-center justify-between pt-1 border-t border-border/80 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => addLine()}
+              className="text-xs font-bold text-forest hover:text-emerald-800 flex items-center gap-1 py-1"
+            >
+              <Plus size={15} />
+              <span>+ {t.salePurchase.addItemBtn}</span>
+            </button>
+
+            {lines.length > LINES_PER_PAGE && (
+              <Pagination
+                currentPage={linesPage}
+                totalItems={lines.length}
+                pageSize={LINES_PER_PAGE}
+                onPageChange={setLinesPage}
+                lang={lang}
+                compact
+              />
+            )}
+          </div>
         </div>
 
-        {/* Settlement & Grand Total Bar */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 lg:grid-cols-3 gap-6 items-center shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-          {/* Payment Mode Selector */}
-          <div>
-            <label className="block mb-1.5 text-xs font-medium text-slate-500 uppercase tracking-wider">
+        {/* Right Column: Bill Summary + Settlement + Bada Submit Button (col-span-4) */}
+        <div
+          className="col-span-12 lg:col-span-4 h-full flex flex-col justify-between bg-surface border border-border rounded-panel p-3 min-h-0 overflow-y-auto shadow-2xs"
+          data-scroll="true"
+        >
+          {/* Top: Rakam Breakdown Card */}
+          <div className="bg-gradient-to-br from-emerald-50/80 to-emerald-100/40 border border-emerald-200/90 rounded-xl p-2.5 flex-shrink-0 space-y-1">
+            <div className="flex justify-between text-xs text-emerald-950 font-medium">
+              <span>कुल सामान (Lines):</span>
+              <span className="font-bold font-mono">{lines.length} मद</span>
+            </div>
+            <div className="flex justify-between text-xs text-emerald-950 font-medium">
+              <span>{t.common.taxable}:</span>
+              <span className="font-mono font-bold">{formatCurrency(Math.round(totalTaxable * 100))}</span>
+            </div>
+            <div className="flex justify-between text-xs text-emerald-950 font-medium pb-1 border-b border-emerald-200">
+              <span>{t.common.tax} (GST):</span>
+              <span className="font-mono font-bold">{formatCurrency(Math.round(totalGst * 100))}</span>
+            </div>
+
+            {/* Grand Total Highlight */}
+            <div className="pt-0.5">
+              <span className="text-[10px] uppercase font-bold text-emerald-900 tracking-wider block">
+                {t.salePurchase.grandTotal} (कुल देय रकम)
+              </span>
+              <div className="text-2xl sm:text-3xl font-serif font-bold text-emerald-950 num-tabular tracking-tight">
+                {formatCurrency(Math.round(grandTotalRupees * 100))}
+              </div>
+            </div>
+          </div>
+
+          {/* Middle: Payment Mode Selection (3 Large Buttons) */}
+          <div className="py-1.5 flex-shrink-0 space-y-1.5 border-y border-border/80 my-1">
+            <label className="block text-[11px] font-bold text-muted uppercase tracking-wider">
               {t.common.paymentMode} *
             </label>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-3 gap-1.5">
               <button
                 type="button"
                 onClick={() => setPaymentMode("cash")}
-                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium border transition-colors ${
+                className={`py-2 px-1 text-center rounded-lg text-xs font-bold border transition-all ${
                   paymentMode === "cash"
-                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 font-semibold"
-                    : "border-slate-300 hover:bg-slate-50 text-slate-700"
+                    ? "bg-emerald-600 border-emerald-700 text-white shadow-xs"
+                    : "bg-paper border-border text-ink hover:bg-forest/10"
                 }`}
               >
-                {t.common.cash}
+                नकद
               </button>
               <button
                 type="button"
                 onClick={() => setPaymentMode("credit")}
-                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium border transition-colors ${
+                className={`py-2 px-1 text-center rounded-lg text-xs font-bold border transition-all ${
                   paymentMode === "credit"
-                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 font-semibold"
-                    : "border-slate-300 hover:bg-slate-50 text-slate-700"
+                    ? "bg-amber-600 border-amber-700 text-white shadow-xs"
+                    : "bg-paper border-border text-ink hover:bg-forest/10"
                 }`}
               >
-                {t.common.credit}
+                उधार
               </button>
               <button
                 type="button"
                 onClick={() => setPaymentMode("upi_bank")}
-                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium border transition-colors ${
+                className={`py-2 px-1 text-center rounded-lg text-xs font-bold border transition-all ${
                   paymentMode === "upi_bank"
-                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 font-semibold"
-                    : "border-slate-300 hover:bg-slate-50 text-slate-700"
+                    ? "bg-blue-600 border-blue-700 text-white shadow-xs"
+                    : "bg-paper border-border text-ink hover:bg-forest/10"
                 }`}
               >
-                {t.common.bankUpi}
+                बैंक/UPI
               </button>
             </div>
-          </div>
 
-          {/* If Credit: Paid & Balance fields */}
-          {paymentMode === "credit" ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block mb-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  {type === "sale" ? t.salePurchase.receivedAmount : t.salePurchase.paidAmount}
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[44px]"
-                  placeholder="0.00"
-                  value={paidAmountRupees}
-                  onChange={(e) => setPaidAmountRupees(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block mb-1 text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  {t.common.balance}
-                </label>
-                <div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono font-semibold text-slate-900 min-h-[44px] flex items-center">
-                  {formatCurrency(
-                    Math.round(
-                      (grandTotalRupees - parseFloat(paidAmountRupees || "0")) * 100
-                    )
-                  )}
+            {paymentMode === "credit" && (
+              <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                <div>
+                  <span className="text-[10px] text-muted font-bold uppercase block mb-0.5">
+                    प्राप्त रकम (₹)
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-full px-2 py-1.5 border border-border bg-paper rounded-lg font-mono font-bold text-ink"
+                    placeholder="0.00"
+                    value={paidAmountRupees}
+                    onChange={(e) => setPaidAmountRupees(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] text-muted font-bold uppercase block mb-0.5">
+                    बाकी उधारी (₹)
+                  </span>
+                  <div className="px-2 py-1.5 bg-paper border border-border rounded-lg font-mono font-bold text-rose-700 truncate">
+                    {formatCurrency(
+                      Math.max(0, Math.round((grandTotalRupees - parseFloat(paidAmountRupees || "0")) * 100))
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="text-xs text-slate-400">
-              {paymentMode === "cash"
-                ? (lang === "hi" ? "पूरा भुगतान नकद प्राप्त होगा।" : "Full settlement via cash.")
-                : (lang === "hi" ? "पूरा भुगतान बैंक / UPI खाते में होगा।" : "Full settlement via UPI / Bank.")}
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* Grand Total & Save Button */}
-          <div className="flex flex-col sm:flex-row lg:flex-col items-end justify-between gap-3">
-            <div className="text-right">
-              <span className="text-xs font-medium text-slate-500 uppercase tracking-wider block">
-                {t.salePurchase.grandTotal}
-              </span>
-              <span className="text-3xl font-semibold tracking-tight text-slate-900 font-mono">
-                {formatCurrency(Math.round(grandTotalRupees * 100))}
-              </span>
-            </div>
-
+          {/* Bottom: Bada Primary Button (48px+ Height, Font 16-18px) */}
+          <div className="flex-shrink-0 pt-1 space-y-1">
             <button
               type="submit"
+              data-testid="transaction-submit-btn"
               disabled={lines.length === 0 || hasOversell}
-              className="btn-primary w-full sm:w-auto lg:w-full py-3 text-base shadow-sm"
+              className={`w-full min-h-[48px] ${primaryBg} disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base rounded-xl shadow-md flex items-center justify-center gap-2.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
             >
-              <span>{t.salePurchase.saveInvoiceBtn}</span>
+              <Printer size={20} className="flex-shrink-0" />
+              <span>
+                {isSale
+                  ? (lang === "hi" ? "बिल बनाओ और प्रिंट करो" : "Save & Print Bill")
+                  : (lang === "hi" ? "माल दर्ज करो और पर्ची बनाओ" : "Record Purchase & Save")}
+              </span>
             </button>
+            <p className="text-[10px] text-muted text-center font-medium">
+              शॉर्टकट: <span className="font-mono font-bold">Ctrl + Enter</span> से तुरंत सुरक्षित करें
+            </p>
           </div>
         </div>
       </form>
 
       {/* Confirmation Modal */}
-      {isConfirmModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto no-print">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl border border-slate-200 space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <h3 className="text-base font-semibold text-slate-900">
-                {t.salePurchase.confirmDialogTitle}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsConfirmModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="space-y-2 text-sm text-slate-700 bg-slate-50 p-4 rounded-lg border border-slate-200">
-              <div className="flex justify-between">
-                <span className="text-slate-500">{t.salePurchase.confirmParty}:</span>
-                <span className="font-semibold text-slate-900">{selectedParty?.name || "-"}</span>
+      {isConfirmModalOpen &&
+        createPortal(
+          <div
+            data-testid="transaction-confirm-modal"
+            data-scroll="true"
+            className="fixed inset-0 z-[9999] bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto no-print"
+          >
+            <div className="bg-surface rounded-panel p-5 w-full max-w-sm shadow-2xl border border-border space-y-3.5">
+              <div className="flex justify-between items-center pb-2 border-b border-border">
+                <h3 className="font-serif text-base font-bold text-ink">
+                  {t.salePurchase.confirmDialogTitle}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmModalOpen(false)}
+                  className="p-1 text-muted hover:text-ink rounded"
+                >
+                  <X size={18} />
+                </button>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">{t.salePurchase.confirmMode}:</span>
-                <span className="font-medium">{formatPaymentMode(paymentMode, lang)}</span>
-              </div>
-              <div className="flex justify-between border-t border-slate-200 pt-2">
-                <span className="text-slate-700 font-semibold">{t.salePurchase.confirmTotal}:</span>
-                <span className="font-mono font-bold text-slate-900 text-lg">
-                  {formatCurrency(Math.round(grandTotalRupees * 100))}
-                </span>
-              </div>
-              {paymentMode === "credit" && (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">{t.salePurchase.confirmPaid}:</span>
-                    <span className="font-mono text-emerald-700">
-                      {formatCurrency(Math.round(parseFloat(paidAmountRupees || "0") * 100))}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">{t.salePurchase.confirmBalance}:</span>
-                    <span className="font-mono text-red-600 font-semibold">
-                      {formatCurrency(
-                        Math.round(
-                          (grandTotalRupees - parseFloat(paidAmountRupees || "0")) * 100
-                        )
-                      )}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
 
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsConfirmModalOpen(false)}
-                className="btn-secondary flex-1"
-              >
-                {t.common.cancel}
-              </button>
-              <button
-                type="button"
-                onClick={handleFinalConfirmSave}
-                className="btn-primary flex-1"
-              >
-                {t.common.confirm}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              <div className="space-y-1.5 text-xs text-ink/80 bg-paper p-3 rounded-xl border border-border">
+                <div className="flex justify-between">
+                  <span className="text-muted">{t.salePurchase.confirmParty}:</span>
+                  <span className="font-bold text-ink">{selectedParty?.name || "-"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted">{lang === "hi" ? "कुल सामान:" : "Total Items:"}</span>
+                  <span className="font-bold font-mono">{lines.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted">{t.common.paymentMode}:</span>
+                  <span className="font-bold">{paymentMode.toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between text-sm font-bold text-ink pt-1 border-t border-border">
+                  <span>{t.salePurchase.confirmTotal}:</span>
+                  <span className="text-forest font-mono">{formatCurrency(Math.round(grandTotalRupees * 100))}</span>
+                </div>
+              </div>
 
-      {/* Add Party Modal */}
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmModalOpen(false)}
+                  className="btn-secondary flex-1 py-2 text-xs font-bold"
+                >
+                  {t.common.cancel}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFinalConfirmSave}
+                  className="btn-primary flex-1 py-2 text-xs font-bold"
+                >
+                  {t.common.save}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Add New Party Modal */}
       <AddPartyModal
         isOpen={isPartyModalOpen}
+        defaultType={pType}
         onClose={() => setIsPartyModalOpen(false)}
-        onSuccess={(newId) => {
+        onSuccess={(newPartyId: number) => {
           loadAllData();
-          setPartyId(newId.toString());
+          setPartyId(newPartyId.toString());
+          setIsPartyModalOpen(false);
         }}
-        defaultType={pType as any}
         t={t}
       />
     </div>
