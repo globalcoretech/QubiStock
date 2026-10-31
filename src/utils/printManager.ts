@@ -101,6 +101,7 @@ export async function printInvoiceBill(params: {
   format?: BillFormat;
   htmlContent?: string;
   invoiceNo?: string;
+  taxMode?: import("../types").BillTaxMode;
 }): Promise<PrintBillResponse> {
   const { settings, format, htmlContent, invoiceNo } = params;
   const paperSize = format || settings.printerPaperSize || settings.defaultBillFormat || "A4";

@@ -15,8 +15,12 @@ export const BillA6: React.FC<BillA6Props> = ({
   qrDataUrl,
   isPrintPreview = false,
 }) => {
-  const { shop, party, invoice, lines, totals } = bill;
-  const isBillOfSupply = invoice.billType === "BILL OF SUPPLY";
+  const { shop, party, invoice, lines, totals, customization } = bill;
+  const isWithoutTax =
+    customization?.hideTaxDetails ||
+    customization?.taxMode === "without_tax" ||
+    invoice.billType === "CASH MEMO";
+  const isBillOfSupply = !isWithoutTax && invoice.billType === "BILL OF SUPPLY";
   const displayQr = qrDataUrl || (bill as any).qrDataUrl;
   const pages = chunkBillLines(lines, "A6");
 
@@ -51,7 +55,11 @@ export const BillA6: React.FC<BillA6Props> = ({
             {/* Slip Header (Repeated on Every Page) */}
             <div className="text-center pb-1.5 border-b-2 border-dashed border-slate-400">
               <div className="flex justify-between items-center text-[8px] text-slate-500 font-bold mb-0.5">
-                <span>GSTIN: {shop.gstin}</span>
+                {!isWithoutTax && shop.gstin ? (
+                  <span>GSTIN: {shop.gstin}</span>
+                ) : (
+                  <span></span>
+                )}
                 <span className="font-mono text-slate-700 bg-slate-100 px-1 rounded">
                   Page {pageIndex + 1}/{totalPages}
                 </span>
@@ -64,11 +72,13 @@ export const BillA6: React.FC<BillA6Props> = ({
                 मो.: {shop.phone} • राज्य: {shop.stateCode}
               </p>
               <div className="mt-0.5 inline-block bg-slate-900 text-white font-bold text-[8px] uppercase px-2 py-0.5 rounded">
-                {invoice.billType === "TAX INVOICE"
-                  ? "TAX INVOICE / कर इनवॉइस"
-                  : invoice.billType === "BILL OF SUPPLY"
-                  ? "BILL OF SUPPLY / सप्लाई बिल"
-                  : "CASH MEMO / नकद पर्ची"}
+                {isWithoutTax
+                  ? "BILL / CASH MEMO"
+                  : invoice.billType === "TAX INVOICE"
+                  ? "TAX INVOICE"
+                  : isBillOfSupply
+                  ? "BILL OF SUPPLY"
+                  : "BILL / CASH MEMO"}
               </div>
             </div>
 
@@ -108,7 +118,7 @@ export const BillA6: React.FC<BillA6Props> = ({
                       key={idx}
                       className="flex items-center justify-between text-[8px] leading-snug"
                     >
-                      <div className="w-1/2 font-sans font-bold text-slate-900 truncate pr-1">
+                      <div className="w-1/2 font-sans font-bold text-slate-900 break-words pr-1">
                         {itemIndex}. {item.name}
                       </div>
                       <div className="w-1/4 text-center font-mono text-slate-700 text-[7.5px] whitespace-nowrap">
@@ -142,14 +152,21 @@ export const BillA6: React.FC<BillA6Props> = ({
                   </div>
 
                   <div className="flex justify-between text-slate-700">
-                    <span>कर योग्य मूल्य (Sub Total):</span>
+                    <span>{isWithoutTax ? "कुल राशि (Sub Total):" : "कर योग्य मूल्य (Sub Total):"}</span>
                     <span className="font-mono font-bold">
                       ₹{totals.totalTaxable.toFixed(2)}
                     </span>
                   </div>
 
-                  {/* Single-line GST */}
-                  {!isBillOfSupply && totals.totalTax > 0 && (
+                  {totals.discount !== undefined && totals.discount > 0 && (
+                    <div className="flex justify-between text-red-600">
+                      <span>छूट (Discount):</span>
+                      <span className="font-mono">-₹{totals.discount.toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  {/* Single-line GST - ONLY in With GST */}
+                  {!isBillOfSupply && !isWithoutTax && totals.totalTax > 0 && (
                     <div className="flex justify-between text-slate-700 font-semibold">
                       <span>जीएसटी कर (GST Total):</span>
                       <span className="font-mono">₹{totals.totalTax.toFixed(2)}</span>
@@ -200,6 +217,11 @@ export const BillA6: React.FC<BillA6Props> = ({
                   <div className="text-[7.5px] text-slate-500">
                     {shop.footerNote || "बिका हुआ माल वापस नहीं होगा।"}
                   </div>
+                  {isWithoutTax && (
+                    <div className="text-[7px] font-semibold text-slate-500 pt-0.5">
+                      * यह कर इनवॉइस नहीं है (This is not a Tax Invoice.) *
+                    </div>
+                  )}
                 </div>
               </>
             )}

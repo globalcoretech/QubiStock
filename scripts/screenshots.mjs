@@ -297,8 +297,8 @@ async function run() {
 
         // Check Primary Button on Sale Screen
         const saleBtn = await checkPrimaryButton(
-          '[data-testid="transaction-submit-btn"]',
-          "बिल बनाओ और प्रिंट करो"
+          '[data-testid="transaction-submit-with-tax-btn"], [data-testid="transaction-submit-btn"]',
+          "टैक्स सहित प्रिंट / बिल बनाओ"
         );
         allTestResults.push({
           viewport: vp.name,

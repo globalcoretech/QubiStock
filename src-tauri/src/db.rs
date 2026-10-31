@@ -173,6 +173,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             time TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS invoice_print_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_no TEXT NOT NULL,
+            bill_mode TEXT NOT NULL CHECK (bill_mode IN ('WITH_GST', 'WITHOUT_GST')),
+            printed_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             shop_name TEXT NOT NULL DEFAULT 'श्री राम कृषि केंद्र',
@@ -228,6 +235,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'nil_rated' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate = 0", []);
+
 
     // Create Default "Cash Sale (Walk-in)" party if not exists
     let _ = conn.execute(

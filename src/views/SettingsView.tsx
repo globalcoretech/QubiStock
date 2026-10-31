@@ -9,7 +9,7 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
-import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye } from "../components/icons";
+import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database } from "../components/icons";
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";
@@ -728,6 +728,56 @@ export function SettingsView({
                     })
                   }
                 />
+              </div>
+
+              {/* Backup Storage Locations (बैकअप सुरक्षित स्थान) */}
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3">
+                <div className="flex items-center gap-2 border-b border-emerald-200/80 pb-2">
+                  <Database size={16} className="text-emerald-700" />
+                  <h4 className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
+                    {lang === "hi" ? "डेटा बैकअप सुरक्षित स्थान (Backup Folders)" : "Backup Storage Folders"}
+                  </h4>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1">
+                    {t.settings.backupFolderLabel} *
+                  </label>
+                  <input
+                    type="text"
+                    data-testid="settings-backup-folder-input"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-mono text-slate-900 focus:ring-1 focus:ring-emerald-500 outline-none"
+                    placeholder="Documents\KrishiBackup"
+                    value={formData.backupFolder || ""}
+                    onChange={(e) => setFormData({ ...formData, backupFolder: e.target.value })}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {lang === "hi"
+                      ? "मुख्य बैकअप स्थान (खाली छोड़ने पर Documents\\KrishiBackup स्वतः रहेगा)"
+                      : "Primary backup folder (defaults to Documents\\KrishiBackup if empty)"}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1">
+                    {t.settings.secondaryBackupFolderLabel}
+                  </label>
+                  <input
+                    type="text"
+                    data-testid="settings-secondary-backup-folder-input"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-mono text-slate-900 focus:ring-1 focus:ring-emerald-500 outline-none"
+                    placeholder={lang === "hi" ? "उदा. E:\\KrishiBackup या F:\\" : "e.g. E:\\KrishiBackup or F:\\"}
+                    value={formData.secondaryBackupFolder || ""}
+                    onChange={(e) =>
+                      setFormData({ ...formData, secondaryBackupFolder: e.target.value })
+                    }
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {lang === "hi"
+                      ? "अतिरिक्त सुरक्षा के लिए पेनड्राइव या बाहरी ड्राइव का पाथ। ड्राइव न मिलने पर चेतावनी दिखेगी, बैकअप नहीं रुकेगा।"
+                      : "Optional secondary location (Pendrive / 2nd drive). If drive is missing, a warning will be shown without interrupting backup."}
+                  </p>
+                </div>
               </div>
 
               <div>

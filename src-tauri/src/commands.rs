@@ -2429,5 +2429,14 @@ pub fn get_next_bill_number_cmd(
     let conn = get_conn(&app)?;
     get_next_bill_number_inner(&conn, &bill_type, &date, prefix.as_deref())
 }
+#[command]
+pub fn log_invoice_print_cmd(app: AppHandle, invoice_no: String, bill_mode: String) -> Result<(), String> {
+    let conn = get_conn(&app)?;
+    crate::invoice::log_invoice_print(&conn, &invoice_no, &bill_mode)
+}
 
-
+#[command]
+pub fn get_last_invoice_print_mode_cmd(app: AppHandle, invoice_no: String) -> Result<String, String> {
+    let conn = get_conn(&app)?;
+    crate::invoice::get_last_invoice_print_mode(&conn, &invoice_no)
+}

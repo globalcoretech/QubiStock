@@ -1907,11 +1907,33 @@ fn test_item_gst_status_defaults_and_queries() {
     assert_eq!(unknown.gst_status.as_deref(), Some("not_set"));
 }
 
+#[test]
+fn test_invoice_print_log_append_only_and_mode_retrieval() {
+    use crate::invoice::{log_invoice_print, get_last_invoice_print_mode};
+    let conn = init_db(":memory:").expect("Failed to init DB");
 
+    // 1. Initial lookup for unprinted invoice returns default "WITH_GST"
+    let initial_mode = get_last_invoice_print_mode(&conn, "KK/2026-27/0001").unwrap();
+    assert_eq!(initial_mode, "WITH_GST");
 
+    // 2. Log print with WITHOUT_GST
+    log_invoice_print(&conn, "KK/2026-27/0001", "WITHOUT_GST").unwrap();
+    let mode_after_first = get_last_invoice_print_mode(&conn, "KK/2026-27/0001").unwrap();
+    assert_eq!(mode_after_first, "WITHOUT_GST");
 
+    // 3. Log subsequent print with WITH_GST
+    log_invoice_print(&conn, "KK/2026-27/0001", "WITH_GST").unwrap();
+    let mode_after_second = get_last_invoice_print_mode(&conn, "KK/2026-27/0001").unwrap();
+    assert_eq!(mode_after_second, "WITH_GST");
 
+    // 4. Verify append-only log has 2 rows
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM invoice_print_log WHERE invoice_no = ?1",
+        ["KK/2026-27/0001"],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 2);
 
-
-
-
+    // 5. Invalid mode rejected
+    assert!(log_invoice_print(&conn, "KK/2026-27/0001", "INVALID_MODE").is_err());
+}

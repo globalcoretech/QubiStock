@@ -57,7 +57,9 @@ fn main() {
             commands::print_bill,
             commands::get_settings_cmd,
             commands::set_settings_cmd,
-            commands::get_next_bill_number_cmd
+            commands::get_next_bill_number_cmd,
+            commands::log_invoice_print_cmd,
+            commands::get_last_invoice_print_mode_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -94,7 +94,15 @@ export function determineBillType(
     for (const l of options.lines) {
       const status = l.gst_status;
       const rate = l.gst_rate !== undefined ? l.gst_rate : l.gstRate;
-      if (status === "not_set" || (status === undefined && (rate === null || rate === undefined))) {
+      const gstAmt = (l as any).gst_amount;
+
+      // Item has valid GST if it has numeric rate, recognized status, or valid gst_amount
+      const hasGstInfo =
+        (typeof rate === "number" && !isNaN(rate)) ||
+        (status === "taxable" || status === "nil_rated" || status === "exempt") ||
+        (typeof gstAmt === "number" && !isNaN(gstAmt));
+
+      if (status === "not_set" || (!hasGstInfo && status === undefined)) {
         throw new Error(
           `Item "${l.name || l.item_name || "Unknown"}" has GST status 'not_set'. Bill cannot be created.`
         );
@@ -119,7 +127,10 @@ export function determineBillType(
       if (l.gst_status === "taxable") return true;
       if (l.gst_status === "nil_rated" || l.gst_status === "exempt") return false;
       const rate = l.gst_rate !== undefined ? l.gst_rate : l.gstRate;
-      return typeof rate === "number" && rate > 0;
+      if (typeof rate === "number") return rate > 0;
+      const gstAmt = (l as any).gst_amount;
+      if (typeof gstAmt === "number") return gstAmt > 0;
+      return true;
     });
   }
 

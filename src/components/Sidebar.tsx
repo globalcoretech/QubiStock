@@ -19,8 +19,7 @@ import {
   RefreshCw,
   Settings,
   Printer,
-  PanelLeftClose,
-  PanelLeftOpen,
+  Database,
 } from "./icons";
 
 interface SidebarProps {
@@ -30,8 +29,6 @@ interface SidebarProps {
   lang: Language;
   onSelectLanguage: (lang: Language) => void;
   t: Translations;
-  isCollapsed: boolean;
-  onToggleCollapse: () => void;
 }
 
 interface NavItemDef {
@@ -52,8 +49,6 @@ export function Sidebar({
   lang,
   onSelectLanguage,
   t: _t,
-  isCollapsed,
-  onToggleCollapse,
 }: SidebarProps) {
   const [isFlyoutOpen, setIsFlyoutOpen] = useState(false);
   const [flyoutPos, setFlyoutPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -94,7 +89,7 @@ export function Sidebar({
     },
     {
       id: "Payment",
-      titleHi: "पैसा मिला/दिया",
+      titleHi: "पैसा मिला / दिया",
       titleEn: "Payments",
       icon: DuotoneWallet,
       tileBg: "bg-amber-950/60 text-amber-300 group-hover:bg-amber-900",
@@ -142,6 +137,7 @@ export function Sidebar({
     { id: "Stock Adjustment", titleHi: "स्टॉक सुधार", titleEn: "Stock Adjustment", icon: SlidersHorizontal },
     { id: "Tally Import", titleHi: "टैली इम्पोर्ट", titleEn: "Tally Import", icon: RefreshCw },
     { id: "PrinterSetup", titleHi: "प्रिंटर सेटअप", titleEn: "Printer Setup", icon: Printer },
+    { id: "Backup", titleHi: "बैकअप", titleEn: "Backup", icon: Database },
     { id: "Settings", titleHi: "सेटिंग्स", titleEn: "Settings", icon: Settings },
   ];
 
@@ -188,59 +184,27 @@ export function Sidebar({
 
   return (
     <aside
-      className={`${
-        isCollapsed ? "w-16" : "w-60"
-      } bg-forest text-surface border-r border-forest-dark flex flex-col h-screen max-h-screen select-none flex-shrink-0 z-30 no-print transition-all duration-200 ease-in-out relative overflow-hidden`}
+      data-testid="app-sidebar"
+      className="w-[240px] bg-forest text-surface border-r border-forest-dark flex flex-col h-screen max-h-screen select-none flex-shrink-0 z-30 no-print relative overflow-hidden"
     >
-      {/* 1. Header: Dukaan ka naam poora dikhe + Bahi logo + collapse toggle */}
+      {/* 1. Header: Dukaan ka naam poora dikhe + Bahi logo */}
       <div className="p-3 border-b border-forest-2/70 flex-shrink-0 bg-forest-dark/40">
-        {isCollapsed ? (
-          <div className="flex flex-col items-center gap-2">
-            <button
-              type="button"
-              onClick={() => onNavigate("Dashboard")}
-              title={settings.shopName}
-              className="p-1 rounded-lg hover:bg-forest-2/60 transition-colors"
-            >
-              <BahiLogoMark size={32} />
-            </button>
-            <button
-              type="button"
-              onClick={onToggleCollapse}
-              title={lang === "hi" ? "साइडबार खोलें (Ctrl+B)" : "Expand Sidebar (Ctrl+B)"}
-              className="p-1.5 rounded-lg text-marigold bg-forest-2 hover:bg-forest-2/80 transition-colors shadow-xs"
-            >
-              <PanelLeftOpen size={16} />
-            </button>
+        <button
+          type="button"
+          onClick={() => onNavigate("Dashboard")}
+          className="flex items-center gap-2.5 text-left focus:outline-none w-full min-w-0 cursor-pointer"
+          title={settings.shopName}
+        >
+          <BahiLogoMark size={34} className="flex-shrink-0 shadow-xs" />
+          <div className="min-w-0 flex-1">
+            <h1 className="font-serif text-[15px] font-bold text-surface leading-snug truncate tracking-tight">
+              {settings.shopName}
+            </h1>
+            <p className="text-[11px] text-surface/65 font-medium truncate num-tabular">
+              {settings.gstin || (lang === "hi" ? "डिजिटल बही-खाता" : "Digital Bahi-Khata")}
+            </p>
           </div>
-        ) : (
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => onNavigate("Dashboard")}
-              className="flex items-center gap-2.5 text-left focus:outline-none flex-1 min-w-0"
-              title={settings.shopName}
-            >
-              <BahiLogoMark size={34} className="flex-shrink-0 shadow-xs" />
-              <div className="min-w-0">
-                <h1 className="font-serif text-[15px] font-bold text-surface leading-snug truncate tracking-tight">
-                  {settings.shopName}
-                </h1>
-                <p className="text-[11px] text-surface/65 font-medium truncate num-tabular">
-                  {settings.gstin || (lang === "hi" ? "डिजिटल बही-खाता" : "Digital Bahi-Khata")}
-                </p>
-              </div>
-            </button>
-            <button
-              type="button"
-              onClick={onToggleCollapse}
-              title={lang === "hi" ? "साइडबार छोटा करें (Ctrl+B)" : "Collapse Sidebar (Ctrl+B)"}
-              className="p-1.5 rounded-lg text-surface/70 hover:text-marigold hover:bg-forest-2 transition-colors flex-shrink-0"
-            >
-              <PanelLeftClose size={17} />
-            </button>
-          </div>
-        )}
+        </button>
       </div>
 
       {/* 2. Exactly 7 Main Navigation Items - Fits vertically without any page scroll */}
@@ -252,39 +216,55 @@ export function Sidebar({
           const isActive = currentView === item.id;
           const IconComp = item.icon;
           const title = lang === "hi" ? item.titleHi : item.titleEn;
+          const isBillBlocked =
+            item.id === "Sale" &&
+            (!settings.shopName?.trim() || (settings.isGstRegistered && !settings.gstin?.trim()));
 
           return (
             <button
               key={item.id}
               type="button"
               data-testid={`nav-${item.id}`}
+              disabled={isBillBlocked}
               onClick={() => {
+                if (isBillBlocked) return;
                 setIsFlyoutOpen(false);
                 onNavigate(item.id);
               }}
-              title={isCollapsed ? title : undefined}
-              className={`w-full group rounded-lg transition-all flex items-center gap-2.5 min-h-[38px] ${
-                isCollapsed ? "justify-center px-1 py-1" : "px-2.5 py-1 justify-start text-left"
-              } ${
-                isActive
+              title={
+                isBillBlocked
+                  ? (lang === "hi" ? "पहले दुकान की जानकारी भरें" : "Fill shop details first")
+                  : undefined
+              }
+              className={`w-full group rounded-lg transition-all flex items-center gap-2.5 min-h-[38px] px-2.5 py-1 justify-start text-left cursor-pointer ${
+                isBillBlocked
+                  ? "opacity-50 cursor-not-allowed bg-transparent text-surface/50"
+                  : isActive
                   ? `${item.activeBg} border-l-4 ${item.activeBorder}`
                   : "text-surface/85 hover:bg-forest-2/50 hover:text-surface"
               }`}
             >
               {/* Colorful Icon Tile */}
               <div
-                className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 transition-transform group-hover:scale-105 ${
+                className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 transition-transform ${
+                  isBillBlocked ? "opacity-50" : "group-hover:scale-105"
+                } ${
                   isActive ? "bg-white/20 text-white shadow-xs" : item.tileBg
                 }`}
               >
                 <IconComp size={17} />
               </div>
 
-              {!isCollapsed && (
+              <div className="flex flex-col min-w-0">
                 <span className="font-medium text-[15px] truncate tracking-tight">
                   {title}
                 </span>
-              )}
+                {isBillBlocked && (
+                  <span className="text-[10px] text-amber-300 font-semibold truncate leading-tight">
+                    {lang === "hi" ? "पहले दुकान की जानकारी भरें" : "Fill shop details first"}
+                  </span>
+                )}
+              </div>
             </button>
           );
         })}
@@ -308,10 +288,7 @@ export function Sidebar({
                 setIsFlyoutOpen(false);
               }
             }}
-            title={isCollapsed ? (lang === "hi" ? "और विकल्प" : "More...") : undefined}
-            className={`w-full group rounded-lg transition-all flex items-center gap-2.5 min-h-[38px] ${
-              isCollapsed ? "justify-center px-1 py-1" : "px-2.5 py-1 justify-start text-left"
-            } ${
+            className={`w-full group rounded-lg transition-all flex items-center gap-2.5 min-h-[38px] px-2.5 py-1 justify-start text-left cursor-pointer ${
               isFlyoutActive || isFlyoutOpen
                 ? "bg-forest-2 text-marigold font-semibold border-l-4 border-marigold shadow-xs"
                 : "text-surface/85 hover:bg-forest-2/50 hover:text-surface"
@@ -327,16 +304,14 @@ export function Sidebar({
               <DuotoneDotsThree size={18} />
             </div>
 
-            {!isCollapsed && (
-              <div className="flex items-center justify-between flex-1 min-w-0">
-                <span className="font-medium text-[15px] truncate">
-                  {lang === "hi" ? "और..." : "More..."}
-                </span>
-                <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-forest-dark/80 text-surface/60">
-                  {flyoutItems.length}
-                </span>
-              </div>
-            )}
+            <div className="flex items-center justify-between flex-1 min-w-0">
+              <span className="font-medium text-[15px] truncate">
+                {lang === "hi" ? "और" : "More"}
+              </span>
+              <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-forest-dark/80 text-surface/60">
+                {flyoutItems.length}
+              </span>
+            </div>
           </button>
 
           {/* Flyout Popup Menu - Rendered via Portal directly into document.body */}
@@ -372,7 +347,7 @@ export function Sidebar({
                           setIsFlyoutOpen(false);
                           onNavigate(fi.id);
                         }}
-                        className={`w-full text-left px-2.5 py-2 rounded-lg text-sm flex items-center gap-2.5 transition-colors ${
+                        className={`w-full text-left px-2.5 py-2 rounded-lg text-sm flex items-center gap-2.5 transition-colors cursor-pointer ${
                           isCurrent
                             ? "bg-forest text-surface font-semibold shadow-2xs"
                             : "text-ink/80 hover:bg-paper hover:text-ink font-medium"
@@ -393,48 +368,46 @@ export function Sidebar({
         </div>
       </nav>
 
-      {/* 3. Bottom Area: Language Toggle + State info */}
-      <div className="p-2 border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30 space-y-2">
-        {/* Language Toggle Pill */}
-        <div className="flex items-center justify-between gap-1 bg-forest-dark/90 border border-forest-2/80 rounded-full p-0.5">
+      {/* 3. Bottom Area: Language Toggle ("हिं | EN" pill) + State info */}
+      <div className="p-2 border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30 space-y-1.5">
+        {/* Language Toggle Pill - "हिं | EN" */}
+        <div className="flex items-center justify-center p-0.5 bg-forest-dark/90 border border-forest-2/80 rounded-full w-full max-w-[120px] mx-auto text-xs">
           <button
             type="button"
             data-testid="lang-hi"
             onClick={() => onSelectLanguage("hi")}
-            className={`flex-1 text-center py-1 rounded-full text-xs font-semibold transition-all ${
+            className={`flex-1 text-center py-1 rounded-full font-semibold transition-all cursor-pointer ${
               lang === "hi"
                 ? "bg-marigold text-ink font-bold shadow-xs"
                 : "text-surface/65 hover:text-surface"
             }`}
           >
-            हिन्दी
+            हिं
           </button>
-          <span className="text-forest-2 text-xs select-none">|</span>
+          <span className="text-forest-2 text-xs px-1 select-none">|</span>
           <button
             type="button"
             data-testid="lang-en"
             onClick={() => onSelectLanguage("en")}
-            className={`flex-1 text-center py-1 rounded-full text-xs font-semibold transition-all ${
+            className={`flex-1 text-center py-1 rounded-full font-semibold transition-all cursor-pointer ${
               lang === "en"
                 ? "bg-marigold text-ink font-bold shadow-xs"
                 : "text-surface/65 hover:text-surface"
             }`}
           >
-            English
+            EN
           </button>
         </div>
 
         {/* State / Version info */}
-        {!isCollapsed && (
-          <div className="text-[10px] text-surface/50 text-center num-tabular truncate">
-            {settings.stateCode === "23"
-              ? lang === "hi"
-                ? "म.प्र. (23)"
-                : "MP (23)"
-              : `State: ${settings.stateCode}`}{" "}
-            • v0.3.0
-          </div>
-        )}
+        <div className="text-[10px] text-surface/50 text-center num-tabular truncate">
+          {settings.stateCode === "23"
+            ? lang === "hi"
+              ? "म.प्र. (23)"
+              : "MP (23)"
+            : `State: ${settings.stateCode}`}{" "}
+          • v0.3.0
+        </div>
       </div>
     </aside>
   );

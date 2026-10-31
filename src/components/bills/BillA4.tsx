@@ -16,7 +16,11 @@ export const BillA4: React.FC<BillA4Props> = ({
   isPrintPreview = false,
 }) => {
   const { shop, party, invoice, lines, totals, hsnSummary, customization } = bill;
-  const isBillOfSupply = invoice.billType === "BILL OF SUPPLY";
+  const isWithoutTax =
+    customization?.hideTaxDetails ||
+    customization?.taxMode === "without_tax" ||
+    invoice.billType === "CASH MEMO";
+  const isBillOfSupply = !isWithoutTax && invoice.billType === "BILL OF SUPPLY";
   const lang = customization?.language || "both";
   const cols = customization?.visibleColumns || {
     hsn: true,
@@ -84,9 +88,11 @@ export const BillA4: React.FC<BillA4Props> = ({
                     </h1>
                     <p className="text-xs font-medium text-slate-700 mt-0.5">{shop.address}</p>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs font-semibold text-slate-800 mt-0.5">
-                      <span>
-                        <strong className="text-slate-600">GSTIN:</strong> {shop.gstin}
-                      </span>
+                      {!isWithoutTax && shop.gstin && (
+                        <span>
+                          <strong className="text-slate-600">GSTIN:</strong> {shop.gstin}
+                        </span>
+                      )}
                       <span>
                         <strong className="text-slate-600">फोन:</strong> {shop.phone}
                       </span>
@@ -101,21 +107,27 @@ export const BillA4: React.FC<BillA4Props> = ({
                 <div className="text-right flex-shrink-0">
                   <div className="flex items-center gap-2 justify-end">
                     <div className="inline-block border-2 border-slate-900 bg-slate-900 text-white font-black text-xs uppercase px-2.5 py-1 rounded tracking-wider shadow-sm">
-                      {invoice.billType === "TAX INVOICE"
-                        ? isBilingual ? "TAX INVOICE / कर इनवॉइस" : isHi ? "कर इनवॉइस" : "TAX INVOICE"
-                        : invoice.billType === "BILL OF SUPPLY"
-                        ? isBilingual ? "BILL OF SUPPLY / सप्लाई का बिल" : isHi ? "सप्लाई का बिल" : "BILL OF SUPPLY"
-                        : isBilingual ? "CASH MEMO / नकद बिल" : isHi ? "नकद बिल" : "CASH MEMO"}
+                      {isWithoutTax
+                        ? "BILL / CASH MEMO"
+                        : invoice.billType === "TAX INVOICE"
+                        ? "TAX INVOICE"
+                        : isBillOfSupply
+                        ? "BILL OF SUPPLY"
+                        : "BILL / CASH MEMO"}
                     </div>
                     <div className="bg-slate-200 border border-slate-400 font-mono text-xs font-bold text-slate-900 px-2 py-1 rounded">
                       Page {pageIndex + 1}/{totalPages}
                     </div>
                   </div>
-                  {isBillOfSupply && (
+                  {isWithoutTax ? (
+                    <p className="text-[10px] font-bold text-slate-600 mt-1 max-w-[200px]">
+                      (बिल / कैश मेमो / Cash Memo)
+                    </p>
+                  ) : isBillOfSupply ? (
                     <p className="text-[10px] font-bold text-slate-600 mt-1 max-w-[200px]">
                       (कर रहित बिल - कम्पोज़िशन डीलर अथवा कर मुक्त माल)
                     </p>
-                  )}
+                  ) : null}
                   <div className="text-xs font-semibold text-slate-600 mt-1">
                     <span>मूल प्रति / Original for Recipient</span>
                   </div>
@@ -140,14 +152,16 @@ export const BillA4: React.FC<BillA4Props> = ({
                   <div className="text-slate-700">{party.address}</div>
                 )}
                 <div className="mt-1 space-y-0.5">
-                  <div>
-                    <strong className="text-slate-600">GSTIN / UIN:</strong>{" "}
-                    {party.gstin ? (
-                      <span className="font-mono font-bold">{party.gstin}</span>
-                    ) : (
-                      <span className="text-slate-500 italic">Unregistered (अपंजीकृत)</span>
-                    )}
-                  </div>
+                  {!isWithoutTax && (
+                    <div>
+                      <strong className="text-slate-600">GSTIN / UIN:</strong>{" "}
+                      {party.gstin ? (
+                        <span className="font-mono font-bold">{party.gstin}</span>
+                      ) : (
+                        <span className="text-slate-500 italic">Unregistered (अपंजीकृत)</span>
+                      )}
+                    </div>
+                  )}
                   {party.phone && (
                     <div>
                       <strong className="text-slate-600">फोन / Phone:</strong> {party.phone}
@@ -202,7 +216,7 @@ export const BillA4: React.FC<BillA4Props> = ({
                     <th className="py-1.5 px-2.5 border-r border-slate-400 text-left">
                       {isBilingual ? "सामान का विवरण (Description of Goods)" : isHi ? "विवरण" : "Description of Goods"}
                     </th>
-                    {cols.hsn && !isBillOfSupply && (
+                    {cols.hsn && !isBillOfSupply && !isWithoutTax && (
                       <th className="py-1.5 px-2 border-r border-slate-400 text-center w-16">
                         HSN
                       </th>
@@ -223,12 +237,12 @@ export const BillA4: React.FC<BillA4Props> = ({
                         {isBilingual ? "छूट/Disc" : isHi ? "छूट" : "Disc"}
                       </th>
                     )}
-                    {cols.taxable && !isBillOfSupply && (
+                    {cols.taxable && !isBillOfSupply && !isWithoutTax && (
                       <th className="py-1.5 px-2 border-r border-slate-400 text-right w-20">
                         {isBilingual ? "कर योग्य/Taxable" : isHi ? "कर योग्य" : "Taxable"}
                       </th>
                     )}
-                    {cols.gstRate && !isBillOfSupply && (
+                    {cols.gstRate && !isBillOfSupply && !isWithoutTax && (
                       <th className="py-1.5 px-1.5 border-r border-slate-400 text-center w-12">
                         GST%
                       </th>
@@ -246,10 +260,10 @@ export const BillA4: React.FC<BillA4Props> = ({
                         <td className="py-1 px-1.5 border-r border-slate-300 text-center font-mono text-slate-600">
                           {itemSr}
                         </td>
-                        <td className="py-1 px-2.5 border-r border-slate-300">
+                        <td className="py-1 px-2.5 border-r border-slate-300 break-words">
                           <span className="font-bold text-slate-900">{item.name}</span>
                         </td>
-                        {cols.hsn && !isBillOfSupply && (
+                        {cols.hsn && !isBillOfSupply && !isWithoutTax && (
                           <td className="py-1 px-2 border-r border-slate-300 text-center font-mono text-slate-700">
                             {item.hsn}
                           </td>
@@ -270,12 +284,12 @@ export const BillA4: React.FC<BillA4Props> = ({
                             {item.discount ? item.discount.toFixed(2) : "-"}
                           </td>
                         )}
-                        {cols.taxable && !isBillOfSupply && (
+                        {cols.taxable && !isBillOfSupply && !isWithoutTax && (
                           <td className="py-1 px-2 border-r border-slate-300 text-right font-mono text-slate-800">
                             {item.taxableAmount.toFixed(2)}
                           </td>
                         )}
-                        {cols.gstRate && !isBillOfSupply && (
+                        {cols.gstRate && !isBillOfSupply && !isWithoutTax && (
                           <td className="py-1 px-1.5 border-r border-slate-300 text-center font-mono text-slate-700">
                             {item.gstRate}%
                           </td>
@@ -300,8 +314,8 @@ export const BillA4: React.FC<BillA4Props> = ({
             {/* Totals & Full Summary ONLY on Last Page */}
             {isLastPage && (
               <>
-                {/* HSN / Tax Breakdown Summary */}
-                {!isBillOfSupply && hsnSummary && hsnSummary.length > 0 && (
+                {/* HSN / Tax Breakdown Summary - ONLY in With GST */}
+                {!isBillOfSupply && !isWithoutTax && hsnSummary && hsnSummary.length > 0 && (
                   <div className="border-x-2 border-b-2 border-slate-900 text-xs">
                     <div className="bg-slate-100 px-3 py-1 font-bold border-b border-slate-300 flex justify-between items-center">
                       <span className="uppercase text-[11px] tracking-wider text-slate-700">
@@ -372,12 +386,26 @@ export const BillA4: React.FC<BillA4Props> = ({
 
                   {/* Right: Totals Box */}
                   <div className="col-span-5 p-3 bg-white space-y-1.5 text-xs">
-                    <div className="flex justify-between text-slate-700">
-                      <span>कर योग्य मूल्य / Taxable Amount:</span>
-                      <span className="font-mono font-bold">₹{totals.totalTaxable.toFixed(2)}</span>
-                    </div>
+                    {isWithoutTax ? (
+                      <div className="flex justify-between text-slate-700">
+                        <span>कुल मूल्य / Sub Total:</span>
+                        <span className="font-mono font-bold">₹{totals.totalTaxable.toFixed(2)}</span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between text-slate-700">
+                        <span>कर योग्य मूल्य / Taxable Amount:</span>
+                        <span className="font-mono font-bold">₹{totals.totalTaxable.toFixed(2)}</span>
+                      </div>
+                    )}
 
-                    {!isBillOfSupply && (
+                    {totals.discount !== undefined && totals.discount > 0 && (
+                      <div className="flex justify-between text-red-600">
+                        <span>छूट / Discount:</span>
+                        <span className="font-mono font-semibold">-₹{totals.discount.toFixed(2)}</span>
+                      </div>
+                    )}
+
+                    {!isBillOfSupply && !isWithoutTax && (
                       <>
                         {totals.totalCgst > 0 && (
                           <div className="flex justify-between text-slate-700">
@@ -480,6 +508,11 @@ export const BillA4: React.FC<BillA4Props> = ({
                     </div>
                   </div>
                 </div>
+                {isWithoutTax && (
+                  <div className="mt-1.5 text-center text-[10px] font-semibold text-slate-500">
+                    * यह कर इनवॉइस नहीं है (This is not a Tax Invoice.) *
+                  </div>
+                )}
               </>
             )}
           </div>

@@ -13,6 +13,19 @@ export function formatCurrency(paise: number): string {
 }
 
 /**
+ * Formats paise into Indian Rupee format omitting decimals if integer, e.g. 50000 -> ₹500, 150000 -> ₹1,500
+ */
+export function formatRupeesCompact(paise: number): string {
+  const rupees = paise / 100;
+  const isInt = rupees % 1 === 0;
+  const formatted = rupees.toLocaleString("en-IN", {
+    minimumFractionDigits: isInt ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+  return `₹${formatted}`;
+}
+
+/**
  * Formats date from YYYY-MM-DD or ISO to DD/MM/YYYY
  */
 export function formatDate(dateStr: string | null | undefined): string {

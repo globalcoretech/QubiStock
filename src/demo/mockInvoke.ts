@@ -76,6 +76,9 @@ let mockSettings: any = {
   isComposition: false,
   silentPrintBeta: false,
   printMode: "dialog",
+  backupFolder: "Documents\\KrishiBackup",
+  secondaryBackupFolder: "",
+  lastBackupTime: new Date().toISOString(),
 };
 
 /**
@@ -214,7 +217,7 @@ export function setupDemoMocks() {
         // Store invoice details for print preview
         const lines = (invPayload.lines || []).map((l: any) => ({
           item_name:
-            store.items.find((it) => it.id === l.itemId)?.name ||
+            store.items.find((it) => it.id === (l.item_id || l.itemId))?.name ||
             l.itemName ||
             "खाद / बीज",
           qty: l.qty || 1000,
@@ -241,9 +244,32 @@ export function setupDemoMocks() {
           lines: lines.length > 0 ? lines : DEMO_SAMPLE_INVOICE.lines,
         };
 
+        const entryType = invPayload.type || invPayload.type_ || "sale";
+        const isSale = entryType === "sale";
+        const godownId = invPayload.godownId || invPayload.godown_id || 1;
+
+        // Update in-memory stock list so stock increases on purchase and decreases on sale
+        for (const l of invPayload.lines || []) {
+          const itId = l.itemId || l.item_id;
+          const qtyMilli = Number(l.qty) || 0;
+          const existingStock = store.stockList.find(
+            (s) => s.id === itId && s.godown_id === godownId
+          );
+          if (existingStock) {
+            if (isSale) {
+              existingStock.qty_base = Math.max(0, existingStock.qty_base - qtyMilli);
+            } else {
+              existingStock.qty_base += qtyMilli;
+            }
+            existingStock.stock_value = Math.round(
+              (existingStock.qty_base * existingStock.last_purchase_rate) / 1000
+            );
+          }
+        }
+
         store.recentEntries.unshift({
           date: invPayload.date || new Date().toISOString().split("T")[0],
-          entry_type: invPayload.type || invPayload.type_ || "sale",
+          entry_type: entryType,
           invoice_no: invNo,
           party_name: partyName,
           amount: totalAmount,
@@ -419,6 +445,93 @@ export function setupDemoMocks() {
           method_used: payload.req?.silent ? "kiosk_printing_beta" : "dialog",
           raw_error: undefined,
         };
+
+      case "backup_now_cmd": {
+        const nowIso = new Date().toISOString();
+        mockSettings.lastBackupTime = nowIso;
+        return {
+          success: true,
+          primary_path: "C:\\Users\\user\\Documents\\KrishiBackup\\inventory_2026-10-29_11-30.db",
+          secondary_path: mockSettings.secondaryBackupFolder ? `${mockSettings.secondaryBackupFolder}\\inventory_2026-10-29_11-30.db` : null,
+          secondary_warning: mockSettings.secondaryBackupFolder ? null : "दूसरी जगह (पेनड्राइव / दूसरी ड्राइव) कॉन्फ़िगर नहीं है",
+          items_count: store.items.length,
+          parties_count: store.parties.length,
+          sales_count: 42,
+          purchases_count: 18,
+          created_at: nowIso,
+          message: "बैकअप सफलतापूर्वक सुरक्षित हो गया (जाँचा हुआ ✓)",
+        };
+      }
+
+      case "list_backups_cmd":
+        return [
+          {
+            filename: "inventory_2026-10-29_11-30.db",
+            path: "C:\\Users\\user\\Documents\\KrishiBackup\\inventory_2026-10-29_11-30.db",
+            size_bytes: 524288,
+            size_formatted: "512 KB",
+            created_at: new Date().toISOString(),
+            created_at_formatted: "29/10/2026 11:30",
+            verified: true,
+            is_pre_restore: false,
+          },
+          {
+            filename: "inventory_2026-10-28_18-00.db",
+            path: "C:\\Users\\user\\Documents\\KrishiBackup\\inventory_2026-10-28_18-00.db",
+            size_bytes: 512000,
+            size_formatted: "500 KB",
+            created_at: new Date(Date.now() - 86400000).toISOString(),
+            created_at_formatted: "28/10/2026 18:00",
+            verified: true,
+            is_pre_restore: false,
+          },
+        ];
+
+      case "get_backup_status_cmd":
+        return {
+          lastBackupTime: mockSettings.lastBackupTime || new Date().toISOString(),
+          isBackupRecent: true,
+          formattedChipText: "आखिरी बैकअप: आज 11:30 ✓",
+          primaryFolder: mockSettings.backupFolder || "C:\\Users\\user\\Documents\\KrishiBackup",
+          secondaryFolder: mockSettings.secondaryBackupFolder || null,
+          primaryFreeSpace: "C: पर 124 GB खाली",
+          secondaryFreeSpace: mockSettings.secondaryBackupFolder ? "D: पर 58 GB खाली" : null,
+          isSameDriveAsDb: !mockSettings.secondaryBackupFolder,
+          last_backup_time: mockSettings.lastBackupTime || new Date().toISOString(),
+          is_recent: true,
+          formatted_chip_hi: "आखिरी बैकअप: आज 11:30 ✓",
+          formatted_chip_en: "Last Backup: Today 11:30 ✓",
+        };
+
+      case "prepare_restore_cmd":
+        return {
+          success: true,
+          pending_file_path: "inventory.db.restore_pending",
+          safety_backup_path: "C:\\Users\\user\\Documents\\KrishiBackup\\pre_restore_2026-10-29_11-30.db",
+          message: "रीस्टोर फ़ाइल तैयार कर दी गई है। ऐप को पुनः प्रारंभ (Restart) करें।",
+        };
+
+      case "check_db_integrity_cmd":
+        return {
+          isOk: true,
+          message: "Database integrity OK",
+          details: ["ok"],
+          suggestedBackup: null,
+          is_ok: true,
+          suggested_backup: null,
+        };
+
+      case "open_backup_folder_cmd":
+        return true;
+
+      case "pick_folder_cmd":
+        return "D:\\KrishiBackup_Demo";
+
+      case "test_write_folder_cmd":
+        return true;
+
+      case "copy_backups_cmd":
+        return 3;
 
       default:
         console.warn(`[mockInvoke] Unhandled command: ${cmd}`, payload);

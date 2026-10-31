@@ -25,7 +25,7 @@ interface TransactionViewProps {
   settings?: AppSettings;
   refreshTrigger: number;
   onRefresh?: () => void;
-  onPrintInvoice: (invNo: string) => void;
+  onPrintInvoice: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
   t: Translations;
   lang: Language;
 }
@@ -44,11 +44,17 @@ export function TransactionView({
   const [parties, setParties] = useState<Party[]>([]);
 
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
-  const [billSeq, setBillSeq] = useState(1);
   const [invoiceNo, setInvoiceNo] = useState(() => {
     const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
     return formatBillNumber(1, prefix, new Date());
   });
+
+
+  const isSale = type === "sale";
+  const isBillBlocked =
+    isSale &&
+    (!settings?.shopName?.trim() || (settings?.isGstRegistered && !settings?.gstin?.trim()));
+
   const [partyId, setPartyId] = useState("");
   const [godownId, setGodownId] = useState("1");
   const [paymentMode, setPaymentMode] = useState<"cash" | "credit" | "upi_bank">("cash");
@@ -56,6 +62,7 @@ export function TransactionView({
 
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [lastSavedInvoiceNo, setLastSavedInvoiceNo] = useState("");
+  const [pendingTaxMode, setPendingTaxMode] = useState<"with_tax" | "without_tax" | "none">("with_tax");
   const [lines, setLines] = useState<any[]>([
     {
       itemId: "",
@@ -113,6 +120,28 @@ export function TransactionView({
   const selectedParty = parties.find((p) => p.id.toString() === partyId);
   const isCompositionSupplier = type === "purchase" && selectedParty?.category === "composition";
 
+  const refreshNextInvoicePreview = async (dateStr: string) => {
+    try {
+      const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
+      const nextNo = await invoke<string>("get_next_bill_number_cmd", {
+        billType: type,
+        date: dateStr,
+        prefix,
+      });
+      if (nextNo) {
+        setInvoiceNo(nextNo);
+      }
+    } catch (e) {
+      console.error("get_next_bill_number_cmd error:", e);
+      const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
+      setInvoiceNo(formatBillNumber(1, prefix, dateStr));
+    }
+  };
+
+  useEffect(() => {
+    refreshNextInvoicePreview(date);
+  }, [type, date, settings?.fyPrefix, refreshTrigger]);
+
   const loadAllData = async () => {
     try {
       const itRes = await invoke<Item[]>("get_items_cmd");
@@ -133,14 +162,18 @@ export function TransactionView({
 
     try {
       const ptRes = await invoke<Party[]>("get_parties_cmd", { partyType: pType });
-      setParties(ptRes);
-      // Auto-prefill default walk-in cash party for sale
-      if (!partyId && ptRes.length > 0) {
-        if (type === "sale") {
-          const walkin = ptRes.find((p) => p.id === 1) || ptRes[0];
+      const validParties =
+        type === "purchase"
+          ? ptRes.filter((p) => p.id !== 1 && !p.name.toLowerCase().includes("walk-in"))
+          : ptRes;
+      setParties(validParties);
+      // Auto-prefill default walk-in cash party for sale ONLY
+      if (!partyId) {
+        if (type === "sale" && validParties.length > 0) {
+          const walkin = validParties.find((p) => p.id === 1) || validParties[0];
           setPartyId(walkin.id.toString());
         } else {
-          setPartyId(ptRes[0].id.toString());
+          setPartyId("");
         }
       }
     } catch (e) {
@@ -152,16 +185,7 @@ export function TransactionView({
     loadAllData();
   }, [type, refreshTrigger]);
 
-  useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.altKey && (e.key === "a" || e.key === "A")) || (e.ctrlKey && e.key === "Enter")) {
-        e.preventDefault();
-        addLine();
-      }
-    };
-    window.addEventListener("keydown", handleGlobalKeyDown);
-    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [lines, items]);
+
 
   const addLine = (prefillItemId?: string) => {
     const targetItem = prefillItemId ? items.find((i) => i.id.toString() === prefillItemId) : null;
@@ -273,15 +297,31 @@ export function TransactionView({
 
   const grandTotalRupees = totalTaxable + totalGst;
 
-  const handleInitiateSave = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleInitiateSaveWithMode = (mode: "with_tax" | "without_tax" | "none" = "with_tax") => {
+    setPendingTaxMode(mode);
     setFeedback(null);
+
+    if (isBillBlocked) {
+      setFeedback({
+        message:
+          lang === "hi"
+            ? "पहले दुकान की जानकारी भरें (बिल बनाने के लिए दुकान का नाम और GSTIN आवश्यक है)!"
+            : "Please fill shop details first (Shop name and GSTIN required to create bills)!",
+        isError: true,
+      });
+      return;
+    }
 
     if (hasOversell) {
       setFeedback({
         message: t.salePurchase.stockError,
         isError: true,
       });
+      return;
+    }
+
+    if (!isSale && (!partyId || partyId === "1" || selectedParty?.name?.toLowerCase().includes("walk-in"))) {
+      setFeedback({ message: "पहले सप्लायर चुनो", isError: true });
       return;
     }
 
@@ -296,23 +336,18 @@ export function TransactionView({
         setFeedback({ message: t.salePurchase.validationError, isError: true });
         return;
       }
-      const it = items.find((x) => x.id.toString() === l.itemId);
-      if (it && (it.gst_status === "not_set" || (it.gst_status === undefined && it.gst_rate === null))) {
-        setFeedback({
-          message:
-            lang === "hi"
-              ? `सामान "${it.name}" का GST निर्धारित नहीं है (not_set)। बिल नहीं बन सकता!`
-              : `Item "${it.name}" has GST status 'not_set'. Bill cannot be created!`,
-          isError: true,
-        });
-        return;
-      }
     }
 
     setIsConfirmModalOpen(true);
   };
 
-  const handleFinalConfirmSave = async () => {
+  const handleInitiateSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleInitiateSaveWithMode("with_tax");
+  };
+
+  const handleFinalConfirmSave = async (overrideMode?: "with_tax" | "without_tax" | "none") => {
+    const modeToUse = overrideMode ?? pendingTaxMode;
     setIsConfirmModalOpen(false);
     setFeedback(null);
 
@@ -344,9 +379,6 @@ export function TransactionView({
 
       return {
         item_id: parseInt(l.itemId),
-        itemId: parseInt(l.itemId),
-        godown_id: parseInt(godownId),
-        godownId: parseInt(godownId),
         qty: Math.round(q),
         unit: l.unit,
         rate: Math.round(r),
@@ -364,36 +396,26 @@ export function TransactionView({
 
     const payload = {
       invoice_no: savedInv,
-      invoiceNo: savedInv,
       date,
       party_id: parseInt(partyId),
-      partyId: parseInt(partyId),
       godown_id: parseInt(godownId),
-      godownId: parseInt(godownId),
       type_: type,
-      type: type,
-      paymentMode,
       payment_mode: paymentMode,
-      paidAmount: paidPaise,
       paid_amount: paidPaise,
-      shopState: shopState,
-      shop_state: shopState,
+      shop_state: shopState || null,
       lines: formattedLines,
     };
 
     try {
-      await invoke("save_invoice_cmd", { payload });
-      setLastSavedInvoiceNo(savedInv);
+      const finalInvNo = await invoke<string>("save_invoice_cmd", { payload });
+      const displayInv = finalInvNo || savedInv;
+      setLastSavedInvoiceNo(displayInv);
       setFeedback({
-        message: `${t.salePurchase.saveSuccess} (${savedInv} • ${formatCurrency(Math.round(grandTotalRupees * 100))})`,
+        message: `${t.salePurchase.saveSuccess} (${displayInv} • ${formatCurrency(Math.round(grandTotalRupees * 100))})`,
         isError: false,
       });
 
       // Reset for next bill with sequential FY bill number
-      const nextSeq = billSeq + 1;
-      setBillSeq(nextSeq);
-      const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
-      setInvoiceNo(formatBillNumber(nextSeq, prefix, new Date()));
       setLines([
         {
           itemId: "",
@@ -407,20 +429,61 @@ export function TransactionView({
       ]);
       setPaidAmountRupees("");
       setPaymentMode("cash");
-      setDate(new Date().toISOString().split("T")[0]);
+      if (type === "purchase") {
+        setPartyId("");
+      }
+      const today = new Date().toISOString().split("T")[0];
+      setDate(today);
+      await refreshNextInvoicePreview(today);
       if (onRefresh) onRefresh();
+
+      // Automatically open print modal with chosen tax mode!
+      if (isSale && modeToUse !== "none") {
+        onPrintInvoice(displayInv, modeToUse);
+      }
     } catch (err: any) {
       console.error("save_invoice_cmd error:", err);
-      setFeedback({ message: String(err), isError: true });
+      const raw = typeof err === "string" ? err : err?.message || String(err || "");
+      let hindiMessage = "डेटाबेस में सहेजने में त्रुटि हुई।";
+
+      if (raw.includes("UNIQUE constraint failed: purchases.invoice_no") || raw.includes("UNIQUE constraint failed: sales.invoice_no")) {
+        hindiMessage = "इस बिल नंबर का रिकॉर्ड पहले से मौजूद है। कृपया दोबारा सहेजें।";
+      } else if (raw.includes("UNIQUE constraint failed")) {
+        hindiMessage = "यह रिकॉर्ड पहले से मौजूद है (डुप्लीकेट डेटा)।";
+      } else if (raw.includes("FOREIGN KEY constraint failed")) {
+        hindiMessage = "चुना गया सप्लायर, ग्राहक या सामान डेटाबेस में नहीं मिला।";
+      } else if (raw.includes("पहले सप्लायर चुनो")) {
+        hindiMessage = "पहले सप्लायर चुनो";
+      } else if (raw.includes("Stock kam hai")) {
+        hindiMessage = "गोदाम में पर्याप्त स्टॉक उपलब्ध नहीं है।";
+      } else if (raw.includes("locked") || raw.includes("busy")) {
+        hindiMessage = "डेटाबेस अभी व्यस्त है, कृपया कुछ सेकंड बाद पुनः प्रयास करें।";
+      } else if (raw.includes("NOT NULL constraint failed")) {
+        hindiMessage = "कुछ आवश्यक जानकारी अधूरी रह गई है।";
+      } else if (raw.trim()) {
+        hindiMessage = raw;
+      }
+
+      setFeedback({
+        message: hindiMessage,
+        details: raw !== hindiMessage ? raw : undefined,
+        isError: true,
+      });
     }
   };
 
-  const partyOptions: SearchableOption[] = parties.map((p) => ({
+  const filteredParties =
+    type === "purchase"
+      ? parties.filter((p) => p.id !== 1 && !p.name.toLowerCase().includes("walk-in"))
+      : parties;
+
+  const partyOptions: SearchableOption[] = filteredParties.map((p) => ({
     value: p.id.toString(),
     label: p.name,
     subLabel: p.village ? p.village : p.phone || undefined,
     badge: p.category === "regular" ? "GST" : p.category === "composition" ? "Comp" : undefined,
   }));
+
 
   const itemOptions: SearchableOption[] = items.map((i) => ({
     value: i.id.toString(),
@@ -436,9 +499,21 @@ export function TransactionView({
   // Paginated visible lines (5 per page) to guarantee zero vertical page scroll
   const paginatedLines = lines.slice((linesPage - 1) * LINES_PER_PAGE, linesPage * LINES_PER_PAGE);
 
-  const isSale = type === "sale";
   const accentColor = isSale ? "border-t-emerald-600" : "border-t-blue-600";
-  const primaryBg = isSale ? "bg-emerald-600 hover:bg-emerald-700" : "bg-blue-600 hover:bg-blue-700";
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        addLine();
+      } else if (e.ctrlKey && e.key === "Enter") {
+        e.preventDefault();
+        handleInitiateSaveWithMode("with_tax");
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [lines, items, partyId, godownId, invoiceNo, isBillBlocked, hasOversell]);
 
   return (
     <div className="h-full max-h-full flex flex-col justify-between overflow-hidden gap-2 text-ink font-body select-none">
@@ -493,20 +568,49 @@ export function TransactionView({
 
       <FeedbackBanner feedback={feedback} />
 
+      {/* Warning banner when shop details missing for sale */}
+      {isBillBlocked && (
+        <div
+          data-testid="sale-incomplete-shop-alert"
+          className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-sm font-semibold flex items-center gap-2 shadow-xs flex-shrink-0"
+        >
+          <AlertCircle size={18} className="text-amber-600 flex-shrink-0" />
+          <span>
+            {lang === "hi"
+              ? "पहले दुकान की जानकारी भरें (बिल बनाने के लिए दुकान का नाम और GSTIN आवश्यक है)!"
+              : "Please fill shop details first (Shop name and GSTIN required to create bills)!"}
+          </span>
+        </div>
+      )}
+
       {/* Post-Save Print Prompt */}
       {lastSavedInvoiceNo && (
-        <div className="p-2 px-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 flex-shrink-0">
+        <div className="p-2 px-3 bg-emerald-50 border border-emerald-200 rounded-xl flex flex-wrap items-center justify-between gap-2.5 flex-shrink-0">
           <div className="text-xs font-semibold text-emerald-950 truncate">
             {t.dashboard.invoiceNo}: <span className="font-mono font-bold">{lastSavedInvoiceNo}</span> • बिल सुरक्षित हो चुका है।
           </div>
-          <button
-            type="button"
-            onClick={() => onPrintInvoice(lastSavedInvoiceNo)}
-            className="py-1 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs"
-          >
-            <Printer size={14} />
-            <span>{t.salePurchase.printBillNow}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid="post-save-print-with-tax"
+              onClick={() => onPrintInvoice(lastSavedInvoiceNo, "with_tax")}
+              className="py-1 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+              title="टैक्स इनवॉइस (GST विवरण सहित)"
+            >
+              <Printer size={14} />
+              <span>टैक्स सहित प्रिंट</span>
+            </button>
+            <button
+              type="button"
+              data-testid="post-save-print-without-tax"
+              onClick={() => onPrintInvoice(lastSavedInvoiceNo, "without_tax")}
+              className="py-1 px-3 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+              title="सरल खुदरा बिल (बिना टैक्स विवरण)"
+            >
+              <Printer size={14} />
+              <span>बिना टैक्स प्रिंट</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -867,24 +971,91 @@ export function TransactionView({
             )}
           </div>
 
-          {/* Bottom: Bada Primary Button (48px+ Height, Font 16-18px) */}
-          <div className="flex-shrink-0 pt-1 space-y-1">
-            <button
-              type="submit"
-              data-testid="transaction-submit-btn"
-              disabled={lines.length === 0 || hasOversell}
-              className={`w-full min-h-[48px] ${primaryBg} disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base rounded-xl shadow-md flex items-center justify-center gap-2.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
-            >
-              <Printer size={20} className="flex-shrink-0" />
-              <span>
-                {isSale
-                  ? (lang === "hi" ? "बिल बनाओ और प्रिंट करो" : "Save & Print Bill")
-                  : (lang === "hi" ? "माल दर्ज करो और पर्ची बनाओ" : "Record Purchase & Save")}
-              </span>
-            </button>
-            <p className="text-[10px] text-muted text-center font-medium">
-              शॉर्टकट: <span className="font-mono font-bold">Ctrl + Enter</span> से तुरंत सुरक्षित करें
-            </p>
+          {/* Bottom: Action Buttons */}
+          <div className="flex-shrink-0 pt-1 space-y-1.5">
+            {isSale ? (
+              <div className="space-y-1.5">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    data-testid="transaction-submit-with-tax-btn"
+                    onClick={() => handleInitiateSaveWithMode("with_tax")}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked}
+                    className={`min-h-[46px] ${
+                      isBillBlocked
+                        ? "bg-slate-400 cursor-not-allowed opacity-60"
+                        : "bg-emerald-700 hover:bg-emerald-800"
+                    } disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl shadow-md flex flex-col items-center justify-center gap-0.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
+                    title="टैक्स विवरण (GST, HSN) सहित पक्का बिल बनाएं व प्रिंट करें"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Printer size={16} />
+                      <span>टैक्स सहित प्रिंट</span>
+                    </div>
+                    <span className="text-[10px] font-normal opacity-90">(GST बिल)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="transaction-submit-without-tax-btn"
+                    onClick={() => handleInitiateSaveWithMode("without_tax")}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked}
+                    className={`min-h-[46px] ${
+                      isBillBlocked
+                        ? "bg-slate-400 cursor-not-allowed opacity-60"
+                        : "bg-amber-700 hover:bg-amber-800"
+                    } disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl shadow-md flex flex-col items-center justify-center gap-0.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
+                    title="बिना टैक्स विवरण का सरल खुदरा बिल बनाएं व प्रिंट करें"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Printer size={16} />
+                      <span>बिना टैक्स प्रिंट</span>
+                    </div>
+                    <span className="text-[10px] font-normal opacity-90">(सरल खुदरा पर्ची)</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-muted font-medium px-1">
+                  <span>
+                    शॉर्टकट: <span className="font-mono font-bold">Ctrl + Enter</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleInitiateSaveWithMode("none")}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked}
+                    className="text-forest hover:underline font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {lang === "hi" ? "सिर्फ सेव करें (बिना प्रिंट)" : "Save Only"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <button
+                  type="submit"
+                  data-testid="transaction-submit-btn"
+                  disabled={
+                    lines.length === 0 ||
+                    hasOversell ||
+                    isBillBlocked ||
+                    (!isSale && (!partyId || partyId === "1" || selectedParty?.name?.toLowerCase().includes("walk-in")))
+                  }
+                  title={
+                    !isSale && (!partyId || partyId === "1")
+                      ? "पहले सप्लायर चुनो"
+                      : undefined
+                  }
+                  className="w-full min-h-[48px] bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base rounded-xl shadow-md flex items-center justify-center gap-2.5 transition-all hover:scale-[1.01]"
+                >
+                  <Printer size={20} className="flex-shrink-0" />
+                  <span>{lang === "hi" ? "माल दर्ज करो और पर्ची बनाओ" : "Record Purchase & Save"}</span>
+                </button>
+                <p className="text-[10px] text-muted text-center font-medium">
+                  शॉर्टकट: <span className="font-mono font-bold">Ctrl + Enter</span> से तुरंत सुरक्षित करें
+                </p>
+
+              </div>
+            )}
           </div>
         </div>
       </form>
@@ -930,22 +1101,81 @@ export function TransactionView({
                 </div>
               </div>
 
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setIsConfirmModalOpen(false)}
-                  className="btn-secondary flex-1 py-2 text-xs font-bold"
-                >
-                  {t.common.cancel}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleFinalConfirmSave}
-                  className="btn-primary flex-1 py-2 text-xs font-bold"
-                >
-                  {t.common.save}
-                </button>
-              </div>
+              {isSale ? (
+                <div className="space-y-2 pt-1 border-t border-border">
+                  <div className="text-[11px] font-bold text-muted uppercase tracking-wider text-center">
+                    {lang === "hi" ? "प्रिंट का प्रकार चुनें" : "Select Print Option"}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      data-testid="confirm-save-with-tax"
+                      onClick={() => handleFinalConfirmSave("with_tax")}
+                      className={`p-2.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-sm transition-all hover:scale-[1.02] ${
+                        pendingTaxMode === "with_tax"
+                          ? "bg-emerald-700 text-white ring-2 ring-emerald-400"
+                          : "bg-emerald-800 text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Printer size={15} />
+                        <span>टैक्स सहित प्रिंट</span>
+                      </div>
+                      <span className="text-[10px] font-normal opacity-90">(GST Tax Invoice)</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="confirm-save-without-tax"
+                      onClick={() => handleFinalConfirmSave("without_tax")}
+                      className={`p-2.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 shadow-sm transition-all hover:scale-[1.02] ${
+                        pendingTaxMode === "without_tax"
+                          ? "bg-amber-700 text-white ring-2 ring-amber-400"
+                          : "bg-amber-800 text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Printer size={15} />
+                        <span>बिना टैक्स प्रिंट</span>
+                      </div>
+                      <span className="text-[10px] font-normal opacity-90">(सरल खुदरा पर्ची)</span>
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-border/60">
+                    <button
+                      type="button"
+                      onClick={() => setIsConfirmModalOpen(false)}
+                      className="btn-secondary py-1.5 px-3 text-xs font-bold"
+                    >
+                      {t.common.cancel}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="confirm-save-only"
+                      onClick={() => handleFinalConfirmSave("none")}
+                      className="text-xs text-forest hover:underline font-bold px-2 py-1"
+                    >
+                      {lang === "hi" ? "सिर्फ सुरक्षित करें (बिना प्रिंट)" : "Save Only"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmModalOpen(false)}
+                    className="btn-secondary flex-1 py-2 text-xs font-bold"
+                  >
+                    {t.common.cancel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFinalConfirmSave("none")}
+                    className="btn-primary flex-1 py-2 text-xs font-bold"
+                  >
+                    {t.common.save}
+                  </button>
+                </div>
+              )}
             </div>
           </div>,
           document.body

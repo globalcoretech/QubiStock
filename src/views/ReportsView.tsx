@@ -24,6 +24,7 @@ type ReportTab = "purchase_reg" | "sales_reg" | "gst_summary" | "hsn_summary" | 
 interface ReportsViewProps {
   settings: AppSettings;
   refreshTrigger: number;
+  onPrintInvoice?: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
   t: Translations;
   lang: Language;
 }
@@ -51,6 +52,7 @@ function exportToCsv(filename: string, headers: string[], rows: (string | number
 export function ReportsView({
   settings,
   refreshTrigger,
+  onPrintInvoice,
   t: _t,
   lang,
 }: ReportsViewProps) {
@@ -586,7 +588,7 @@ export function ReportsView({
                   <th className="py-2 px-2 text-right">कर योग्य</th>
                   {withGst && <th className="py-2 px-2 text-right">टैक्स</th>}
                   <th className="py-2 px-2.5 text-right">कुल रकम</th>
-                  <th className="py-2 px-2 text-center">माध्यम/स्थिति</th>
+                  <th className="py-2 px-2 text-center">माध्यम / प्रिंट</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -618,16 +620,38 @@ export function ReportsView({
                         <td className="py-1.5 px-2.5 text-right font-mono font-bold text-ink">
                           {formatCurrency(rowTotal)}
                         </td>
-                        <td className="py-1.5 px-2 text-center">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              row.payment_mode === "credit"
-                                ? "bg-amber-100 text-amber-800 border border-amber-300"
-                                : "bg-emerald-100 text-emerald-800 border border-emerald-300"
-                            }`}
-                          >
-                            {row.payment_mode === "credit" ? "उधार" : "नकद"}
-                          </span>
+                        <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                row.payment_mode === "credit"
+                                  ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                  : "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                              }`}
+                            >
+                              {row.payment_mode === "credit" ? "उधार" : "नकद"}
+                            </span>
+                            {row.invoice_no && onPrintInvoice && (
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => onPrintInvoice(row.invoice_no, "with_tax")}
+                                  title="टैक्स सहित प्रिंट (GST Invoice)"
+                                  className="px-1.5 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-[10px] font-bold shadow-2xs transition-transform active:scale-95"
+                                >
+                                  🧾 GST
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onPrintInvoice(row.invoice_no, "without_tax")}
+                                  title="बिना टैक्स प्रिंट (सरल बिल)"
+                                  className="px-1.5 py-0.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-[10px] font-bold shadow-2xs transition-transform active:scale-95"
+                                >
+                                  📄 सरल
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

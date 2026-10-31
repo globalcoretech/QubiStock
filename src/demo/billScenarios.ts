@@ -26,6 +26,8 @@ export const SCENARIO_1_ITEM: BillData = buildBillData({
         unit: "बोरी",
         rate: 26650, // ₹266.50
         taxable: 25381,
+        gst_rate: 5,
+        gst_status: "taxable",
         gst_amount: 1269,
         total: 26650,
       },

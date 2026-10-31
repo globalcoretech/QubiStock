@@ -16,7 +16,11 @@ export const BillA5: React.FC<BillA5Props> = ({
   isPrintPreview = false,
 }) => {
   const { shop, party, invoice, lines, totals, hsnSummary, customization } = bill;
-  const isBillOfSupply = invoice.billType === "BILL OF SUPPLY";
+  const isWithoutTax =
+    customization?.hideTaxDetails ||
+    customization?.taxMode === "without_tax" ||
+    invoice.billType === "CASH MEMO";
+  const isBillOfSupply = !isWithoutTax && invoice.billType === "BILL OF SUPPLY";
   const lang = customization?.language || "both";
   const cols = customization?.visibleColumns || {
     hsn: true,
@@ -82,7 +86,7 @@ export const BillA5: React.FC<BillA5Props> = ({
                     </h1>
                     <p className="text-[9.5px] text-slate-600 truncate mt-0.5">{shop.address}</p>
                     <div className="flex flex-wrap gap-x-2 text-[9.5px] font-semibold text-slate-800">
-                      <span>GSTIN: {shop.gstin}</span>
+                      {!isWithoutTax && shop.gstin && <span>GSTIN: {shop.gstin}</span>}
                       <span>मो.: {shop.phone}</span>
                       <span>राज्य: {shop.stateCode}</span>
                     </div>
@@ -92,11 +96,13 @@ export const BillA5: React.FC<BillA5Props> = ({
                 <div className="text-right flex-shrink-0">
                   <div className="flex items-center gap-1 justify-end">
                     <span className="inline-block border border-slate-900 bg-slate-900 text-white font-bold text-[10px] uppercase px-1.5 py-0.5 rounded">
-                      {invoice.billType === "TAX INVOICE"
+                      {isWithoutTax
+                        ? "BILL / CASH MEMO"
+                        : invoice.billType === "TAX INVOICE"
                         ? "TAX INVOICE"
-                        : invoice.billType === "BILL OF SUPPLY"
+                        : isBillOfSupply
                         ? "BILL OF SUPPLY"
-                        : "CASH MEMO"}
+                        : "BILL / CASH MEMO"}
                     </span>
                     <span className="font-mono text-[9px] bg-slate-200 text-slate-800 px-1 py-0.5 rounded font-bold">
                       Page {pageIndex + 1}/{totalPages}
@@ -120,10 +126,12 @@ export const BillA5: React.FC<BillA5Props> = ({
                 {party.village && (
                   <div className="text-slate-600">स्थान: {party.village}</div>
                 )}
-                <div className="mt-0.5">
-                  <strong className="text-slate-500">GSTIN:</strong>{" "}
-                  {party.gstin || <span className="italic">Unregistered (अपंजीकृत)</span>}
-                </div>
+                {!isWithoutTax && (
+                  <div className="mt-0.5">
+                    <strong className="text-slate-500">GSTIN:</strong>{" "}
+                    {party.gstin || <span className="italic">Unregistered (अपंजीकृत)</span>}
+                  </div>
+                )}
                 {party.phone && <div>फोन: {party.phone}</div>}
               </div>
 
@@ -151,7 +159,7 @@ export const BillA5: React.FC<BillA5Props> = ({
                   <tr>
                     <th className="py-1 px-1 border-r border-slate-300 text-center w-6">#</th>
                     <th className="py-1 px-1.5 border-r border-slate-300 text-left">सामान / Description</th>
-                    {cols.hsn && !isBillOfSupply && (
+                    {cols.hsn && !isBillOfSupply && !isWithoutTax && (
                       <th className="py-1 px-1 border-r border-slate-300 text-center w-12">HSN</th>
                     )}
                     <th className="py-1 px-1 border-r border-slate-300 text-right w-10">मात्रा</th>
@@ -162,10 +170,10 @@ export const BillA5: React.FC<BillA5Props> = ({
                     {cols.discount && (
                       <th className="py-1 px-1 border-r border-slate-300 text-right w-10">छूट</th>
                     )}
-                    {cols.taxable && !isBillOfSupply && (
+                    {cols.taxable && !isBillOfSupply && !isWithoutTax && (
                       <th className="py-1 px-1 border-r border-slate-300 text-right w-14">कर योग्य</th>
                     )}
-                    {cols.gstRate && !isBillOfSupply && (
+                    {cols.gstRate && !isBillOfSupply && !isWithoutTax && (
                       <th className="py-1 px-1 border-r border-slate-300 text-center w-8">GST</th>
                     )}
                     <th className="py-1 px-1.5 text-right w-16">रकम (₹)</th>
@@ -177,8 +185,8 @@ export const BillA5: React.FC<BillA5Props> = ({
                     return (
                       <tr key={idx}>
                         <td className="py-0.5 px-1 border-r border-slate-200 text-center font-mono">{itemSr}</td>
-                        <td className="py-0.5 px-1.5 border-r border-slate-200 font-semibold truncate max-w-[150px]">{item.name}</td>
-                        {cols.hsn && !isBillOfSupply && (
+                        <td className="py-0.5 px-1.5 border-r border-slate-200 font-semibold break-words max-w-[150px]">{item.name}</td>
+                        {cols.hsn && !isBillOfSupply && !isWithoutTax && (
                           <td className="py-0.5 px-1 border-r border-slate-200 text-center font-mono">{item.hsn}</td>
                         )}
                         <td className="py-0.5 px-1 border-r border-slate-200 text-right font-mono font-bold">{item.qty}</td>
@@ -191,10 +199,10 @@ export const BillA5: React.FC<BillA5Props> = ({
                             {item.discount ? item.discount.toFixed(2) : "-"}
                           </td>
                         )}
-                        {cols.taxable && !isBillOfSupply && (
+                        {cols.taxable && !isBillOfSupply && !isWithoutTax && (
                           <td className="py-0.5 px-1 border-r border-slate-200 text-right font-mono">{item.taxableAmount.toFixed(2)}</td>
                         )}
-                        {cols.gstRate && !isBillOfSupply && (
+                        {cols.gstRate && !isBillOfSupply && !isWithoutTax && (
                           <td className="py-0.5 px-1 border-r border-slate-200 text-center font-mono">{item.gstRate}%</td>
                         )}
                         <td className="py-0.5 px-1.5 text-right font-mono font-bold">{item.totalAmount.toFixed(2)}</td>
@@ -215,8 +223,8 @@ export const BillA5: React.FC<BillA5Props> = ({
             {/* Totals & Full Footer ONLY on Last Page */}
             {isLastPage && (
               <>
-                {/* HSN Summary (Compact) */}
-                {!isBillOfSupply && hsnSummary.length > 0 && (
+                {/* HSN Summary (Compact) - ONLY in With GST */}
+                {!isBillOfSupply && !isWithoutTax && hsnSummary.length > 0 && (
                   <div className="border-x border-b border-slate-900 text-[8.5px]">
                     <div className="bg-slate-100 px-2 py-0.5 font-bold border-b border-slate-300 flex justify-between">
                       <span>GST Tax Summary</span>
@@ -265,11 +273,24 @@ export const BillA5: React.FC<BillA5Props> = ({
                   </div>
 
                   <div className="col-span-4 p-1.5 bg-white space-y-0.5">
-                    <div className="flex justify-between text-slate-600">
-                      <span>कर योग्य (Taxable):</span>
-                      <span className="font-mono">₹{totals.totalTaxable.toFixed(2)}</span>
-                    </div>
-                    {!isBillOfSupply && (
+                    {isWithoutTax ? (
+                      <div className="flex justify-between text-slate-600">
+                        <span>कुल राशि (Subtotal):</span>
+                        <span className="font-mono">₹{totals.totalTaxable.toFixed(2)}</span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between text-slate-600">
+                        <span>कर योग्य (Taxable):</span>
+                        <span className="font-mono">₹{totals.totalTaxable.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {totals.discount !== undefined && totals.discount > 0 && (
+                      <div className="flex justify-between text-red-600">
+                        <span>छूट / Discount:</span>
+                        <span className="font-mono">-₹{totals.discount.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {!isBillOfSupply && !isWithoutTax && (
                       <div className="flex justify-between text-slate-600">
                         <span>कुल टैक्स (GST):</span>
                         <span className="font-mono">₹{totals.totalTax.toFixed(2)}</span>
@@ -309,6 +330,11 @@ export const BillA5: React.FC<BillA5Props> = ({
                     </div>
                   </div>
                 </div>
+                {isWithoutTax && (
+                  <div className="mt-1 text-center text-[9px] font-semibold text-slate-500">
+                    * यह कर इनवॉइस नहीं है (This is not a Tax Invoice.) *
+                  </div>
+                )}
               </>
             )}
           </div>

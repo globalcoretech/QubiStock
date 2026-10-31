@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use rusqlite::{Connection, Result, params};
+use rusqlite::{Connection, Result, params, OptionalExtension};
 use crate::inventory::{add_stock_ledger_entry, calculate_weighted_average_cost};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -210,4 +210,26 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
 
     tx.commit()?;
     Ok(())
+}
+
+pub fn log_invoice_print(conn: &Connection, invoice_no: &str, bill_mode: &str) -> std::result::Result<(), String> {
+    if bill_mode != "WITH_GST" && bill_mode != "WITHOUT_GST" {
+        return Err(format!("Invalid bill_mode: {}. Must be WITH_GST or WITHOUT_GST", bill_mode));
+    }
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO invoice_print_log (invoice_no, bill_mode, printed_at) VALUES (?1, ?2, ?3)",
+        params![invoice_no, bill_mode, now],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn get_last_invoice_print_mode(conn: &Connection, invoice_no: &str) -> std::result::Result<String, String> {
+    let mode: Option<String> = conn.query_row(
+        "SELECT bill_mode FROM invoice_print_log WHERE invoice_no = ?1 ORDER BY id DESC LIMIT 1",
+        params![invoice_no],
+        |r| r.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+
+    Ok(mode.unwrap_or_else(|| "WITH_GST".to_string()))
 }

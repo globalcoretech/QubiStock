@@ -12,7 +12,8 @@ export type View =
   | "Reports"
   | "Tally Import"
   | "Settings"
-  | "PrinterSetup";
+  | "PrinterSetup"
+  | "Backup";
 
 export type BillFormat = "A4" | "A5" | "A6";
 export type BillType = "TAX INVOICE" | "BILL OF SUPPLY" | "CASH MEMO";
@@ -60,6 +61,10 @@ export interface AppSettings {
   isGstRegistered?: boolean;
   isComposition?: boolean;
   silentPrintBeta?: boolean;
+  // Backup & Restore
+  backupFolder?: string;
+  secondaryBackupFolder?: string;
+  lastBackupTime?: string;
 }
 
 export const DEFAULT_VISIBLE_COLUMNS: BillVisibleColumns = {
@@ -71,20 +76,20 @@ export const DEFAULT_VISIBLE_COLUMNS: BillVisibleColumns = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  shopName: "श्री राम कृषि केंद्र",
-  gstin: "23AAAAA0000A1Z5",
-  stateCode: "23",
-  phone: "+91 98765 43210",
-  address: "मुख्य बाजार, कृषि उपज मंडी रोड, सीहोर (म.प्र.) - 466001",
+  shopName: "",
+  gstin: "",
+  stateCode: "",
+  phone: "",
+  address: "",
   lowStockThreshold: 10,
-  footerNote: "बिका हुआ माल वापस नहीं होगा। हमारे यहाँ सभी प्रकार के उन्नत खाद, बीज एवं कीटनाशक उपलब्ध हैं। धन्यवाद!",
+  footerNote: "धन्यवाद!",
   logoData: "",
-  bankName: "State Bank of India (भारतीय स्टेट बैंक)",
-  bankAccountNo: "30291827364",
-  bankIfsc: "SBIN0001234",
-  bankBranch: "सीहोर मुख्य शाखा (Sehore Main)",
-  upiId: "ramkrishi@sbi",
-  termsAndConditions: "1. बिका हुआ माल वापस नहीं होगा।\n2. खाद-बीज की शुद्धता की गारंटी संबंधित निर्माता कंपनी की होगी।\n3. किसी भी विवाद की स्थिति में न्याय क्षेत्र सीहोर होगा।\n4. नियत समय के पश्चात भुगतान पर 18% वार्षिक ब्याज देय होगा।",
+  bankName: "",
+  bankAccountNo: "",
+  bankIfsc: "",
+  bankBranch: "",
+  upiId: "",
+  termsAndConditions: "",
   signatureText: "अधिकृत हस्ताक्षरकर्ता (Authorized Signatory)",
   signatureData: "",
   defaultBillFormat: "A4",
@@ -99,7 +104,74 @@ export const DEFAULT_SETTINGS: AppSettings = {
   isGstRegistered: true,
   isComposition: false,
   silentPrintBeta: false,
+  backupFolder: "",
+  secondaryBackupFolder: "",
+  lastBackupTime: "",
 };
+
+export interface BackupInfo {
+  fileName: string;
+  filePath: string;
+  timestamp: string;
+  sizeBytes: number;
+  formattedSize: string;
+  isVerified: boolean;
+  isSafetyBackup: boolean;
+  // Compatibility aliases
+  filename?: string;
+  path?: string;
+  created_at_formatted?: string;
+  size_formatted?: string;
+}
+
+export interface BackupResult {
+  success: boolean;
+  fileName: string;
+  primaryPath: string;
+  secondaryPath?: string | null;
+  secondaryWarning?: string | null;
+  timestamp: string;
+  sizeBytes: number;
+  formattedSize: string;
+  isVerified: boolean;
+  message: string;
+}
+
+export interface IntegrityCheckReport {
+  isOk: boolean;
+  message: string;
+  details?: string[];
+  suggestedBackup?: BackupInfo | null;
+  // Compatibility aliases
+  is_ok?: boolean;
+  suggested_backup?: BackupInfo | null;
+}
+
+export interface BackupStatusInfo {
+  lastBackupTime?: string | null;
+  isBackupRecent: boolean;
+  formattedChipText: string;
+  primaryFolder: string;
+  secondaryFolder?: string | null;
+  primaryFreeSpace?: string | null;
+  secondaryFreeSpace?: string | null;
+  isSameDriveAsDb?: boolean;
+  // Compatibility aliases
+  last_backup_time?: string | null;
+  is_recent?: boolean;
+  formatted_chip_hi?: string;
+  formatted_chip_en?: string;
+  primary_free_space?: string | null;
+  secondary_free_space?: string | null;
+  is_same_drive_as_db?: boolean;
+}
+
+export interface RestoreResult {
+  success: boolean;
+  safetyBackupPath: string;
+  pendingPath: string;
+  message: string;
+}
 
 
 export interface BillLineItem {
@@ -133,6 +205,8 @@ export interface BillHsnSummary {
   igstAmount: number;
   totalTax: number;
 }
+
+export type BillTaxMode = "with_tax" | "without_tax";
 
 export interface BillData {
   shop: {
@@ -178,6 +252,7 @@ export interface BillData {
   totals: {
     totalQty: number;
     totalTaxable: number;
+    discount?: number;
     totalCgst: number;
     totalSgst: number;
     totalIgst: number;
@@ -192,6 +267,8 @@ export interface BillData {
     format?: BillFormat;
     language?: BillLanguage;
     visibleColumns?: BillVisibleColumns;
+    taxMode?: BillTaxMode;
+    hideTaxDetails?: boolean;
   };
 }
 
@@ -253,7 +330,9 @@ export interface LastRates {
 export interface Feedback {
   message: string;
   isError: boolean;
+  details?: string;
 }
+
 
 export interface Godown {
   id: number;
@@ -306,6 +385,7 @@ export interface InvoicePrintDetails {
   payment_mode: string;
   paid_amount: number;
   total_amount: number;
+  bill_mode?: "WITH_GST" | "WITHOUT_GST" | string | null;
   lines: InvoicePrintLine[];
 }
 
@@ -421,6 +501,8 @@ export interface PendingBill {
   total_amount: number;
   paid_amount: number;
   pending_amount: number;
+  party_id?: number;
+  party_name?: string;
 }
 
 export interface PartyStatementItem {
@@ -487,4 +569,6 @@ export interface LowStockItem {
   threshold_milli: number;
   last_purchase_rate: number;
 }
+
+
 

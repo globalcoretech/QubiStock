@@ -6,18 +6,25 @@ export function FeedbackBanner({ feedback }: { feedback: Feedback | null }) {
 
   return (
     <div
-      className={`p-3.5 rounded-input text-sm font-medium border flex items-center gap-2.5 ${
+      className={`p-3.5 rounded-input text-sm font-medium border flex items-start gap-2.5 ${
         feedback.isError
           ? "bg-terracotta/10 border-terracotta/30 text-terracotta"
           : "bg-leaf/10 border-leaf/30 text-leaf"
       }`}
     >
       {feedback.isError ? (
-        <AlertCircle size={16} className="text-terracotta flex-shrink-0" />
+        <AlertCircle size={18} className="text-terracotta flex-shrink-0 mt-0.5" />
       ) : (
-        <Check size={16} className="text-leaf flex-shrink-0" />
+        <Check size={18} className="text-leaf flex-shrink-0 mt-0.5" />
       )}
-      <span className="flex-1 leading-relaxed">{feedback.message}</span>
+      <div className="flex-1 flex flex-col gap-0.5">
+        <span className="leading-relaxed">{feedback.message}</span>
+        {feedback.details && (
+          <span className="text-[11px] font-mono text-terracotta/80 break-all leading-tight">
+            {feedback.details}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

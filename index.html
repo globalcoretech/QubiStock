@@ -13,6 +13,36 @@
   </head>
   <body class="bg-paper text-ink font-body antialiased selection:bg-marigold/30 selection:text-ink">
     <div id="root"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        console.error('Window Error:', e);
+        var box = document.getElementById('debug-error-box');
+        if (!box) {
+          box = document.createElement('div');
+          box.id = 'debug-error-box';
+          box.style.cssText = 'position:fixed;top:16px;left:16px;right:16px;z-index:999999;background:#FEF2F2;border:2px solid #DC2626;color:#991B1B;padding:16px;border-radius:12px;font-family:sans-serif;box-shadow:0 10px 25px rgba(0,0,0,0.2);';
+          document.body.appendChild(box);
+        }
+        box.innerHTML = '<h3 style="margin:0 0 8px 0;font-size:16px;font-weight:bold;color:#991B1B;">🚨 स्क्रीन लोड त्रुटि (JavaScript Error)</h3>' +
+          '<div style="font-size:13px;font-weight:600;margin-bottom:6px;">' + (e.message || 'Unknown Error') + '</div>' +
+          '<div style="font-size:11px;color:#7F1D1D;font-family:monospace;">' + (e.filename || '') + ':' + (e.lineno || '') + '</div>' +
+          (e.error && e.error.stack ? '<pre style="margin-top:8px;font-size:10px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;background:#fff;padding:8px;border-radius:6px;border:1px solid #FCA5A5;">' + e.error.stack + '</pre>' : '');
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('Unhandled Rejection:', e);
+        var box = document.getElementById('debug-error-box');
+        if (!box) {
+          box = document.createElement('div');
+          box.id = 'debug-error-box';
+          box.style.cssText = 'position:fixed;top:16px;left:16px;right:16px;z-index:999999;background:#FEF2F2;border:2px solid #DC2626;color:#991B1B;padding:16px;border-radius:12px;font-family:sans-serif;box-shadow:0 10px 25px rgba(0,0,0,0.2);';
+          document.body.appendChild(box);
+        }
+        var msg = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+        box.innerHTML = '<h3 style="margin:0 0 8px 0;font-size:16px;font-weight:bold;color:#991B1B;">🚨 अनहैंडल्ड त्रुटि (Unhandled Rejection)</h3>' +
+          '<div style="font-size:13px;font-weight:600;margin-bottom:6px;">' + msg + '</div>' +
+          (e.reason && e.reason.stack ? '<pre style="margin-top:8px;font-size:10px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;background:#fff;padding:8px;border-radius:6px;border:1px solid #FCA5A5;">' + e.reason.stack + '</pre>' : '');
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

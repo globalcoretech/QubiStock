@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Item, Feedback, GstStatus } from "../types";
 import { Translations, Language } from "../i18n";
@@ -11,6 +11,7 @@ interface ItemsViewProps {
   onRefresh?: () => void;
   t: Translations;
   lang: Language;
+  initialOpenForm?: boolean;
 }
 
 export function ItemsView({
@@ -18,9 +19,11 @@ export function ItemsView({
   onRefresh,
   t,
   lang,
+  initialOpenForm = false,
 }: ItemsViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [name, setName] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [hsn, setHsn] = useState("");
   const [gstStatus, setGstStatus] = useState<GstStatus>("taxable");
   const [gstRate, setGstRate] = useState("5");
@@ -28,8 +31,17 @@ export function ItemsView({
   const [altUnit, setAltUnit] = useState("");
   const [factor, setFactor] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isFormOpen, setIsFormOpen] = useState(initialOpenForm);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+
+  useEffect(() => {
+    if (initialOpenForm) {
+      setIsFormOpen(true);
+      setTimeout(() => {
+        nameInputRef.current?.focus();
+      }, 60);
+    }
+  }, [initialOpenForm]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(7);
@@ -160,6 +172,7 @@ export function ItemsView({
                   {lang === "hi" ? "सामान का नाम" : "Item Name"} *
                 </label>
                 <input
+                  ref={nameInputRef}
                   required
                   placeholder={lang === "hi" ? "उदा. यूरिया / डीएपी / कीटनाशक" : "e.g. Urea / DAP / Pesticide"}
                   value={name}
