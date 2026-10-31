@@ -394,6 +394,76 @@ export function setupDemoMocks() {
       case "get_profit_report_cmd":
         return DEMO_PROFIT_REPORT;
 
+      case "get_sales_gst_mode_profit_report_cmd":
+        return {
+          groups: [
+            {
+              group_name: "WITH_GST",
+              bills_count: 5,
+              taxable_sales: 5000000,
+              gst_collected: 900000,
+              bill_total: 5900000,
+              cost: 4000000,
+              profit: 1000000,
+              profit_margin_pct: 20.0,
+              difference_vs_printed: 0,
+              invoices: [],
+            },
+            {
+              group_name: "WITHOUT_GST",
+              bills_count: 3,
+              taxable_sales: 3000000,
+              gst_collected: 540000,
+              bill_total: 3540000,
+              cost: 2500000,
+              profit: 500000,
+              profit_margin_pct: 16.67,
+              difference_vs_printed: 540000,
+              invoices: [],
+            },
+            {
+              group_name: "NOT_PRINTED",
+              bills_count: 2,
+              taxable_sales: 2000000,
+              gst_collected: 360000,
+              bill_total: 2360000,
+              cost: 1600000,
+              profit: 400000,
+              profit_margin_pct: 20.0,
+              difference_vs_printed: 0,
+              invoices: [],
+            },
+          ],
+          total: {
+            group_name: "TOTAL",
+            bills_count: 10,
+            taxable_sales: 10000000,
+            gst_collected: 1800000,
+            bill_total: 11800000,
+            cost: 8100000,
+            profit: 1900000,
+            profit_margin_pct: 19.0,
+            difference_vs_printed: 540000,
+            invoices: [],
+          },
+        };
+
+      case "get_item_parties_report_cmd":
+        return {
+          item_id: payload.itemId || 1,
+          item_name: "यूरिया 45kg",
+          direction: payload.direction || "purchased",
+          parties: [],
+        };
+
+      case "get_party_items_report_cmd":
+        return {
+          party_id: payload.partyId || 1,
+          party_name: "राम शर्मा",
+          direction: payload.direction || "purchased",
+          items: [],
+        };
+
       case "preview_tally_import_cmd":
         return {
           new_items: 5,

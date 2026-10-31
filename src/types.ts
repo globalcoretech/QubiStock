@@ -570,5 +570,121 @@ export interface LowStockItem {
   last_purchase_rate: number;
 }
 
+// ==========================================
+// NEW REPORTS TYPES
+// ==========================================
+
+export interface SalesGstModeInvoiceItem {
+  invoice_no: string;
+  date: string;
+  party_name: string;
+  taxable: number;      // paise
+  gst: number;          // paise
+  total: number;        // paise (saved total_amount)
+  cost: number;         // paise
+  profit: number;       // paise (taxable - bill_discount - cost)
+  printed_mode: "WITH_GST" | "WITHOUT_GST" | "NOT_PRINTED" | string;
+  last_printed_time?: string | null;
+}
+
+export interface SalesGstModeGroupSummary {
+  group_key: "WITH_GST" | "WITHOUT_GST" | "NOT_PRINTED" | string;
+  group_name: string;
+  bills_count: number;
+  taxable_sales: number;      // paise
+  gst_collected: number;      // paise
+  bill_total: number;         // paise
+  cost: number;               // paise
+  profit: number;             // paise
+  profit_margin_pct: number;
+  diff_vs_printed_total: number; // paise
+  invoices: SalesGstModeInvoiceItem[];
+}
+
+export interface SalesGstModeReport {
+  groups: SalesGstModeGroupSummary[];
+  total_bills_count: number;
+  total_taxable_sales: number;
+  total_gst_collected: number;
+  total_bill_amount: number;
+  total_cost: number;
+  total_profit: number;
+  total_profit_margin_pct: number;
+  total_diff_vs_printed_total: number;
+}
+
+export interface ItemPartyBillDetail {
+  invoice_no: string;
+  date: string;
+  qty: number;          // milli-units in base unit
+  unit: string;         // base unit
+  rate: number;         // paise per base unit
+  taxable: number;      // paise
+  tax_amount: number;   // paise
+  total_amount: number; // paise
+}
+
+export interface ItemPartySummary {
+  party_id: number;
+  party_name: string;
+  bills_count: number;
+  total_qty: number;    // milli-units
+  unit: string;
+  total_amount: number; // paise
+  min_rate: number;     // paise
+  max_rate: number;     // paise
+  average_rate: number; // paise
+  last_rate: number;    // paise
+  last_date: string;
+  bills: ItemPartyBillDetail[];
+}
+
+export interface ItemPartiesReport {
+  item_id: number;
+  item_name: string;
+  base_unit: string;
+  direction: "purchased_from" | "sold_to" | string;
+  parties: ItemPartySummary[];
+  total_bills_count: number;
+  total_qty: number;
+  total_amount: number;
+}
+
+export interface PartyItemBillDetail {
+  invoice_no: string;
+  date: string;
+  qty: number;          // milli-units in base unit
+  unit: string;         // base unit
+  rate: number;         // paise per base unit
+  taxable: number;      // paise
+  tax_amount: number;   // paise
+  total_amount: number; // paise
+}
+
+export interface PartyItemSummary {
+  item_id: number;
+  item_name: string;
+  base_unit: string;
+  bills_count: number;
+  total_qty: number;    // milli-units in base unit
+  total_amount: number; // paise
+  min_rate: number;     // paise
+  max_rate: number;     // paise
+  average_rate: number; // paise
+  last_rate: number;    // paise
+  last_date: string;
+  bills: PartyItemBillDetail[];
+}
+
+export interface PartyItemsReport {
+  party_id: number;
+  party_name: string;
+  direction: "purchased_from" | "sold_to" | string;
+  items: PartyItemSummary[];
+  total_bills_count: number;
+  total_amount: number;
+}
+
+
 
 

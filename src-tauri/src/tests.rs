@@ -2245,3 +2245,384 @@ fn test_restore_swaps_pending_and_restores_data() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_new_reports_hand_calculated() {
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine, log_invoice_print};
+    use crate::commands::{
+        get_sales_gst_mode_profit_report_inner,
+        get_item_parties_report_inner,
+        get_party_items_report_inner,
+    };
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Master Data: 2 items
+    // Item 1: DAP 50kg (5% GST, base_unit = "BAG")
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+         VALUES (1, 'DAP Fertilizer 50kg', 'fertilizer', '3105', 5000, 'taxable', 'BAG')",
+        [],
+    ).unwrap();
+
+    // Item 2: Urea 45kg (0% GST, base_unit = "BAG")
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+         VALUES (2, 'Urea 45kg', 'fertilizer', '3102', 0, 'nil_rated', 'BAG')",
+        [],
+    ).unwrap();
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Parties:
+    // Party 2: Supplier Alpha (Regular, MP 23)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone)
+         VALUES (2, 'Supplier Alpha', 'supplier', 'regular', '23AAAAA1111A1Z1', '9800000001')",
+        [],
+    ).unwrap();
+
+    // Party 3: Supplier Beta (Regular, MP 23)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone)
+         VALUES (3, 'Supplier Beta', 'supplier', 'regular', '23BBBBB2222B1Z2', '9800000002')",
+        [],
+    ).unwrap();
+
+    // Party 4: Farmer Ramesh (Customer, unregistered)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone)
+         VALUES (4, 'Farmer Ramesh', 'customer', 'unregistered', NULL, '9800000003')",
+        [],
+    ).unwrap();
+
+    // Party 5: Farmer Suresh (Customer, unregistered)
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, gstin, phone)
+         VALUES (5, 'Farmer Suresh', 'customer', 'unregistered', NULL, '9800000004')",
+        [],
+    ).unwrap();
+
+    // 2. Purchases to test:
+    // a) Purchases from 2 parties at different rates for Item 1:
+    // PUR-01: Supplier Alpha sells 10 bags DAP @ Rs 1,000 (100000 paise).
+    // Taxable = 1000000 paise (Rs 10,000). 5% GST = 50000 paise (Rs 500). Total = 1050000 paise (Rs 10,500).
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-01".to_string(),
+        date: "2026-10-01".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 1050000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 10000, // 10 bags
+                unit: "BAG".to_string(),
+                rate: 100000, // Rs 1,000
+                taxable: 1000000,
+                cgst: 25000,
+                sgst: 25000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // PUR-02: Supplier Alpha also sells 5 bags Urea @ Rs 300 (30000 paise).
+    // Taxable = 150000 paise (Rs 1,500). 0% GST. Total = 150000 paise.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-02".to_string(),
+        date: "2026-10-02".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 150000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 2,
+                qty: 5000, // 5 bags
+                unit: "BAG".to_string(),
+                rate: 30000, // Rs 300
+                taxable: 150000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // PUR-03: Supplier Beta sells 5 bags DAP @ Rs 1,200 (120000 paise).
+    // Taxable = 600000 paise (Rs 6,000). 5% GST = 30000 paise (Rs 300). Total = 630000 paise (Rs 6,300).
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-03".to_string(),
+        date: "2026-10-05".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 630000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 5000, // 5 bags
+                unit: "BAG".to_string(),
+                rate: 120000, // Rs 1,200
+                taxable: 600000,
+                cgst: 15000,
+                sgst: 15000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // WAC check:
+    // DAP: (10 * 100000 + 5 * 120000) * 1000 / 15000 = 1600000 / 15 = 106666 paise
+    let wac_dap = calculate_weighted_average_cost(&conn, 1).unwrap();
+    assert_eq!(wac_dap, 106666);
+
+    // 3. Sales to test Report 1 (Sales & Profit: With GST vs Without GST):
+    // INV-1: Farmer Ramesh - 2 bags DAP @ Rs 1,400.
+    // Taxable = 280000 paise (Rs 2,800), GST 5% = 14000 paise (Rs 140). Total = 294000 paise (Rs 2,940).
+    // Cost snapshot = 2 * 106666 = 213332 paise.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-001".to_string(),
+        date: "2026-10-10".to_string(),
+        party_id: 4,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 294000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 2000, // 2 bags
+                unit: "BAG".to_string(),
+                rate: 140000, // Rs 1,400
+                taxable: 280000,
+                cgst: 7000,
+                sgst: 7000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+    // Print in WITH_GST mode:
+    log_invoice_print(&conn, "SALE-001", "WITH_GST").unwrap();
+
+    // INV-2: Farmer Suresh - 2 bags DAP @ Rs 1,500.
+    // Taxable = 300000 paise (Rs 3,000), GST 5% = 15000 paise (Rs 150). Total = 315000 paise (Rs 3,150).
+    // Cost snapshot = 2 * 106666 = 213332 paise.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-002".to_string(),
+        date: "2026-10-11".to_string(),
+        party_id: 5,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 315000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 2000,
+                unit: "BAG".to_string(),
+                rate: 150000,
+                taxable: 300000,
+                cgst: 7500,
+                sgst: 7500,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+    // Print in WITHOUT_GST mode:
+    log_invoice_print(&conn, "SALE-002", "WITHOUT_GST").unwrap();
+
+    // INV-3: Farmer Ramesh - 1 bag DAP @ Rs 1,400.
+    // Taxable = 140000 paise (Rs 1,400), GST = 7000 paise (Rs 70). Total = 147000 paise (Rs 1,470).
+    // Cost snapshot = 1 * 106666 = 106666 paise.
+    // UNPRINTED (no row in invoice_print_log)
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-003".to_string(),
+        date: "2026-10-12".to_string(),
+        party_id: 4,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 147000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 1000,
+                unit: "BAG".to_string(),
+                rate: 140000,
+                taxable: 140000,
+                cgst: 3500,
+                sgst: 3500,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // INV-4: Printed in both modes (last mode wins):
+    // Farmer Suresh - 1 bag Urea @ Rs 400.
+    // Taxable = 40000 paise (Rs 400), 0% GST. Total = 40000 paise. Cost snapshot = 30000 paise.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-004".to_string(),
+        date: "2026-10-13".to_string(),
+        party_id: 5,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 40000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 2,
+                qty: 1000,
+                unit: "BAG".to_string(),
+                rate: 40000,
+                taxable: 40000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+    // First print WITH_GST, then re-print WITHOUT_GST:
+    log_invoice_print(&conn, "SALE-004", "WITH_GST").unwrap();
+    log_invoice_print(&conn, "SALE-004", "WITHOUT_GST").unwrap();
+
+    // INV-5: Bill with discount:
+    // Farmer Ramesh - 2 bags Urea @ Rs 500 = Rs 1,000 (100000 paise) taxable, 0 GST.
+    // Saved total_amount = Rs 900 (90000 paise) -> bill discount = 10000 paise (Rs 100).
+    // Cost snapshot = 2 * 30000 = 60000 paise (Rs 600).
+    // Profit = net_taxable (100000 - 10000 = 90000) - cost (60000) = 30000 paise (Rs 300).
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-005".to_string(),
+        date: "2026-10-14".to_string(),
+        party_id: 4,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 90000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 2,
+                qty: 2000,
+                unit: "BAG".to_string(),
+                rate: 50000,
+                taxable: 100000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+    // Update total_amount to 90000 to simulate bill discount
+    conn.execute("UPDATE sales SET total_amount = 90000 WHERE invoice_no = 'SALE-005'", []).unwrap();
+    log_invoice_print(&conn, "SALE-005", "WITH_GST").unwrap();
+
+    // ==========================================
+    // VERIFY REPORT 1: Sales & Profit: With GST vs Without GST
+    // ==========================================
+    let rep1 = get_sales_gst_mode_profit_report_inner(&conn, "2026-10-01", "2026-10-31").unwrap();
+    assert_eq!(rep1.groups.len(), 3);
+
+    let g_with = rep1.groups.iter().find(|g| g.group_key == "WITH_GST").unwrap();
+    let g_without = rep1.groups.iter().find(|g| g.group_key == "WITHOUT_GST").unwrap();
+    let g_not = rep1.groups.iter().find(|g| g.group_key == "NOT_PRINTED").unwrap();
+
+    // WITH_GST group has SALE-001 and SALE-005: 2 bills
+    assert_eq!(g_with.bills_count, 2);
+    // Taxable: 280000 (SALE-001) + 100000 (SALE-005) = 380000 paise
+    assert_eq!(g_with.taxable_sales, 380000);
+    // GST: 14000 (SALE-001) + 0 (SALE-005) = 14000 paise
+    assert_eq!(g_with.gst_collected, 14000);
+    // Bill total: 294000 + 90000 = 384000 paise
+    assert_eq!(g_with.bill_total, 384000);
+    // Cost: 213332 (SALE-001) + 60000 (SALE-005) = 273332 paise
+    assert_eq!(g_with.cost, 273332);
+    // Profit: SALE-001 profit = 280000 - 213332 = 66668 paise
+    //         SALE-005 profit = (100000 - 10000 discount) - 60000 = 30000 paise
+    // Total profit = 66668 + 30000 = 96668 paise
+    assert_eq!(g_with.profit, 96668);
+
+    // WITHOUT_GST group has SALE-002 and SALE-004 (last mode wins!): 2 bills
+    assert_eq!(g_without.bills_count, 2);
+    // Taxable: 300000 (SALE-002) + 40000 (SALE-004) = 340000 paise
+    assert_eq!(g_without.taxable_sales, 340000);
+    // Bill total: 315000 + 40000 = 355000 paise
+    assert_eq!(g_without.bill_total, 355000);
+    // Difference vs printed total = bill_total - taxable_sales = 355000 - 340000 = 15000 paise (Rs 150)
+    assert_eq!(g_without.diff_vs_printed_total, 15000);
+
+    // NOT_PRINTED group has SALE-003: 1 bill
+    assert_eq!(g_not.bills_count, 1);
+    assert_eq!(g_not.taxable_sales, 140000);
+    assert_eq!(g_not.bill_total, 147000);
+
+    // Total bills across all groups: 5 bills
+    assert_eq!(rep1.total_bills_count, 5);
+
+    // ==========================================
+    // VERIFY REPORT 2: Item-wise: which parties (Item 1 = DAP)
+    // ==========================================
+    let rep2 = get_item_parties_report_inner(&conn, 1, "2026-10-01", "2026-10-31", "purchased_from").unwrap();
+    assert_eq!(rep2.item_name, "DAP Fertilizer 50kg");
+    assert_eq!(rep2.total_bills_count, 2); // PUR-01 and PUR-03
+    assert_eq!(rep2.total_qty, 15000); // 15 bags (10 from Alpha, 5 from Beta)
+
+    // Check party breakdown:
+    let sup_alpha = rep2.parties.iter().find(|p| p.party_id == 2).unwrap();
+    assert_eq!(sup_alpha.party_name, "Supplier Alpha");
+    assert_eq!(sup_alpha.bills_count, 1);
+    assert_eq!(sup_alpha.total_qty, 10000);
+    assert_eq!(sup_alpha.min_rate, 100000); // Rs 1,000
+    assert_eq!(sup_alpha.max_rate, 100000);
+    assert_eq!(sup_alpha.average_rate, 100000);
+    assert_eq!(sup_alpha.last_rate, 100000);
+
+    let sup_beta = rep2.parties.iter().find(|p| p.party_id == 3).unwrap();
+    assert_eq!(sup_beta.party_name, "Supplier Beta");
+    assert_eq!(sup_beta.bills_count, 1);
+    assert_eq!(sup_beta.total_qty, 5000);
+    assert_eq!(sup_beta.min_rate, 120000); // Rs 1,200
+    assert_eq!(sup_beta.max_rate, 120000);
+    assert_eq!(sup_beta.average_rate, 120000);
+    assert_eq!(sup_beta.last_rate, 120000);
+
+    // Also test direction "sold_to" for Item 1 (DAP):
+    let rep2_sales = get_item_parties_report_inner(&conn, 1, "2026-10-01", "2026-10-31", "sold_to").unwrap();
+    // Sold on SALE-001 (Ramesh 2 bags), SALE-002 (Suresh 2 bags), SALE-003 (Ramesh 1 bag)
+    // Ramesh: 2 bills, 3 bags. Suresh: 1 bill, 2 bags.
+    let ramesh = rep2_sales.parties.iter().find(|p| p.party_id == 4).unwrap();
+    assert_eq!(ramesh.bills_count, 2);
+    assert_eq!(ramesh.total_qty, 3000);
+
+    // ==========================================
+    // VERIFY REPORT 3: Party-wise: which items (Party 2 = Supplier Alpha)
+    // ==========================================
+    let rep3 = get_party_items_report_inner(&conn, 2, "2026-10-01", "2026-10-31", "purchased_from").unwrap();
+    assert_eq!(rep3.party_name, "Supplier Alpha");
+    assert_eq!(rep3.items.len(), 2); // Sold Item 1 (DAP) and Item 2 (Urea)
+
+    let dap_item = rep3.items.iter().find(|i| i.item_id == 1).unwrap();
+    assert_eq!(dap_item.item_name, "DAP Fertilizer 50kg");
+    assert_eq!(dap_item.bills_count, 1);
+    assert_eq!(dap_item.total_qty, 10000);
+    assert_eq!(dap_item.last_rate, 100000);
+
+    let urea_item = rep3.items.iter().find(|i| i.item_id == 2).unwrap();
+    assert_eq!(urea_item.item_name, "Urea 45kg");
+    assert_eq!(urea_item.bills_count, 1);
+    assert_eq!(urea_item.total_qty, 5000);
+    assert_eq!(urea_item.last_rate, 30000);
+}
+
+

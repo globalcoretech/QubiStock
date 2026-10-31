@@ -90,7 +90,10 @@ fn main() {
             commands::get_backup_status_cmd,
             commands::pick_folder_cmd,
             commands::test_write_folder_cmd,
-            commands::copy_backups_cmd
+            commands::copy_backups_cmd,
+            commands::get_sales_gst_mode_profit_report_cmd,
+            commands::get_item_parties_report_cmd,
+            commands::get_party_items_report_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -292,7 +292,39 @@ export interface Translations {
       gstSummary: string;
       hsnSummary: string;
       profitReport: string;
+      salesGstMode: string;
+      itemParties: string;
+      partyItems: string;
     };
+    salesGstModeTab: string;
+    itemPartiesTab: string;
+    partyItemsTab: string;
+    infoNote: string;
+    directionPurchasedFrom: string;
+    directionSoldTo: string;
+    directionPurchasedFromParty: string;
+    directionSoldToParty: string;
+    selectItemPlaceholder: string;
+    selectPartyPlaceholder: string;
+    withGstGroup: string;
+    withoutGstGroup: string;
+    notPrintedGroup: string;
+    totalRow: string;
+    billsCount: string;
+    taxableSales: string;
+    gstCollected: string;
+    billTotal: string;
+    cost: string;
+    profit: string;
+    marginPct: string;
+    diffVsPrinted: string;
+    minRate: string;
+    maxRate: string;
+    avgRate: string;
+    lastRate: string;
+    lastDate: string;
+    drilldownTitle: string;
+    closeBtn: string;
   };
   openingStock: {
     title: string;
@@ -410,3 +442,4 @@ export interface Translations {
     noBackupsFound: string;
   };
 }
+

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, command};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, params};
 use crate::db::init_db;
 use crate::tally_import::{preview_import, confirm_import, PreviewReport, decode_tally_xml};
 use crate::inventory::{add_stock_ledger_entry, get_qty_in_base_unit, calculate_weighted_average_cost};
@@ -1569,6 +1569,716 @@ pub fn get_profit_report_cmd(
 ) -> Result<ProfitReport, String> {
     let conn = get_conn(&app)?;
     get_profit_report_inner(&conn, &from_date, &to_date)
+}
+
+// ==========================================
+// REPORT 1: Sales & Profit: With GST vs Without GST
+// ==========================================
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SalesGstModeInvoiceItem {
+    pub invoice_no: String,
+    pub date: String,
+    pub party_name: String,
+    pub taxable: i64,      // paise
+    pub gst: i64,          // paise
+    pub total: i64,        // paise (saved total_amount)
+    pub cost: i64,         // paise
+    pub profit: i64,       // paise (taxable - bill_discount - cost)
+    pub printed_mode: String, // "WITH_GST", "WITHOUT_GST", "NOT_PRINTED"
+    pub last_printed_time: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SalesGstModeGroupSummary {
+    pub group_key: String, // "WITH_GST", "WITHOUT_GST", "NOT_PRINTED"
+    pub group_name: String,
+    pub bills_count: i64,
+    pub taxable_sales: i64,      // paise
+    pub gst_collected: i64,      // paise
+    pub bill_total: i64,         // paise
+    pub cost: i64,               // paise
+    pub profit: i64,             // paise
+    pub profit_margin_pct: f64,
+    pub diff_vs_printed_total: i64, // paise (saved total - taxable for WITHOUT_GST, 0 otherwise)
+    pub invoices: Vec<SalesGstModeInvoiceItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SalesGstModeReport {
+    pub groups: Vec<SalesGstModeGroupSummary>,
+    pub total_bills_count: i64,
+    pub total_taxable_sales: i64,
+    pub total_gst_collected: i64,
+    pub total_bill_amount: i64,
+    pub total_cost: i64,
+    pub total_profit: i64,
+    pub total_profit_margin_pct: f64,
+    pub total_diff_vs_printed_total: i64,
+}
+
+pub fn get_sales_gst_mode_profit_report_inner(
+    conn: &Connection,
+    from_date: &str,
+    to_date: &str,
+) -> Result<SalesGstModeReport, String> {
+    // 1. Fetch sales invoices in range along with their latest printed mode
+    let mut stmt = conn.prepare(
+        "SELECT s.invoice_no, s.date, s.total_amount, pt.name, pl.bill_mode, pl.printed_at
+         FROM sales s
+         JOIN parties pt ON s.customer_id = pt.id
+         LEFT JOIN (
+             SELECT l1.invoice_no, l1.bill_mode, l1.printed_at
+             FROM invoice_print_log l1
+             JOIN (
+                 SELECT invoice_no, MAX(id) as max_id
+                 FROM invoice_print_log
+                 GROUP BY invoice_no
+             ) l2 ON l1.id = l2.max_id
+         ) pl ON s.invoice_no = pl.invoice_no
+         WHERE s.date >= ?1 AND s.date <= ?2
+         ORDER BY s.date ASC, s.invoice_no ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let inv_rows = stmt.query_map(params![from_date, to_date], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+        ))
+    }).map_err(|e| e.to_string())?;
+
+    let mut line_stmt = conn.prepare(
+        "SELECT sl.item_id, sl.qty, sl.unit, sl.taxable,
+                (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as line_gst,
+                sl.cost_paise
+         FROM sale_lines sl
+         WHERE sl.invoice_no = ?1"
+    ).map_err(|e| e.to_string())?;
+
+    let mut with_gst_invoices: Vec<SalesGstModeInvoiceItem> = Vec::new();
+    let mut without_gst_invoices: Vec<SalesGstModeInvoiceItem> = Vec::new();
+    let mut not_printed_invoices: Vec<SalesGstModeInvoiceItem> = Vec::new();
+
+    for r in inv_rows {
+        let (invoice_no, date, saved_total, party_name, bill_mode_opt, printed_at) = r.map_err(|e| e.to_string())?;
+
+        let lines = line_stmt.query_map(params![&invoice_no], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        }).map_err(|e| e.to_string())?;
+
+        let mut inv_taxable: i64 = 0;
+        let mut inv_gst: i64 = 0;
+        let mut inv_cost: i64 = 0;
+
+        for line_res in lines {
+            let (item_id, qty, unit, taxable, line_gst, cost_paise) = line_res.map_err(|e| e.to_string())?;
+            let line_cost = if cost_paise > 0 {
+                cost_paise
+            } else {
+                let base_qty = get_qty_in_base_unit(conn, item_id, qty, &unit).unwrap_or(qty);
+                let wac = calculate_weighted_average_cost(conn, item_id).unwrap_or(0);
+                (base_qty * wac) / 1000
+            };
+
+            inv_taxable += taxable;
+            inv_gst += line_gst;
+            inv_cost += line_cost;
+        }
+
+        // Derived discount rule:
+        // let diff = (sum taxable + sum gst) - total_amount (paise)
+        // If |diff| < 100 paise: billDiscount = 0, roundOff = -diff
+        // Else: billDiscount = diff rounded to nearest rupee (diff rounded), remainder is round-off
+        let diff_paise = (inv_taxable + inv_gst) - saved_total;
+        let bill_discount = if diff_paise.abs() < 100 {
+            0
+        } else {
+            ((diff_paise as f64 / 100.0).round() as i64) * 100
+        };
+        let net_taxable = inv_taxable - bill_discount;
+        let inv_profit = net_taxable - inv_cost;
+
+        let printed_mode = match bill_mode_opt.as_deref() {
+            Some("WITH_GST") => "WITH_GST",
+            Some("WITHOUT_GST") => "WITHOUT_GST",
+            _ => "NOT_PRINTED",
+        };
+
+        let item = SalesGstModeInvoiceItem {
+            invoice_no,
+            date,
+            party_name,
+            taxable: inv_taxable,
+            gst: inv_gst,
+            total: saved_total,
+            cost: inv_cost,
+            profit: inv_profit,
+            printed_mode: printed_mode.to_string(),
+            last_printed_time: printed_at,
+        };
+
+        match printed_mode {
+            "WITH_GST" => with_gst_invoices.push(item),
+            "WITHOUT_GST" => without_gst_invoices.push(item),
+            _ => not_printed_invoices.push(item),
+        }
+    }
+
+    fn summarize_group(
+        key: &str,
+        name: &str,
+        invoices: Vec<SalesGstModeInvoiceItem>,
+    ) -> SalesGstModeGroupSummary {
+        let bills_count = invoices.len() as i64;
+        let mut taxable_sales: i64 = 0;
+        let mut gst_collected: i64 = 0;
+        let mut bill_total: i64 = 0;
+        let mut cost: i64 = 0;
+        let mut profit: i64 = 0;
+
+        for inv in &invoices {
+            taxable_sales += inv.taxable;
+            gst_collected += inv.gst;
+            bill_total += inv.total;
+            cost += inv.cost;
+            profit += inv.profit;
+        }
+
+        let profit_margin_pct = if taxable_sales > 0 {
+            (profit as f64 * 100.0) / taxable_sales as f64
+        } else {
+            0.0
+        };
+
+        let diff_vs_printed_total = if key == "WITHOUT_GST" {
+            bill_total - taxable_sales
+        } else {
+            0
+        };
+
+        SalesGstModeGroupSummary {
+            group_key: key.to_string(),
+            group_name: name.to_string(),
+            bills_count,
+            taxable_sales,
+            gst_collected,
+            bill_total,
+            cost,
+            profit,
+            profit_margin_pct,
+            diff_vs_printed_total,
+            invoices,
+        }
+    }
+
+    let g_with = summarize_group("WITH_GST", "WITH_GST", with_gst_invoices);
+    let g_without = summarize_group("WITHOUT_GST", "WITHOUT_GST", without_gst_invoices);
+    let g_not = summarize_group("NOT_PRINTED", "NOT_PRINTED", not_printed_invoices);
+
+    let total_bills_count = g_with.bills_count + g_without.bills_count + g_not.bills_count;
+    let total_taxable_sales = g_with.taxable_sales + g_without.taxable_sales + g_not.taxable_sales;
+    let total_gst_collected = g_with.gst_collected + g_without.gst_collected + g_not.gst_collected;
+    let total_bill_amount = g_with.bill_total + g_without.bill_total + g_not.bill_total;
+    let total_cost = g_with.cost + g_without.cost + g_not.cost;
+    let total_profit = g_with.profit + g_without.profit + g_not.profit;
+    let total_diff_vs_printed_total = g_without.diff_vs_printed_total;
+    let total_profit_margin_pct = if total_taxable_sales > 0 {
+        (total_profit as f64 * 100.0) / total_taxable_sales as f64
+    } else {
+        0.0
+    };
+
+    Ok(SalesGstModeReport {
+        groups: vec![g_with, g_without, g_not],
+        total_bills_count,
+        total_taxable_sales,
+        total_gst_collected,
+        total_bill_amount,
+        total_cost,
+        total_profit,
+        total_profit_margin_pct,
+        total_diff_vs_printed_total,
+    })
+}
+
+#[command]
+pub fn get_sales_gst_mode_profit_report_cmd(
+    app: AppHandle,
+    from_date: String,
+    to_date: String,
+) -> Result<SalesGstModeReport, String> {
+    let conn = get_conn(&app)?;
+    get_sales_gst_mode_profit_report_inner(&conn, &from_date, &to_date)
+}
+
+// ==========================================
+// REPORT 2: Item-wise: which parties
+// ==========================================
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ItemPartyBillDetail {
+    pub invoice_no: String,
+    pub date: String,
+    pub qty: i64,          // milli-units in base unit
+    pub unit: String,      // base unit
+    pub rate: i64,         // paise per base unit
+    pub taxable: i64,      // paise
+    pub tax_amount: i64,   // paise
+    pub total_amount: i64, // paise
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ItemPartySummary {
+    pub party_id: i64,
+    pub party_name: String,
+    pub bills_count: i64,
+    pub total_qty: i64,    // milli-units in base unit
+    pub unit: String,      // base unit
+    pub total_amount: i64, // paise
+    pub min_rate: i64,     // paise per base unit
+    pub max_rate: i64,     // paise per base unit
+    pub average_rate: i64, // paise per base unit
+    pub last_rate: i64,    // paise per base unit
+    pub last_date: String,
+    pub bills: Vec<ItemPartyBillDetail>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ItemPartiesReport {
+    pub item_id: i64,
+    pub item_name: String,
+    pub base_unit: String,
+    pub direction: String, // "purchased_from" | "sold_to"
+    pub parties: Vec<ItemPartySummary>,
+    pub total_bills_count: i64,
+    pub total_qty: i64,
+    pub total_amount: i64,
+}
+
+pub fn get_item_parties_report_inner(
+    conn: &Connection,
+    item_id: i64,
+    from_date: &str,
+    to_date: &str,
+    direction: &str,
+) -> Result<ItemPartiesReport, String> {
+    use std::collections::{BTreeMap, HashSet};
+
+    let (item_name, base_unit): (String, String) = conn.query_row(
+        "SELECT name, base_unit FROM items WHERE id = ?1",
+        params![item_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).map_err(|e| format!("Item not found with id {}: {}", item_id, e))?;
+
+    let is_purchase = direction != "sold_to";
+
+    let sql = if is_purchase {
+        "SELECT p.invoice_no, p.date, pt.id as party_id, pt.name as party_name,
+                pl.qty, pl.unit, pl.rate, pl.taxable,
+                (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as line_tax
+         FROM purchases p
+         JOIN parties pt ON p.supplier_id = pt.id
+         JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
+         WHERE pl.item_id = ?1 AND p.date >= ?2 AND p.date <= ?3
+         ORDER BY pt.name ASC, p.date DESC, p.invoice_no DESC"
+    } else {
+        "SELECT s.invoice_no, s.date, pt.id as party_id, pt.name as party_name,
+                sl.qty, sl.unit, sl.rate, sl.taxable,
+                (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as line_tax
+         FROM sales s
+         JOIN parties pt ON s.customer_id = pt.id
+         JOIN sale_lines sl ON s.invoice_no = sl.invoice_no
+         WHERE sl.item_id = ?1 AND s.date >= ?2 AND s.date <= ?3
+         ORDER BY pt.name ASC, s.date DESC, s.invoice_no DESC"
+    };
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![item_id, from_date, to_date], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(8)?,
+        ))
+    }).map_err(|e| e.to_string())?;
+
+    struct PartyAccumulator {
+        party_name: String,
+        distinct_invoices: HashSet<String>,
+        total_qty: i64,
+        total_taxable: i64,
+        total_amount: i64,
+        min_rate: i64,
+        max_rate: i64,
+        last_rate: i64,
+        last_date: String,
+        bills: Vec<ItemPartyBillDetail>,
+    }
+
+    let mut map: BTreeMap<i64, PartyAccumulator> = BTreeMap::new();
+
+    for r in rows {
+        let (inv_no, date, party_id, party_name, qty, unit, rate, taxable, line_tax) = r.map_err(|e| e.to_string())?;
+
+        let base_qty = get_qty_in_base_unit(conn, item_id, qty, &unit).unwrap_or(qty);
+        let rate_in_base = if unit == base_unit {
+            rate
+        } else {
+            let factor: Option<i64> = conn.query_row(
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+                params![item_id, unit],
+                |r| r.get(0),
+            ).optional().unwrap_or(None);
+            if let Some(f) = factor {
+                if f > 0 { (rate * 1000) / f } else { rate }
+            } else {
+                rate
+            }
+        };
+
+        let line_total = taxable + line_tax;
+
+        let entry = map.entry(party_id).or_insert_with(|| PartyAccumulator {
+            party_name,
+            distinct_invoices: HashSet::new(),
+            total_qty: 0,
+            total_taxable: 0,
+            total_amount: 0,
+            min_rate: i64::MAX,
+            max_rate: i64::MIN,
+            last_rate: rate_in_base,
+            last_date: date.clone(),
+            bills: Vec::new(),
+        });
+
+        entry.distinct_invoices.insert(inv_no.clone());
+        entry.total_qty += base_qty;
+        entry.total_taxable += taxable;
+        entry.total_amount += line_total;
+        if rate_in_base < entry.min_rate {
+            entry.min_rate = rate_in_base;
+        }
+        if rate_in_base > entry.max_rate {
+            entry.max_rate = rate_in_base;
+        }
+
+        entry.bills.push(ItemPartyBillDetail {
+            invoice_no: inv_no,
+            date,
+            qty: base_qty,
+            unit: base_unit.clone(),
+            rate: rate_in_base,
+            taxable,
+            tax_amount: line_tax,
+            total_amount: line_total,
+        });
+    }
+
+    let mut parties = Vec::new();
+    let mut total_bills_count: i64 = 0;
+    let mut total_qty: i64 = 0;
+    let mut total_amount: i64 = 0;
+
+    for (party_id, acc) in map {
+        let bills_count = acc.distinct_invoices.len() as i64;
+        total_bills_count += bills_count;
+        total_qty += acc.total_qty;
+        total_amount += acc.total_amount;
+
+        let average_rate = if acc.total_qty > 0 {
+            (acc.total_taxable * 1000) / acc.total_qty
+        } else {
+            0
+        };
+
+        let min_rate = if acc.min_rate == i64::MAX { 0 } else { acc.min_rate };
+        let max_rate = if acc.max_rate == i64::MIN { 0 } else { acc.max_rate };
+
+        parties.push(ItemPartySummary {
+            party_id,
+            party_name: acc.party_name,
+            bills_count,
+            total_qty: acc.total_qty,
+            unit: base_unit.clone(),
+            total_amount: acc.total_amount,
+            min_rate,
+            max_rate,
+            average_rate,
+            last_rate: acc.last_rate,
+            last_date: acc.last_date,
+            bills: acc.bills,
+        });
+    }
+
+    // Default sort by party_name ASC
+    parties.sort_by(|a, b| a.party_name.to_lowercase().cmp(&b.party_name.to_lowercase()));
+
+    Ok(ItemPartiesReport {
+        item_id,
+        item_name,
+        base_unit,
+        direction: if is_purchase { "purchased_from".to_string() } else { "sold_to".to_string() },
+        parties,
+        total_bills_count,
+        total_qty,
+        total_amount,
+    })
+}
+
+#[command]
+pub fn get_item_parties_report_cmd(
+    app: AppHandle,
+    item_id: i64,
+    from_date: String,
+    to_date: String,
+    direction: String,
+) -> Result<ItemPartiesReport, String> {
+    let conn = get_conn(&app)?;
+    get_item_parties_report_inner(&conn, item_id, &from_date, &to_date, &direction)
+}
+
+// ==========================================
+// REPORT 3: Party-wise: which items
+// ==========================================
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PartyItemBillDetail {
+    pub invoice_no: String,
+    pub date: String,
+    pub qty: i64,          // milli-units in base unit
+    pub unit: String,      // base unit
+    pub rate: i64,         // paise per base unit
+    pub taxable: i64,      // paise
+    pub tax_amount: i64,   // paise
+    pub total_amount: i64, // paise
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PartyItemSummary {
+    pub item_id: i64,
+    pub item_name: String,
+    pub base_unit: String,
+    pub bills_count: i64,
+    pub total_qty: i64,    // milli-units in base unit
+    pub total_amount: i64, // paise
+    pub min_rate: i64,     // paise per base unit
+    pub max_rate: i64,     // paise per base unit
+    pub average_rate: i64, // paise per base unit
+    pub last_rate: i64,    // paise per base unit
+    pub last_date: String,
+    pub bills: Vec<PartyItemBillDetail>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PartyItemsReport {
+    pub party_id: i64,
+    pub party_name: String,
+    pub direction: String, // "purchased_from" | "sold_to"
+    pub items: Vec<PartyItemSummary>,
+    pub total_bills_count: i64,
+    pub total_amount: i64,
+}
+
+pub fn get_party_items_report_inner(
+    conn: &Connection,
+    party_id: i64,
+    from_date: &str,
+    to_date: &str,
+    direction: &str,
+) -> Result<PartyItemsReport, String> {
+    use std::collections::{BTreeMap, HashSet};
+
+    let party_name: String = conn.query_row(
+        "SELECT name FROM parties WHERE id = ?1",
+        params![party_id],
+        |r| r.get(0),
+    ).map_err(|e| format!("Party not found with id {}: {}", party_id, e))?;
+
+    let is_purchase = direction != "sold_to";
+
+    let sql = if is_purchase {
+        "SELECT p.invoice_no, p.date, i.id as item_id, i.name as item_name, i.base_unit,
+                pl.qty, pl.unit, pl.rate, pl.taxable,
+                (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as line_tax
+         FROM purchases p
+         JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
+         JOIN items i ON pl.item_id = i.id
+         WHERE p.supplier_id = ?1 AND p.date >= ?2 AND p.date <= ?3
+         ORDER BY i.name ASC, p.date DESC, p.invoice_no DESC"
+    } else {
+        "SELECT s.invoice_no, s.date, i.id as item_id, i.name as item_name, i.base_unit,
+                sl.qty, sl.unit, sl.rate, sl.taxable,
+                (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as line_tax
+         FROM sales s
+         JOIN sale_lines sl ON s.invoice_no = sl.invoice_no
+         JOIN items i ON sl.item_id = i.id
+         WHERE s.customer_id = ?1 AND s.date >= ?2 AND s.date <= ?3
+         ORDER BY i.name ASC, s.date DESC, s.invoice_no DESC"
+    };
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![party_id, from_date, to_date], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(8)?,
+            row.get::<_, i64>(9)?,
+        ))
+    }).map_err(|e| e.to_string())?;
+
+    struct ItemAccumulator {
+        item_name: String,
+        base_unit: String,
+        distinct_invoices: HashSet<String>,
+        total_qty: i64,
+        total_taxable: i64,
+        total_amount: i64,
+        min_rate: i64,
+        max_rate: i64,
+        last_rate: i64,
+        last_date: String,
+        bills: Vec<PartyItemBillDetail>,
+    }
+
+    let mut map: BTreeMap<i64, ItemAccumulator> = BTreeMap::new();
+
+    for r in rows {
+        let (inv_no, date, item_id, item_name, base_unit, qty, unit, rate, taxable, line_tax) = r.map_err(|e| e.to_string())?;
+
+        let base_qty = get_qty_in_base_unit(conn, item_id, qty, &unit).unwrap_or(qty);
+        let rate_in_base = if unit == base_unit {
+            rate
+        } else {
+            let factor: Option<i64> = conn.query_row(
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+                params![item_id, unit],
+                |r| r.get(0),
+            ).optional().unwrap_or(None);
+            if let Some(f) = factor {
+                if f > 0 { (rate * 1000) / f } else { rate }
+            } else {
+                rate
+            }
+        };
+
+        let line_total = taxable + line_tax;
+
+        let entry = map.entry(item_id).or_insert_with(|| ItemAccumulator {
+            item_name,
+            base_unit: base_unit.clone(),
+            distinct_invoices: HashSet::new(),
+            total_qty: 0,
+            total_taxable: 0,
+            total_amount: 0,
+            min_rate: i64::MAX,
+            max_rate: i64::MIN,
+            last_rate: rate_in_base,
+            last_date: date.clone(),
+            bills: Vec::new(),
+        });
+
+        entry.distinct_invoices.insert(inv_no.clone());
+        entry.total_qty += base_qty;
+        entry.total_taxable += taxable;
+        entry.total_amount += line_total;
+        if rate_in_base < entry.min_rate {
+            entry.min_rate = rate_in_base;
+        }
+        if rate_in_base > entry.max_rate {
+            entry.max_rate = rate_in_base;
+        }
+
+        entry.bills.push(PartyItemBillDetail {
+            invoice_no: inv_no,
+            date,
+            qty: base_qty,
+            unit: base_unit,
+            rate: rate_in_base,
+            taxable,
+            tax_amount: line_tax,
+            total_amount: line_total,
+        });
+    }
+
+    let mut items = Vec::new();
+    let mut total_bills_count: i64 = 0;
+    let mut total_amount: i64 = 0;
+
+    for (item_id, acc) in map {
+        let bills_count = acc.distinct_invoices.len() as i64;
+        total_bills_count += bills_count;
+        total_amount += acc.total_amount;
+
+        let average_rate = if acc.total_qty > 0 {
+            (acc.total_taxable * 1000) / acc.total_qty
+        } else {
+            0
+        };
+
+        let min_rate = if acc.min_rate == i64::MAX { 0 } else { acc.min_rate };
+        let max_rate = if acc.max_rate == i64::MIN { 0 } else { acc.max_rate };
+
+        items.push(PartyItemSummary {
+            item_id,
+            item_name: acc.item_name,
+            base_unit: acc.base_unit,
+            bills_count,
+            total_qty: acc.total_qty,
+            total_amount: acc.total_amount,
+            min_rate,
+            max_rate,
+            average_rate,
+            last_rate: acc.last_rate,
+            last_date: acc.last_date,
+            bills: acc.bills,
+        });
+    }
+
+    // Default sort by item_name ASC
+    items.sort_by(|a, b| a.item_name.to_lowercase().cmp(&b.item_name.to_lowercase()));
+
+    Ok(PartyItemsReport {
+        party_id,
+        party_name,
+        direction: if is_purchase { "purchased_from".to_string() } else { "sold_to".to_string() },
+        items,
+        total_bills_count,
+        total_amount,
+    })
+}
+
+#[command]
+pub fn get_party_items_report_cmd(
+    app: AppHandle,
+    party_id: i64,
+    from_date: String,
+    to_date: String,
+    direction: String,
+) -> Result<PartyItemsReport, String> {
+    let conn = get_conn(&app)?;
+    get_party_items_report_inner(&conn, party_id, &from_date, &to_date, &direction)
 }
 
 pub fn cleanup_accounting_parties_inner(conn: &Connection) -> Result<usize, String> {
