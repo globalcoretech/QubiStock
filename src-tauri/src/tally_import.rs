@@ -311,7 +311,7 @@ pub fn confirm_import(conn: &mut Connection, db_path: &str, xml_content: &str, f
     if check_duplicate_file(conn, &hash)? {
         return Err(ImportError::DuplicateFile);
     }
-    
+    let _ = crate::backup::backup_db_before_import(conn, db_path);
     backup_db(db_path)?;
     let doc = roxmltree::Document::parse(xml_content)?;
     

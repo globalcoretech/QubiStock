@@ -1,22 +1,44 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::Manager;
+
 mod db;
 mod inventory;
 mod tally_import;
 mod invoice;
 mod commands;
 mod printer;
+pub mod backup;
 
 #[cfg(test)]
 mod tests;
 
 fn main() {
-    // Database initialization will happen here in production
-    // let db_conn = db::init_db("inventory.db").expect("Failed to initialize DB");
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            use tauri::Manager;
+            let data_dir = app.path().app_data_dir().unwrap_or_default();
+            let db_path = data_dir.join("inventory.db");
+            let _ = backup::check_and_apply_pending_restore(&db_path.to_string_lossy());
+
+            // 30-minute background auto-backup timer
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30 * 60));
+                    let _ = backup::auto_backup(&handle, "30-minute interval");
+                }
+            });
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let _ = backup::auto_backup(window.app_handle(), "app close");
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::init_db_cmd,
             commands::preview_tally_import_cmd,
@@ -59,7 +81,16 @@ fn main() {
             commands::set_settings_cmd,
             commands::get_next_bill_number_cmd,
             commands::log_invoice_print_cmd,
-            commands::get_last_invoice_print_mode_cmd
+            commands::get_last_invoice_print_mode_cmd,
+            commands::backup_now_cmd,
+            commands::list_backups_cmd,
+            commands::prepare_restore_cmd,
+            commands::check_db_integrity_cmd,
+            commands::open_backup_folder_cmd,
+            commands::get_backup_status_cmd,
+            commands::pick_folder_cmd,
+            commands::test_write_folder_cmd,
+            commands::copy_backups_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

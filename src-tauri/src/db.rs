@@ -213,6 +213,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             is_gst_registered INTEGER NOT NULL DEFAULT 1,
             is_composition INTEGER NOT NULL DEFAULT 0,
             silent_print_beta INTEGER NOT NULL DEFAULT 0,
+            backup_folder TEXT DEFAULT '',
+            secondary_backup_folder TEXT DEFAULT '',
+            last_backup_time TEXT,
             updated_at TEXT
         );
         "
@@ -232,6 +235,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN is_gst_registered INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN is_composition INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN silent_print_beta INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN backup_folder TEXT DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN secondary_backup_folder TEXT DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN last_backup_time TEXT", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'nil_rated' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate = 0", []);

@@ -2203,6 +2203,12 @@ pub struct AppSettingsPayload {
     pub is_composition: bool,
     #[serde(default)]
     pub silent_print_beta: bool,
+    #[serde(default)]
+    pub backup_folder: Option<String>,
+    #[serde(default)]
+    pub secondary_backup_folder: Option<String>,
+    #[serde(default)]
+    pub last_backup_time: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -2217,7 +2223,8 @@ pub fn get_settings_inner(conn: &Connection) -> Result<AppSettingsPayload, Strin
                 default_bill_format, bill_language, visible_columns, fy_prefix,
                 low_stock_threshold, footer_note, selected_printer, printer_paper_size,
                 print_offset_x_mm, print_offset_y_mm, print_mode,
-                is_gst_registered, is_composition, silent_print_beta
+                is_gst_registered, is_composition, silent_print_beta,
+                backup_folder, secondary_backup_folder, last_backup_time
          FROM settings WHERE id = 1 LIMIT 1"
     ).map_err(|e| e.to_string())?;
 
@@ -2258,6 +2265,9 @@ pub fn get_settings_inner(conn: &Connection) -> Result<AppSettingsPayload, Strin
             is_gst_registered: is_reg != 0,
             is_composition: is_comp != 0,
             silent_print_beta: silent_b != 0,
+            backup_folder: row.get(28)?,
+            secondary_backup_folder: row.get(29)?,
+            last_backup_time: row.get(30)?,
         })
     }).map_err(|e| e.to_string())
 }
@@ -2275,7 +2285,8 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             default_bill_format, bill_language, visible_columns, fy_prefix,
             low_stock_threshold, footer_note, selected_printer, printer_paper_size,
             print_offset_x_mm, print_offset_y_mm, print_mode,
-            is_gst_registered, is_composition, silent_print_beta, updated_at
+            is_gst_registered, is_composition, silent_print_beta,
+            backup_folder, secondary_backup_folder, last_backup_time, updated_at
         ) VALUES (
             1, ?1, ?2, ?3, ?4, ?5,
             ?6, ?7, ?8, ?9, ?10,
@@ -2283,7 +2294,8 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             ?15, ?16, ?17, ?18,
             ?19, ?20, ?21, ?22,
             ?23, ?24, ?25,
-            ?26, ?27, ?28, ?29
+            ?26, ?27, ?28,
+            ?29, ?30, ?31, ?32
         )
         ON CONFLICT(id) DO UPDATE SET
             shop_name = excluded.shop_name,
@@ -2314,6 +2326,9 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             is_gst_registered = excluded.is_gst_registered,
             is_composition = excluded.is_composition,
             silent_print_beta = excluded.silent_print_beta,
+            backup_folder = excluded.backup_folder,
+            secondary_backup_folder = excluded.secondary_backup_folder,
+            last_backup_time = excluded.last_backup_time,
             updated_at = excluded.updated_at",
         rusqlite::params![
             s.shop_name,
@@ -2344,6 +2359,9 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             if s.is_gst_registered { 1 } else { 0 },
             if s.is_composition { 1 } else { 0 },
             if s.silent_print_beta { 1 } else { 0 },
+            s.backup_folder.unwrap_or_default(),
+            s.secondary_backup_folder.unwrap_or_default(),
+            s.last_backup_time,
             "2026-10-24"
         ]
     ).map_err(|e| e.to_string())?;
@@ -2440,3 +2458,150 @@ pub fn get_last_invoice_print_mode_cmd(app: AppHandle, invoice_no: String) -> Re
     let conn = get_conn(&app)?;
     crate::invoice::get_last_invoice_print_mode(&conn, &invoice_no)
 }
+
+#[command]
+pub fn backup_now_cmd(app: AppHandle) -> Result<crate::backup::BackupResult, String> {
+    let conn = get_conn(&app)?;
+    let primary_dir = crate::backup::get_primary_backup_dir(&conn);
+    let secondary_dir = crate::backup::get_secondary_backup_dir(&conn);
+    crate::backup::backup_now_inner(&conn, &primary_dir, secondary_dir.as_deref())
+}
+
+#[command]
+pub fn list_backups_cmd(app: AppHandle) -> Result<Vec<crate::backup::BackupInfo>, String> {
+    let conn = get_conn(&app)?;
+    crate::backup::list_backups(&conn)
+}
+
+#[command]
+pub fn get_backup_status_cmd(app: AppHandle) -> Result<crate::backup::BackupStatusInfo, String> {
+    use tauri::Manager;
+    let conn = get_conn(&app)?;
+    let last_time: Option<String> = conn
+        .query_row("SELECT last_backup_time FROM settings WHERE id = 1", [], |r| r.get(0))
+        .unwrap_or(None);
+
+    let is_recent = if let Some(ref t) = last_time {
+        if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t) {
+            let now = chrono::Local::now();
+            let duration = now.signed_duration_since(parsed.with_timezone(&chrono::Local));
+            duration.num_hours() <= 24
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let chip_text = if is_recent {
+        "सुरक्षित ✓".to_string()
+    } else if last_time.is_some() {
+        "बैकअप पुराना!".to_string()
+    } else {
+        "बैकअप कभी नहीं लिया".to_string()
+    };
+
+    let primary_dir = crate::backup::get_primary_backup_dir(&conn);
+    let secondary_dir = crate::backup::get_secondary_backup_dir(&conn);
+
+    let primary_free = crate::backup::get_disk_free_space(&primary_dir);
+    let secondary_free = secondary_dir.as_ref().and_then(|d| crate::backup::get_disk_free_space(d));
+
+    let db_path = app.path().app_data_dir().unwrap_or_default().join("inventory.db");
+    let is_same_drive = {
+        let db_str = db_path.to_string_lossy().to_ascii_uppercase();
+        let pri_str = primary_dir.to_string_lossy().to_ascii_uppercase();
+        if db_str.len() >= 2 && pri_str.len() >= 2 && db_str.chars().nth(1) == Some(':') && pri_str.chars().nth(1) == Some(':') {
+            db_str.chars().next() == pri_str.chars().next()
+        } else {
+            true
+        }
+    };
+
+    Ok(crate::backup::BackupStatusInfo {
+        last_backup_time: last_time,
+        is_backup_recent: is_recent,
+        formatted_chip_text: chip_text,
+        primary_folder: primary_dir.to_string_lossy().to_string(),
+        secondary_folder: secondary_dir.map(|p| p.to_string_lossy().to_string()),
+        primary_free_space: primary_free,
+        secondary_free_space: secondary_free,
+        is_same_drive_as_db: is_same_drive,
+    })
+}
+
+#[command]
+pub fn prepare_restore_cmd(app: AppHandle, backup_path: String) -> Result<crate::backup::RestoreResult, String> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let db_path = data_dir.join("inventory.db");
+    let selected_backup = std::path::PathBuf::from(backup_path);
+    let conn = get_conn(&app).ok();
+    let backup_dir = conn.as_ref()
+        .map(|c| crate::backup::get_primary_backup_dir(c))
+        .unwrap_or_else(|| crate::backup::get_default_backup_dir());
+
+    crate::backup::prepare_restore(conn.as_ref(), &db_path, &selected_backup, &backup_dir)
+}
+
+#[command]
+pub fn check_db_integrity_cmd(app: AppHandle) -> Result<crate::backup::IntegrityCheckReport, String> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let db_path = data_dir.join("inventory.db");
+    let primary_dir = if let Ok(conn) = get_conn(&app) {
+        crate::backup::get_primary_backup_dir(&conn)
+    } else {
+        crate::backup::get_default_backup_dir()
+    };
+
+    Ok(crate::backup::check_db_integrity(&db_path.to_string_lossy(), &primary_dir))
+}
+
+#[command]
+pub fn open_backup_folder_cmd(app: AppHandle, folder_type: String) -> Result<(), String> {
+    let conn = get_conn(&app)?;
+    let target_dir = if folder_type == "secondary" {
+        crate::backup::get_secondary_backup_dir(&conn)
+            .ok_or_else(|| "Secondary backup folder not set".to_string())?
+    } else {
+        crate::backup::get_primary_backup_dir(&conn)
+    };
+
+    if !target_dir.exists() {
+        std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(target_dir.as_os_str())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target_dir;
+    }
+    Ok(())
+}
+
+#[command]
+pub fn pick_folder_cmd() -> Result<Option<String>, String> {
+    let folder = rfd::FileDialog::new().pick_folder();
+    Ok(folder.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[command]
+pub fn test_write_folder_cmd(folder_path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(folder_path);
+    crate::backup::test_folder_writable(&path)
+}
+
+#[command]
+pub fn copy_backups_cmd(from_folder: String, to_folder: String) -> Result<usize, String> {
+    let from_dir = std::path::PathBuf::from(from_folder);
+    let to_dir = std::path::PathBuf::from(to_folder);
+    crate::backup::copy_backups_with_verification(&from_dir, &to_dir)
+}
+

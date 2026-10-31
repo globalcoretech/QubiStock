@@ -1,5 +1,8 @@
 use crate::db::init_db;
 use crate::inventory::{get_qty_in_base_unit, add_stock_ledger_entry, calculate_weighted_average_cost, reverse_stock_ledger_entry};
+use rusqlite::Connection;
+use chrono::Local;
+use std::fs;
 
 #[test]
 fn test_db_init_and_migrations() {
@@ -1707,6 +1710,9 @@ fn test_settings_sqlite_crud() {
         is_gst_registered: true,
         is_composition: true,
         silent_print_beta: false,
+        backup_folder: None,
+        secondary_backup_folder: None,
+        last_backup_time: None,
     };
 
     let saved = set_settings_inner(&conn, updated_payload).expect("set_settings failed");
@@ -1937,3 +1943,305 @@ fn test_invoice_print_log_append_only_and_mode_retrieval() {
     // 5. Invalid mode rejected
     assert!(log_invoice_print(&conn, "KK/2026-27/0001", "INVALID_MODE").is_err());
 }
+
+#[test]
+fn test_backup_created_in_new_primary_folder() {
+    use crate::backup::{backup_now_inner, get_primary_backup_dir};
+    let dir = std::env::temp_dir().join(format!("krishi_test_pri_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    let _ = fs::create_dir_all(&dir);
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("UPDATE settings SET backup_folder = ?1 WHERE id = 1", [dir.to_str().unwrap()]).unwrap();
+
+    let pri_dir = get_primary_backup_dir(&conn);
+    assert_eq!(pri_dir, dir);
+
+    let res = backup_now_inner(&conn, &pri_dir, None).expect("backup failed");
+    assert!(res.success);
+    assert!(res.is_verified);
+    let backup_file = dir.join(&res.file_name);
+    assert!(backup_file.exists());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_backup_during_wal_writes() {
+    use crate::backup::{backup_now_inner, verify_backup, get_table_counts};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_wal_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let db_path = temp_dir.join("live_wal.db");
+    let conn = init_db(db_path.to_str().unwrap()).unwrap();
+    conn.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
+
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+         VALUES (101, 'Test Item WAL', 'fertilizer', '1234', 5000, 'taxable', 'BAG')",
+        [],
+    ).unwrap();
+
+    let primary_dir = temp_dir.join("backups");
+    let res = backup_now_inner(&conn, &primary_dir, None).expect("backup during WAL failed");
+    assert!(res.success);
+
+    let backup_path = primary_dir.join(&res.file_name);
+    let backup_conn = Connection::open(&backup_path).unwrap();
+    let count: i64 = backup_conn.query_row("SELECT COUNT(*) FROM items WHERE id = 101", [], |r| r.get(0)).unwrap();
+    assert_eq!(count, 1);
+
+    let expected_counts = get_table_counts(&conn).unwrap();
+    assert!(verify_backup(&backup_path, &expected_counts).is_ok());
+
+    drop(conn);
+    drop(backup_conn);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_backup_rotation_keeps_max_30() {
+    use crate::backup::perform_rotation;
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_rot_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    for i in 1..=35 {
+        let name = format!("inventory_2026-10-{:02}_12-00.db", i);
+        fs::write(temp_dir.join(&name), b"dummy").unwrap();
+    }
+
+    let removed = perform_rotation(&temp_dir, 30).unwrap();
+    assert_eq!(removed, 5);
+
+    let remaining_count = fs::read_dir(&temp_dir).unwrap().flatten().count();
+    assert_eq!(remaining_count, 30);
+
+    assert!(!temp_dir.join("inventory_2026-10-01_12-00.db").exists());
+    assert!(!temp_dir.join("inventory_2026-10-05_12-00.db").exists());
+    assert!(temp_dir.join("inventory_2026-10-35_12-00.db").exists());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_backup_settings_persist_across_restart() {
+    use crate::commands::{get_settings_inner, set_settings_inner};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_set_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+    let db_path = temp_dir.join("test_settings.db");
+
+    {
+        let conn = init_db(db_path.to_str().unwrap()).unwrap();
+
+        let mut s = get_settings_inner(&conn).unwrap();
+        s.backup_folder = Some("D:\\KrishiBackupPrimary".to_string());
+        s.secondary_backup_folder = Some("E:\\PendriveBackup".to_string());
+        s.last_backup_time = Some("2026-10-31T12:00:00+05:30".to_string());
+        set_settings_inner(&conn, s).unwrap();
+    }
+
+    {
+        let conn = init_db(db_path.to_str().unwrap()).unwrap();
+
+        let s = get_settings_inner(&conn).unwrap();
+        assert_eq!(s.backup_folder.as_deref(), Some("D:\\KrishiBackupPrimary"));
+        assert_eq!(s.secondary_backup_folder.as_deref(), Some("E:\\PendriveBackup"));
+        assert_eq!(s.last_backup_time.as_deref(), Some("2026-10-31T12:00:00+05:30"));
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_backup_succeeds_even_when_secondary_missing() {
+    use crate::backup::backup_now_inner;
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_sec_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    let primary_dir = temp_dir.join("primary");
+    let missing_secondary = std::path::PathBuf::from("Z:\\NonExistentDriveKrishi\\BackupDir");
+
+    let res = backup_now_inner(&conn, &primary_dir, Some(&missing_secondary)).expect("backup failed");
+    assert!(res.success);
+    assert!(res.secondary_path.is_none());
+    assert_eq!(res.secondary_warning.as_deref(), Some("दूसरी जगह नहीं मिली, पेनड्राइव लगाओ"));
+    assert!(primary_dir.join(&res.file_name).exists());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_backup_valid_and_counts_match() {
+    use crate::backup::{backup_now_inner, get_table_counts, verify_backup};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_cnt_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+         VALUES (201, 'Urea 45kg', 'fertilizer', '3102', 5000, 'taxable', 'BAG')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category) VALUES (202, 'Ramesh Patel', 'customer', 'consumer')",
+        [],
+    ).unwrap();
+
+    let expected = get_table_counts(&conn).unwrap();
+    assert!(expected.items >= 1);
+    assert!(expected.parties >= 2);
+
+    let primary_dir = temp_dir.join("primary");
+    let res = backup_now_inner(&conn, &primary_dir, None).unwrap();
+    assert!(res.is_verified);
+
+    let backup_path = primary_dir.join(&res.file_name);
+    assert!(verify_backup(&backup_path, &expected).is_ok());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_check_db_integrity_corrupted_db_deserializes_to_frontend_type() {
+    use crate::backup::{check_db_integrity, IntegrityCheckReport};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_int_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let corrupt_db = temp_dir.join("corrupt.db");
+    fs::write(&corrupt_db, b"CORRUPTED BYTES - NOT A VALID SQLITE DB FILE").unwrap();
+
+    let report = check_db_integrity(corrupt_db.to_str().unwrap(), &temp_dir);
+    assert!(!report.is_ok);
+
+    let json_str = serde_json::to_string(&report).unwrap();
+    assert!(json_str.contains("\"isOk\":false"));
+    assert!(json_str.contains("\"message\":"));
+
+    let deserialized: IntegrityCheckReport = serde_json::from_str(&json_str).unwrap();
+    assert!(!deserialized.is_ok);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_copy_backups_with_verification() {
+    use crate::backup::{backup_now_inner, copy_backups_with_verification};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_cpy_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    let from_dir = temp_dir.join("from_folder");
+    let to_dir = temp_dir.join("to_folder");
+    fs::create_dir_all(&from_dir).unwrap();
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    let res1 = backup_now_inner(&conn, &from_dir, None).unwrap();
+    let res2 = backup_now_inner(&conn, &from_dir, None).unwrap();
+
+    let copied = copy_backups_with_verification(&from_dir, &to_dir).unwrap();
+    assert!(copied >= 1);
+    assert!(to_dir.join(&res1.file_name).exists() || to_dir.join(&res2.file_name).exists());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_corrupted_file_integrity_check_failure() {
+    use crate::backup::{verify_backup, TableCounts};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_fail_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let corrupt_file = temp_dir.join("inventory_2026-10-31_12-00.db");
+    fs::write(&corrupt_file, b"NOT A VALID DB HEADER").unwrap();
+
+    let counts = TableCounts { items: 0, parties: 0, sales: 0, purchases: 0 };
+    let res = verify_backup(&corrupt_file, &counts);
+    assert!(res.is_err());
+    assert!(!corrupt_file.exists());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_folder_write_test_pass_and_fail() {
+    use crate::backup::test_folder_writable;
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_write_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+
+    assert!(test_folder_writable(&temp_dir).is_ok());
+
+    let invalid_path = std::path::PathBuf::from("Z:\\InvalidNonExistentDriveKrishi\\TestDir");
+    let err = test_folder_writable(&invalid_path).unwrap_err();
+    assert!(err.contains("इस फोल्डर में लिख नहीं सकते, दूसरा चुनो"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_pre_restore_safety_backup_created() {
+    use crate::backup::{backup_now_inner, prepare_restore};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_pre_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    let backup_dir = temp_dir.join("backups");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let db_path = temp_dir.join("current.db");
+    let conn = init_db(db_path.to_str().unwrap()).unwrap();
+
+    let backup_res = backup_now_inner(&conn, &backup_dir, None).unwrap();
+    let selected_backup = backup_dir.join(&backup_res.file_name);
+
+    let restore_res = prepare_restore(Some(&conn), &db_path, &selected_backup, &backup_dir).unwrap();
+    assert!(restore_res.success);
+    assert!(std::path::Path::new(&restore_res.safety_backup_path).exists());
+    assert!(std::path::Path::new(&restore_res.pending_path).exists());
+
+    drop(conn);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_restore_swaps_pending_and_restores_data() {
+    use crate::backup::{check_and_apply_pending_restore, prepare_restore};
+    let temp_dir = std::env::temp_dir().join(format!("krishi_test_rst_{}", Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    let backup_dir = temp_dir.join("backups");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    let db_path = temp_dir.join("inventory.db");
+    {
+        let conn = init_db(db_path.to_str().unwrap()).unwrap();
+        conn.execute(
+            "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+             VALUES (1, 'Old Item', 'fertilizer', '1111', 0, 'nil_rated', 'BAG')",
+            [],
+        ).unwrap();
+    }
+
+    let backup_file = backup_dir.join("inventory_2026-10-30_10-00.db");
+    {
+        let conn = init_db(backup_file.to_str().unwrap()).unwrap();
+        conn.execute(
+            "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+             VALUES (1, 'Restored Item 1', 'fertilizer', '1111', 0, 'nil_rated', 'BAG')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+             VALUES (2, 'Restored Item 2', 'fertilizer', '2222', 0, 'nil_rated', 'BAG')",
+            [],
+        ).unwrap();
+    }
+
+    let res = prepare_restore(None, &db_path, &backup_file, &backup_dir).unwrap();
+    assert!(res.success);
+
+    let pending_file = temp_dir.join("inventory.db.restore_pending");
+    assert!(pending_file.exists());
+
+    let swapped = check_and_apply_pending_restore(db_path.to_str().unwrap()).unwrap();
+    assert!(swapped);
+    assert!(!pending_file.exists());
+
+    let conn = Connection::open(&db_path).unwrap();
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0)).unwrap();
+    assert_eq!(count, 2);
+
+    drop(conn);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
