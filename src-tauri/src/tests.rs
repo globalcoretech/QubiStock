@@ -1713,6 +1713,7 @@ fn test_settings_sqlite_crud() {
         backup_folder: None,
         secondary_backup_folder: None,
         last_backup_time: None,
+        books_locked_until: None,
     };
 
     let saved = set_settings_inner(&conn, updated_payload).expect("set_settings failed");
@@ -2777,5 +2778,80 @@ fn test_reports_multi_unit_rate_normalization_and_qty_total() {
     assert_eq!(item_summary.bills[1].unit, "KG");
     assert_eq!(item_summary.bills[1].rate, 2400);
 }
+
+#[test]
+fn test_stage1_audit_log_append_only() {
+    use crate::audit::{write_audit, get_audit_logs_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Write an audit entry
+    write_audit(
+        &mut conn,
+        "item",
+        "42",
+        "update",
+        Some(r#"{"name":"Urea Old","gst_rate":5}"#),
+        Some(r#"{"name":"Urea New","gst_rate":5}"#),
+        Some("Name corrected"),
+    ).expect("Failed to write audit");
+
+    // 2. Fetch logs and assert content
+    let logs = get_audit_logs_inner(&conn, Some("item"), Some("42"), None).unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].entity_type, "item");
+    assert_eq!(logs[0].entity_id, "42");
+    assert_eq!(logs[0].action, "update");
+    assert_eq!(logs[0].before_json.as_deref(), Some(r#"{"name":"Urea Old","gst_rate":5}"#));
+    assert_eq!(logs[0].after_json.as_deref(), Some(r#"{"name":"Urea New","gst_rate":5}"#));
+    assert_eq!(logs[0].reason.as_deref(), Some("Name corrected"));
+
+    // 3. Trigger test: Attempting UPDATE on audit_log must fail
+    let update_res = conn.execute("UPDATE audit_log SET action = 'tampered' WHERE id = 1", []);
+    assert!(update_res.is_err(), "Trigger must prohibit UPDATE on audit_log");
+
+    // 4. Trigger test: Attempting DELETE on audit_log must fail
+    let delete_res = conn.execute("DELETE FROM audit_log WHERE id = 1", []);
+    assert!(delete_res.is_err(), "Trigger must prohibit DELETE on audit_log");
+}
+
+#[test]
+fn test_stage1_period_lock_enforcement() {
+    use crate::audit::check_period_lock;
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // Initially books_locked_until is NULL -> any date allowed
+    assert!(check_period_lock(&conn, "2026-10-15").is_ok());
+
+    // Lock books up to 2026-10-31
+    conn.execute(
+        "UPDATE settings SET books_locked_until = '2026-10-31' WHERE id = 1",
+        [],
+    ).unwrap();
+
+    // Earlier date -> REJECTED with bilingual message
+    let err_before = check_period_lock(&conn, "2026-10-15").unwrap_err();
+    assert!(err_before.contains("2026-10-31"));
+    assert!(err_before.contains("Books are locked up to"));
+    assert!(err_before.contains("बंद अवधि"));
+
+    // Exact lock date -> REJECTED
+    let err_exact = check_period_lock(&conn, "2026-10-31").unwrap_err();
+    assert!(err_exact.contains("2026-10-31"));
+
+    // Next day after lock -> ALLOWED
+    assert!(check_period_lock(&conn, "2026-11-01").is_ok());
+    assert!(check_period_lock(&conn, "2026-12-15").is_ok());
+
+    // Clearing lock date -> ALLOWED again
+    conn.execute(
+        "UPDATE settings SET books_locked_until = NULL WHERE id = 1",
+        [],
+    ).unwrap();
+    assert!(check_period_lock(&conn, "2026-10-15").is_ok());
+}
+
+
 
 

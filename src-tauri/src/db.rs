@@ -166,12 +166,26 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user TEXT NOT NULL,
+            entity_type TEXT NOT NULL DEFAULT '',
+            entity_id TEXT NOT NULL DEFAULT '',
             action TEXT NOT NULL,
-            table_name TEXT NOT NULL,
-            record TEXT NOT NULL,
-            time TEXT NOT NULL
+            before_json TEXT,
+            after_json TEXT,
+            reason TEXT,
+            created_at TEXT NOT NULL DEFAULT ''
         );
+
+        CREATE TRIGGER IF NOT EXISTS prevent_audit_log_update
+        BEFORE UPDATE ON audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_log is append-only. Updates are not allowed.');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS prevent_audit_log_delete
+        BEFORE DELETE ON audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_log is append-only. Deletes are not allowed.');
+        END;
 
         CREATE TABLE IF NOT EXISTS invoice_print_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,6 +230,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             backup_folder TEXT DEFAULT '',
             secondary_backup_folder TEXT DEFAULT '',
             last_backup_time TEXT,
+            books_locked_until TEXT,
             updated_at TEXT
         );
         "
@@ -238,6 +253,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN backup_folder TEXT DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN secondary_backup_folder TEXT DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN last_backup_time TEXT", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN books_locked_until TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN entity_type TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN entity_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN before_json TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN after_json TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN reason TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN created_at TEXT", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'nil_rated' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate = 0", []);

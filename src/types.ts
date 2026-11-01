@@ -65,6 +65,8 @@ export interface AppSettings {
   backupFolder?: string;
   secondaryBackupFolder?: string;
   lastBackupTime?: string;
+  // Accounting / Alteration Lock
+  booksLockedUntil?: string | null;
 }
 
 export const DEFAULT_VISIBLE_COLUMNS: BillVisibleColumns = {
@@ -107,6 +109,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backupFolder: "",
   secondaryBackupFolder: "",
   lastBackupTime: "",
+  booksLockedUntil: null,
 };
 
 export interface BackupInfo {
@@ -281,6 +284,7 @@ export interface Item {
   hsn: string | null;
   gst_rate: number | null;
   gst_status?: GstStatus;
+  is_active?: number;
 }
 
 export interface StockItem {
@@ -302,6 +306,8 @@ export interface Party {
   village: string | null;
   gstin: string | null;
   phone: string | null;
+  address?: string | null;
+  state_code?: string | null;
 }
 
 export interface PartyBalance {
@@ -690,6 +696,17 @@ export interface PartyItemsReport {
   total_amount: number;
 }
 
+// ==========================================
+// AUDIT LOG & ALTERATION TYPES
+// ==========================================
 
-
-
+export interface AuditLogEntry {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  before_json: string | null;
+  after_json: string | null;
+  reason: string | null;
+  created_at: string;
+}

@@ -730,6 +730,43 @@ export function SettingsView({
                 />
               </div>
 
+              {/* Books Locked Period (हिसाब लॉक तारीख) */}
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1.5">
+                <label className="block text-xs font-bold text-amber-950 flex items-center justify-between">
+                  <span>
+                    {lang === "hi"
+                      ? "हिसाब लॉक तारीख (Books locked up to date)"
+                      : "Books locked up to (date)"}
+                  </span>
+                  {formData.booksLockedUntil && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, booksLockedUntil: null })}
+                      className="text-[11px] text-amber-700 hover:text-amber-900 underline font-semibold"
+                    >
+                      {lang === "hi" ? "लॉक हटाएं (Clear)" : "Clear lock"}
+                    </button>
+                  )}
+                </label>
+                <input
+                  type="date"
+                  data-testid="settings-books-locked-until-input"
+                  className="w-full sm:w-64 px-3 py-1.5 border border-amber-300 rounded-lg text-sm bg-white font-mono text-slate-900 focus:ring-1 focus:ring-amber-500 outline-none"
+                  value={formData.booksLockedUntil || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      booksLockedUntil: e.target.value ? e.target.value : null,
+                    })
+                  }
+                />
+                <p className="text-[11px] text-amber-800 leading-tight">
+                  {lang === "hi"
+                    ? "इस तारीख या इससे पहले के किसी भी लेनदेन (बिल/भुगतान) में बदलाव या रद्दीकरण की अनुमति नहीं होगी।"
+                    : "Any edit or cancellation of transactions dated on or before this date will be strictly rejected."}
+                </p>
+              </div>
+
               {/* Backup Storage Locations (बैकअप सुरक्षित स्थान) */}
               <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3">
                 <div className="flex items-center gap-2 border-b border-emerald-200/80 pb-2">

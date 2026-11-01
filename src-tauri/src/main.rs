@@ -4,6 +4,7 @@
 use tauri::Manager;
 
 mod db;
+pub mod audit;
 mod inventory;
 mod tally_import;
 mod invoice;
@@ -93,7 +94,8 @@ fn main() {
             commands::copy_backups_cmd,
             commands::get_sales_gst_mode_profit_report_cmd,
             commands::get_item_parties_report_cmd,
-            commands::get_party_items_report_cmd
+            commands::get_party_items_report_cmd,
+            commands::get_audit_logs_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2935,6 +2935,8 @@ pub struct AppSettingsPayload {
     pub secondary_backup_folder: Option<String>,
     #[serde(default)]
     pub last_backup_time: Option<String>,
+    #[serde(default)]
+    pub books_locked_until: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -2950,7 +2952,8 @@ pub fn get_settings_inner(conn: &Connection) -> Result<AppSettingsPayload, Strin
                 low_stock_threshold, footer_note, selected_printer, printer_paper_size,
                 print_offset_x_mm, print_offset_y_mm, print_mode,
                 is_gst_registered, is_composition, silent_print_beta,
-                backup_folder, secondary_backup_folder, last_backup_time
+                backup_folder, secondary_backup_folder, last_backup_time,
+                books_locked_until
          FROM settings WHERE id = 1 LIMIT 1"
     ).map_err(|e| e.to_string())?;
 
@@ -2994,6 +2997,7 @@ pub fn get_settings_inner(conn: &Connection) -> Result<AppSettingsPayload, Strin
             backup_folder: row.get(28)?,
             secondary_backup_folder: row.get(29)?,
             last_backup_time: row.get(30)?,
+            books_locked_until: row.get(31)?,
         })
     }).map_err(|e| e.to_string())
 }
@@ -3012,7 +3016,8 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             low_stock_threshold, footer_note, selected_printer, printer_paper_size,
             print_offset_x_mm, print_offset_y_mm, print_mode,
             is_gst_registered, is_composition, silent_print_beta,
-            backup_folder, secondary_backup_folder, last_backup_time, updated_at
+            backup_folder, secondary_backup_folder, last_backup_time,
+            books_locked_until, updated_at
         ) VALUES (
             1, ?1, ?2, ?3, ?4, ?5,
             ?6, ?7, ?8, ?9, ?10,
@@ -3021,7 +3026,8 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             ?19, ?20, ?21, ?22,
             ?23, ?24, ?25,
             ?26, ?27, ?28,
-            ?29, ?30, ?31, ?32
+            ?29, ?30, ?31,
+            ?32, ?33
         )
         ON CONFLICT(id) DO UPDATE SET
             shop_name = excluded.shop_name,
@@ -3055,6 +3061,7 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             backup_folder = excluded.backup_folder,
             secondary_backup_folder = excluded.secondary_backup_folder,
             last_backup_time = excluded.last_backup_time,
+            books_locked_until = excluded.books_locked_until,
             updated_at = excluded.updated_at",
         rusqlite::params![
             s.shop_name,
@@ -3088,7 +3095,8 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
             s.backup_folder.unwrap_or_default(),
             s.secondary_backup_folder.unwrap_or_default(),
             s.last_backup_time,
-            "2026-10-24"
+            s.books_locked_until,
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
         ]
     ).map_err(|e| e.to_string())?;
 
@@ -3105,6 +3113,17 @@ pub fn get_settings_cmd(app: AppHandle) -> Result<AppSettingsPayload, String> {
 pub fn set_settings_cmd(app: AppHandle, settings: AppSettingsPayload) -> Result<AppSettingsPayload, String> {
     let conn = get_conn(&app)?;
     set_settings_inner(&conn, settings)
+}
+
+#[command]
+pub fn get_audit_logs_cmd(
+    app: AppHandle,
+    entity_type: Option<String>,
+    entity_id: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::audit::AuditLogEntry>, String> {
+    let conn = get_conn(&app)?;
+    crate::audit::get_audit_logs_inner(&conn, entity_type.as_deref(), entity_id.as_deref(), limit)
 }
 
 pub fn calculate_financial_year(date_str: &str) -> Result<String, String> {
