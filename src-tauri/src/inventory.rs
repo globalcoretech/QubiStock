@@ -9,13 +9,13 @@ pub fn get_qty_in_base_unit(conn: &Connection, item_id: i64, qty_milli: i64, uni
         |row| row.get(0),
     )?;
 
-    if base_unit == unit_name {
+    if base_unit.eq_ignore_ascii_case(unit_name) {
         return Ok(qty_milli);
     }
 
     // Look up conversion factor (in milli-units, e.g. 50_000 for 50)
     let factor: Option<i64> = conn.query_row(
-        "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+        "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
         params![item_id, unit_name],
         |row| row.get(0),
     ).optional()?;

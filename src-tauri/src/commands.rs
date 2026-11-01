@@ -141,9 +141,9 @@ pub fn add_opening_stock_inner(
     let mut factor = 1000i64;
     let base_unit: String = conn.query_row("SELECT base_unit FROM items WHERE id = ?1", rusqlite::params![item_id], |row| row.get(0))
         .map_err(|e| e.to_string())?;
-    if base_unit != unit {
+    if !base_unit.eq_ignore_ascii_case(unit) {
         let f: Option<i64> = conn.query_row(
-            "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+            "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
             rusqlite::params![item_id, unit],
             |row| row.get(0)
         ).ok();
@@ -181,9 +181,9 @@ pub fn add_stock_adjustment_inner(
     let mut factor = 1000i64;
     let base_unit: String = conn.query_row("SELECT base_unit FROM items WHERE id = ?1", rusqlite::params![item_id], |row| row.get(0))
         .map_err(|e| e.to_string())?;
-    if base_unit != unit {
+    if !base_unit.eq_ignore_ascii_case(unit) {
         let f: Option<i64> = conn.query_row(
-            "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+            "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
             rusqlite::params![item_id, unit],
             |row| row.get(0)
         ).ok();
@@ -1939,11 +1939,11 @@ pub fn get_item_parties_report_inner(
         let (inv_no, date, party_id, party_name, qty, unit, rate, taxable, line_tax) = r.map_err(|e| e.to_string())?;
 
         let base_qty = get_qty_in_base_unit(conn, item_id, qty, &unit).unwrap_or(qty);
-        let rate_in_base = if unit == base_unit {
+        let rate_in_base = if unit.eq_ignore_ascii_case(&base_unit) {
             rate
         } else {
             let factor: Option<i64> = conn.query_row(
-                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
                 params![item_id, unit],
                 |r| r.get(0),
             ).optional().unwrap_or(None);
@@ -2177,11 +2177,11 @@ pub fn get_party_items_report_inner(
         let (inv_no, date, item_id, item_name, base_unit, qty, unit, rate, taxable, line_tax) = r.map_err(|e| e.to_string())?;
 
         let base_qty = get_qty_in_base_unit(conn, item_id, qty, &unit).unwrap_or(qty);
-        let rate_in_base = if unit == base_unit {
+        let rate_in_base = if unit.eq_ignore_ascii_case(&base_unit) {
             rate
         } else {
             let factor: Option<i64> = conn.query_row(
-                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
                 params![item_id, unit],
                 |r| r.get(0),
             ).optional().unwrap_or(None);

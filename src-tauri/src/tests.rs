@@ -2735,6 +2735,21 @@ fn test_reports_multi_unit_rate_normalization_and_qty_total() {
     // Weighted Average rate = (146,000 * 1,000) / 60,000 = 2,433 paise/kg (Rs 24.33/kg)
     assert_eq!(party_summary.average_rate, 2433);
 
+    // Check bill drill-down details in Report 2
+    assert_eq!(party_summary.bills.len(), 2);
+    // Ordered date DESC: PUR-MU-02 (2026-10-05) then PUR-MU-01 (2026-10-01)
+    assert_eq!(party_summary.bills[0].invoice_no, "PUR-MU-02");
+    assert_eq!(party_summary.bills[0].qty, 10000); // 10 kg
+    assert_eq!(party_summary.bills[0].unit, "KG");
+    assert_eq!(party_summary.bills[0].rate, 2600); // Rs 26/kg
+    assert_eq!(party_summary.bills[0].taxable, 26000);
+
+    assert_eq!(party_summary.bills[1].invoice_no, "PUR-MU-01");
+    assert_eq!(party_summary.bills[1].qty, 50000); // 50 kg (1 bag converted to base unit)
+    assert_eq!(party_summary.bills[1].unit, "KG");
+    assert_eq!(party_summary.bills[1].rate, 2400); // Rs 24/kg (Rs 1200 / 50)
+    assert_eq!(party_summary.bills[1].taxable, 120000);
+
     // Test Report 3 (party_items for Party 10)
     let rep3 = get_party_items_report_inner(&conn, 10, "2026-10-01", "2026-10-31", "purchased_from").unwrap();
     assert_eq!(rep3.party_name, "Agro Seed Supplier");
@@ -2750,6 +2765,17 @@ fn test_reports_multi_unit_rate_normalization_and_qty_total() {
     assert_eq!(item_summary.max_rate, 2600); // Rs 26.00 / KG
     assert_eq!(item_summary.average_rate, 2433);
     assert_eq!(item_summary.last_rate, 2600);
+
+    // Check bill drill-down details in Report 3
+    assert_eq!(item_summary.bills.len(), 2);
+    assert_eq!(item_summary.bills[0].invoice_no, "PUR-MU-02");
+    assert_eq!(item_summary.bills[0].qty, 10000);
+    assert_eq!(item_summary.bills[0].unit, "KG");
+    assert_eq!(item_summary.bills[0].rate, 2600);
+    assert_eq!(item_summary.bills[1].invoice_no, "PUR-MU-01");
+    assert_eq!(item_summary.bills[1].qty, 50000);
+    assert_eq!(item_summary.bills[1].unit, "KG");
+    assert_eq!(item_summary.bills[1].rate, 2400);
 }
 
 

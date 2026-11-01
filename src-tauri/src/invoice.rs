@@ -126,9 +126,9 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
     for line in processed_lines {
         let mut factor = 1000i64; // 1 base unit
         let base_unit: String = tx.query_row("SELECT base_unit FROM items WHERE id = ?1", params![line.item_id], |row| row.get(0))?;
-        if base_unit != line.unit {
+        if !base_unit.eq_ignore_ascii_case(&line.unit) {
             let f: Option<i64> = tx.query_row(
-                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND unit_name = ?2",
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
                 params![line.item_id, line.unit],
                 |row| row.get(0)
             ).ok();

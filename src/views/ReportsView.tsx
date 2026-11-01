@@ -1152,7 +1152,9 @@ export function ReportsView({
                   </span>
                 </span>
                 <span>
-                  {lang === "hi" ? "कर योग्य बिक्री:" : "Taxable Sales:"}{" "}
+                  {lang === "hi"
+                    ? itemDirection === "purchased" ? "कर योग्य खरीदी:" : "कर योग्य बिक्री:"
+                    : itemDirection === "purchased" ? "Taxable Purchase:" : "Taxable Sales:"}{" "}
                   <span className="font-mono text-ink">
                     {formatCurrency(
                       itemPartiesReport.parties.reduce((acc, p) => acc + (p.total_taxable ?? p.total_amount), 0)
@@ -1270,17 +1272,17 @@ export function ReportsView({
                               <div className="w-28 text-right font-mono font-bold text-emerald-700 px-2.5 flex-shrink-0">
                                 {formatCurrency(p.total_amount)}
                               </div>
-                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0">
-                                {(p.min_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0" title={`प्रति ${p.unit}`}>
+                                {(p.min_rate / 100).toFixed(2)}/{p.unit}
                               </div>
-                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0">
-                                {(p.max_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0" title={`प्रति ${p.unit}`}>
+                                {(p.max_rate / 100).toFixed(2)}/{p.unit}
                               </div>
-                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0">
-                                {(p.average_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0" title={`प्रति ${p.unit}`}>
+                                {(p.average_rate / 100).toFixed(2)}/{p.unit}
                               </div>
-                              <div className="w-24 text-right font-mono font-bold text-indigo-700 px-2 flex-shrink-0">
-                                {(p.last_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono font-bold text-indigo-700 px-2 flex-shrink-0" title={`प्रति ${p.unit}`}>
+                                {(p.last_rate / 100).toFixed(2)}/{p.unit}
                               </div>
                               <div className="w-24 text-right font-mono text-muted px-3 flex-shrink-0 whitespace-nowrap">
                                 {formatDate(p.last_date)}
@@ -1300,7 +1302,7 @@ export function ReportsView({
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? `दर (₹/${p.unit})` : `Rate (₹/${p.unit})`}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "कर योग्य (₹)" : "Taxable (₹)"}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "टैक्स (₹)" : "GST (₹)"}</th>
-                                        <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल बिल राशि (₹)" : "Total Bill (₹)"}</th>
+                                        <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल (GST सहित) (₹)" : "Total (incl. GST) (₹)"}</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-border/60">
@@ -1316,7 +1318,7 @@ export function ReportsView({
                                             {(b.qty / 1000).toFixed(2)} {b.unit}
                                           </td>
                                           <td className="py-1.5 px-2 text-right font-mono">
-                                            {(b.rate / 100).toFixed(2)}
+                                            {(b.rate / 100).toFixed(2)}/{b.unit}
                                           </td>
                                           <td className="py-1.5 px-2 text-right font-mono">
                                             {formatCurrency(b.taxable)}
@@ -1560,7 +1562,7 @@ export function ReportsView({
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? `दर (₹/${it.base_unit})` : `Rate (₹/${it.base_unit})`}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "कर योग्य (₹)" : "Taxable (₹)"}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "टैक्स (₹)" : "GST (₹)"}</th>
-                                        <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल बिल रकम (₹)" : "Total Bill (₹)"}</th>
+                                        <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल (GST सहित) (₹)" : "Total (incl. GST) (₹)"}</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-border/60">
@@ -1576,7 +1578,7 @@ export function ReportsView({
                                             {(b.qty / 1000).toFixed(2)} {b.unit}
                                           </td>
                                           <td className="py-1.5 px-2 text-right font-mono">
-                                            {(b.rate / 100).toFixed(2)}
+                                            {(b.rate / 100).toFixed(2)}/{b.unit}
                                           </td>
                                           <td className="py-1.5 px-2 text-right font-mono">
                                             {formatCurrency(b.taxable)}
