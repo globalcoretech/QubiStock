@@ -1845,7 +1845,8 @@ pub struct ItemPartySummary {
     pub bills_count: i64,
     pub total_qty: i64,    // milli-units in base unit
     pub unit: String,      // base unit
-    pub total_amount: i64, // paise
+    pub total_taxable: i64, // paise
+    pub total_amount: i64, // paise (including GST)
     pub min_rate: i64,     // paise per base unit
     pub max_rate: i64,     // paise per base unit
     pub average_rate: i64, // paise per base unit
@@ -1863,6 +1864,7 @@ pub struct ItemPartiesReport {
     pub parties: Vec<ItemPartySummary>,
     pub total_bills_count: i64,
     pub total_qty: i64,
+    pub total_taxable: i64,
     pub total_amount: i64,
 }
 
@@ -1993,12 +1995,14 @@ pub fn get_item_parties_report_inner(
     let mut parties = Vec::new();
     let mut total_bills_count: i64 = 0;
     let mut total_qty: i64 = 0;
+    let mut total_taxable: i64 = 0;
     let mut total_amount: i64 = 0;
 
     for (party_id, acc) in map {
         let bills_count = acc.distinct_invoices.len() as i64;
         total_bills_count += bills_count;
         total_qty += acc.total_qty;
+        total_taxable += acc.total_taxable;
         total_amount += acc.total_amount;
 
         let average_rate = if acc.total_qty > 0 {
@@ -2016,6 +2020,7 @@ pub fn get_item_parties_report_inner(
             bills_count,
             total_qty: acc.total_qty,
             unit: base_unit.clone(),
+            total_taxable: acc.total_taxable,
             total_amount: acc.total_amount,
             min_rate,
             max_rate,
@@ -2037,6 +2042,7 @@ pub fn get_item_parties_report_inner(
         parties,
         total_bills_count,
         total_qty,
+        total_taxable,
         total_amount,
     })
 }
@@ -2076,7 +2082,8 @@ pub struct PartyItemSummary {
     pub base_unit: String,
     pub bills_count: i64,
     pub total_qty: i64,    // milli-units in base unit
-    pub total_amount: i64, // paise
+    pub total_taxable: i64, // paise
+    pub total_amount: i64, // paise (including GST)
     pub min_rate: i64,     // paise per base unit
     pub max_rate: i64,     // paise per base unit
     pub average_rate: i64, // paise per base unit
@@ -2092,6 +2099,8 @@ pub struct PartyItemsReport {
     pub direction: String, // "purchased_from" | "sold_to"
     pub items: Vec<PartyItemSummary>,
     pub total_bills_count: i64,
+    pub total_qty: i64,
+    pub total_taxable: i64,
     pub total_amount: i64,
 }
 
@@ -2224,11 +2233,15 @@ pub fn get_party_items_report_inner(
 
     let mut items = Vec::new();
     let mut total_bills_count: i64 = 0;
+    let mut total_qty: i64 = 0;
+    let mut total_taxable: i64 = 0;
     let mut total_amount: i64 = 0;
 
     for (item_id, acc) in map {
         let bills_count = acc.distinct_invoices.len() as i64;
         total_bills_count += bills_count;
+        total_qty += acc.total_qty;
+        total_taxable += acc.total_taxable;
         total_amount += acc.total_amount;
 
         let average_rate = if acc.total_qty > 0 {
@@ -2246,6 +2259,7 @@ pub fn get_party_items_report_inner(
             base_unit: acc.base_unit,
             bills_count,
             total_qty: acc.total_qty,
+            total_taxable: acc.total_taxable,
             total_amount: acc.total_amount,
             min_rate,
             max_rate,
@@ -2265,6 +2279,8 @@ pub fn get_party_items_report_inner(
         direction: if is_purchase { "purchased_from".to_string() } else { "sold_to".to_string() },
         items,
         total_bills_count,
+        total_qty,
+        total_taxable,
         total_amount,
     })
 }

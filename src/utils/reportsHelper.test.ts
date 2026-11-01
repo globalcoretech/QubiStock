@@ -121,6 +121,7 @@ describe("reportsHelper", () => {
             bills_count: 3,
             total_qty: 30000, // 30 bags
             unit: "BAG",
+            total_taxable: 3400000,
             total_amount: 3600000,
             min_rate: 110000,
             max_rate: 120000,
@@ -132,14 +133,19 @@ describe("reportsHelper", () => {
         ],
         total_bills_count: 3,
         total_qty: 30000,
+        total_taxable: 3400000,
         total_amount: 3600000,
       };
 
       const { headers, rows } = prepareItemPartiesCsv(mockReport);
       expect(headers[0]).toBe("सप्लायर का नाम");
+      expect(headers).toContain("कर योग्य राशि (Taxable ₹)");
+      expect(headers).toContain("कुल राशि (GST सहित ₹)");
       expect(rows.length).toBe(2); // 1 party + total row
       expect(rows[0][0]).toBe("Kisan Trading");
       expect(rows[0][2]).toBe("30");
+      expect(rows[0][3]).toBe("34000.00"); // Taxable
+      expect(rows[0][4]).toBe("36000.00"); // Total incl GST
     });
   });
 
@@ -193,6 +199,7 @@ describe("reportsHelper", () => {
             base_unit: "BAG",
             bills_count: 2,
             total_qty: 20000,
+            total_taxable: 2500000,
             total_amount: 2700000,
             min_rate: 135000,
             max_rate: 135000,
@@ -203,13 +210,19 @@ describe("reportsHelper", () => {
           },
         ],
         total_bills_count: 2,
+        total_qty: 20000,
+        total_taxable: 2500000,
         total_amount: 2700000,
       };
 
       const { headers, rows } = preparePartyItemsCsv(mockPartyReport);
       expect(headers[0]).toBe("सामान का नाम (Item)");
+      expect(headers).toContain("कर योग्य राशि (Taxable ₹)");
+      expect(headers).toContain("कुल राशि (GST सहित ₹)");
       expect(rows.length).toBe(2);
       expect(rows[0][0]).toBe("DAP 50kg");
+      expect(rows[0][3]).toBe("25000.00");
+      expect(rows[0][4]).toBe("27000.00");
     });
   });
 });

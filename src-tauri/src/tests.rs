@@ -2625,4 +2625,131 @@ fn test_new_reports_hand_calculated() {
     assert_eq!(urea_item.last_rate, 30000);
 }
 
+#[test]
+fn test_reports_multi_unit_rate_normalization_and_qty_total() {
+    use crate::db::init_db;
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::{get_item_parties_report_inner, get_party_items_report_inner};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    // Item: Wheat Seed (base_unit = "KG")
+    conn.execute(
+        "INSERT INTO items (id, name, category, hsn, gst_rate, gst_status, base_unit)
+         VALUES (10, 'Wheat Seed Sharbati', 'seed', '1209', 0, 'nil_rated', 'KG')",
+        [],
+    ).unwrap();
+
+    // Secondary unit: "bag" = 50 KG (factor_to_base = 50000 in milli-units)
+    conn.execute(
+        "INSERT INTO item_units (item_id, unit_name, factor_to_base) VALUES (10, 'bag', 50000)",
+        [],
+    ).unwrap();
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // Party: Agro Seed Supplier
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone)
+         VALUES (10, 'Agro Seed Supplier', 'supplier', 'regular', '9800000010')",
+        [],
+    ).unwrap();
+
+    // Bill 1: Bought 1 bag @ Rs 1,200 (120,000 paise)
+    // 1 bag = 50 kg -> normalized rate = 120,000 / 50 = 2,400 paise/kg (Rs 24/kg)
+    // base_qty = 50,000 milli-units (50 kg)
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-MU-01".to_string(),
+        date: "2026-10-01".to_string(),
+        party_id: 10,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 120000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 10,
+                qty: 1000, // 1 bag in milli-units
+                unit: "bag".to_string(),
+                rate: 120000, // Rs 1,200 per bag
+                taxable: 120000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // Bill 2: Bought 10 kg @ Rs 26/kg (2,600 paise)
+    // base_qty = 10,000 milli-units (10 kg)
+    // normalized rate = 2,600 paise/kg (Rs 26/kg)
+    // taxable = 26,000 paise (Rs 260)
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-MU-02".to_string(),
+        date: "2026-10-05".to_string(),
+        party_id: 10,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 26000,
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 10,
+                qty: 10000, // 10 kg in milli-units
+                unit: "KG".to_string(),
+                rate: 2600, // Rs 26 per kg
+                taxable: 26000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // Test Report 2 (item_parties for Item 10)
+    let rep2 = get_item_parties_report_inner(&conn, 10, "2026-10-01", "2026-10-31", "purchased_from").unwrap();
+    assert_eq!(rep2.item_name, "Wheat Seed Sharbati");
+    assert_eq!(rep2.base_unit, "KG");
+    assert_eq!(rep2.total_bills_count, 2);
+    // Total qty: 50 kg + 10 kg = 60 kg (60,000 milli-units)
+    assert_eq!(rep2.total_qty, 60000);
+    // Total taxable: 120,000 + 26,000 = 146,000 paise (Rs 1,460)
+    assert_eq!(rep2.total_taxable, 146000);
+    assert_eq!(rep2.total_amount, 146000);
+
+    let party_summary = &rep2.parties[0];
+    assert_eq!(party_summary.party_name, "Agro Seed Supplier");
+    assert_eq!(party_summary.bills_count, 2);
+    assert_eq!(party_summary.total_qty, 60000); // 60 kg
+    assert_eq!(party_summary.total_taxable, 146000);
+    assert_eq!(party_summary.total_amount, 146000);
+
+    // Comparable normalized rates in base unit KG (paise):
+    // 1 bag @ 1200 -> 2400 paise/kg (Rs 24/kg)
+    // 10 kg @ 26 -> 2600 paise/kg (Rs 26/kg)
+    assert_eq!(party_summary.min_rate, 2400); // Rs 24.00 / KG
+    assert_eq!(party_summary.max_rate, 2600); // Rs 26.00 / KG
+    assert_eq!(party_summary.last_rate, 2600); // Rs 26.00 / KG (from PUR-MU-02)
+    // Weighted Average rate = (146,000 * 1,000) / 60,000 = 2,433 paise/kg (Rs 24.33/kg)
+    assert_eq!(party_summary.average_rate, 2433);
+
+    // Test Report 3 (party_items for Party 10)
+    let rep3 = get_party_items_report_inner(&conn, 10, "2026-10-01", "2026-10-31", "purchased_from").unwrap();
+    assert_eq!(rep3.party_name, "Agro Seed Supplier");
+    assert_eq!(rep3.items.len(), 1);
+    let item_summary = &rep3.items[0];
+    assert_eq!(item_summary.item_name, "Wheat Seed Sharbati");
+    assert_eq!(item_summary.base_unit, "KG");
+    assert_eq!(item_summary.bills_count, 2);
+    assert_eq!(item_summary.total_qty, 60000); // 60 kg
+    assert_eq!(item_summary.total_taxable, 146000);
+    assert_eq!(item_summary.total_amount, 146000);
+    assert_eq!(item_summary.min_rate, 2400); // Rs 24.00 / KG
+    assert_eq!(item_summary.max_rate, 2600); // Rs 26.00 / KG
+    assert_eq!(item_summary.average_rate, 2433);
+    assert_eq!(item_summary.last_rate, 2600);
+}
+
 

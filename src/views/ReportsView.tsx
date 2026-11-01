@@ -1152,7 +1152,15 @@ export function ReportsView({
                   </span>
                 </span>
                 <span>
-                  {lang === "hi" ? "कुल राशि:" : "Total Amount:"}{" "}
+                  {lang === "hi" ? "कर योग्य बिक्री:" : "Taxable Sales:"}{" "}
+                  <span className="font-mono text-ink">
+                    {formatCurrency(
+                      itemPartiesReport.parties.reduce((acc, p) => acc + (p.total_taxable ?? p.total_amount), 0)
+                    )}
+                  </span>
+                </span>
+                <span>
+                  {lang === "hi" ? "कुल राशि (GST सहित):" : "Total (incl. GST):"}{" "}
                   <span className="font-mono text-emerald-700">
                     {formatCurrency(
                       itemPartiesReport.parties.reduce((acc, p) => acc + p.total_amount, 0)
@@ -1191,29 +1199,43 @@ export function ReportsView({
                     </th>
                     <th
                       onClick={() => handleSort("bills_count")}
-                      className="py-2 px-2.5 text-center cursor-pointer hover:text-ink select-none"
+                      className="w-14 py-2 px-2 text-center cursor-pointer hover:text-ink select-none"
                     >
-                      {lang === "hi" ? "बिल संख्या" : "Bills"} {sortField === "bills_count" && (sortAsc ? "▲" : "▼")}
+                      {lang === "hi" ? "बिल" : "Bills"} {sortField === "bills_count" && (sortAsc ? "▲" : "▼")}
                     </th>
                     <th
                       onClick={() => handleSort("total_qty")}
-                      className="py-2 px-2.5 text-right cursor-pointer hover:text-ink select-none"
+                      className="w-24 py-2 px-2 text-right cursor-pointer hover:text-ink select-none"
                     >
                       {lang === "hi" ? "कुल मात्रा" : "Total Qty"} {sortField === "total_qty" && (sortAsc ? "▲" : "▼")}
                     </th>
                     <th
-                      onClick={() => handleSort("total_amount")}
-                      className="py-2 px-2.5 text-right cursor-pointer hover:text-ink select-none"
+                      onClick={() => handleSort("total_taxable")}
+                      className="w-24 py-2 px-2 text-right cursor-pointer hover:text-ink select-none"
                     >
-                      {lang === "hi" ? "कुल राशि (₹)" : "Total Amount (₹)"} {sortField === "total_amount" && (sortAsc ? "▲" : "▼")}
+                      {lang === "hi" ? "कर योग्य (₹)" : "Taxable (₹)"} {sortField === "total_taxable" && (sortAsc ? "▲" : "▼")}
                     </th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "न्यूनतम दर (₹)" : "Min Rate (₹)"}</th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "अधिकतम दर (₹)" : "Max Rate (₹)"}</th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "औसत दर (₹)" : "Avg Rate (₹)"}</th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "अंतिम दर (₹)" : "Last Rate (₹)"}</th>
+                    <th
+                      onClick={() => handleSort("total_amount")}
+                      className="w-28 py-2 px-2.5 text-right cursor-pointer hover:text-ink select-none"
+                    >
+                      {lang === "hi" ? "कुल (GST सहित) (₹)" : "Total (incl. GST) (₹)"} {sortField === "total_amount" && (sortAsc ? "▲" : "▼")}
+                    </th>
+                    <th className="w-24 py-2 px-2 text-right">
+                      {lang === "hi" ? `न्यूनतम दर (₹/${itemPartiesReport?.base_unit || "यूनिट"})` : `Min Rate (₹/${itemPartiesReport?.base_unit || "unit"})`}
+                    </th>
+                    <th className="w-24 py-2 px-2 text-right">
+                      {lang === "hi" ? `अधिकतम दर (₹/${itemPartiesReport?.base_unit || "यूनिट"})` : `Max Rate (₹/${itemPartiesReport?.base_unit || "unit"})`}
+                    </th>
+                    <th className="w-24 py-2 px-2 text-right">
+                      {lang === "hi" ? `औसत दर (₹/${itemPartiesReport?.base_unit || "यूनिट"})` : `Avg Rate (₹/${itemPartiesReport?.base_unit || "unit"})`}
+                    </th>
+                    <th className="w-24 py-2 px-2 text-right">
+                      {lang === "hi" ? `अंतिम दर (₹/${itemPartiesReport?.base_unit || "यूनिट"})` : `Last Rate (₹/${itemPartiesReport?.base_unit || "unit"})`}
+                    </th>
                     <th
                       onClick={() => handleSort("last_date")}
-                      className="py-2 px-3 text-right cursor-pointer hover:text-ink select-none"
+                      className="w-24 py-2 px-3 text-right cursor-pointer hover:text-ink select-none"
                     >
                       {lang === "hi" ? "अंतिम तारीख" : "Last Date"} {sortField === "last_date" && (sortAsc ? "▲" : "▼")}
                     </th>
@@ -1225,7 +1247,7 @@ export function ReportsView({
                       const isExpanded = expandedParties.has(p.party_id);
                       return (
                         <tr key={p.party_id} className="hover:bg-indigo-50/40 transition-colors">
-                          <td colSpan={10} className="p-0">
+                          <td colSpan={11} className="p-0">
                             <div
                               onClick={() => togglePartyExpand(p.party_id)}
                               className="flex items-center w-full py-2 cursor-pointer hover:bg-indigo-50/50"
@@ -1236,25 +1258,28 @@ export function ReportsView({
                               <div className="flex-1 font-bold text-ink px-3 truncate">
                                 {p.party_name}
                               </div>
-                              <div className="w-16 text-center font-mono font-bold text-ink px-2 flex-shrink-0">
+                              <div className="w-14 text-center font-mono font-bold text-ink px-2 flex-shrink-0">
                                 {p.bills_count}
                               </div>
                               <div className="w-24 text-right font-mono text-ink px-2 flex-shrink-0">
                                 {(p.total_qty / 1000).toFixed(2)} {p.unit}
                               </div>
-                              <div className="w-28 text-right font-mono font-bold text-ink px-2 flex-shrink-0">
+                              <div className="w-24 text-right font-mono text-ink px-2 flex-shrink-0">
+                                {formatCurrency(p.total_taxable ?? p.total_amount)}
+                              </div>
+                              <div className="w-28 text-right font-mono font-bold text-emerald-700 px-2.5 flex-shrink-0">
                                 {formatCurrency(p.total_amount)}
                               </div>
-                              <div className="w-20 text-right font-mono text-muted px-2 flex-shrink-0">
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0">
                                 {(p.min_rate / 100).toFixed(2)}
                               </div>
-                              <div className="w-20 text-right font-mono text-muted px-2 flex-shrink-0">
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0">
                                 {(p.max_rate / 100).toFixed(2)}
                               </div>
-                              <div className="w-20 text-right font-mono text-muted px-2 flex-shrink-0">
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0">
                                 {(p.average_rate / 100).toFixed(2)}
                               </div>
-                              <div className="w-20 text-right font-mono font-bold text-indigo-700 px-2 flex-shrink-0">
+                              <div className="w-24 text-right font-mono font-bold text-indigo-700 px-2 flex-shrink-0">
                                 {(p.last_rate / 100).toFixed(2)}
                               </div>
                               <div className="w-24 text-right font-mono text-muted px-3 flex-shrink-0 whitespace-nowrap">
@@ -1272,9 +1297,10 @@ export function ReportsView({
                                         <th className="py-1.5 px-2.5">{lang === "hi" ? "बिल नं" : "Invoice No"}</th>
                                         <th className="py-1.5 px-2">{lang === "hi" ? "तारीख" : "Date"}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "मात्रा" : "Qty"}</th>
-                                        <th className="py-1.5 px-2 text-right">{lang === "hi" ? "दर (₹)" : "Rate (₹)"}</th>
+                                        <th className="py-1.5 px-2 text-right">{lang === "hi" ? `दर (₹/${p.unit})` : `Rate (₹/${p.unit})`}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "कर योग्य (₹)" : "Taxable (₹)"}</th>
-                                        <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल बिल रकम (₹)" : "Total Bill (₹)"}</th>
+                                        <th className="py-1.5 px-2 text-right">{lang === "hi" ? "टैक्स (₹)" : "GST (₹)"}</th>
+                                        <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल बिल राशि (₹)" : "Total Bill (₹)"}</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-border/60">
@@ -1295,6 +1321,9 @@ export function ReportsView({
                                           <td className="py-1.5 px-2 text-right font-mono">
                                             {formatCurrency(b.taxable)}
                                           </td>
+                                          <td className="py-1.5 px-2 text-right font-mono text-emerald-700">
+                                            {formatCurrency(b.tax_amount)}
+                                          </td>
                                           <td className="py-1.5 px-2.5 text-right font-mono font-bold text-ink">
                                             {formatCurrency(b.total_amount)}
                                           </td>
@@ -1311,7 +1340,7 @@ export function ReportsView({
                     })
                   ) : (
                     <tr>
-                      <td colSpan={10} className="py-8 text-center text-muted">
+                      <td colSpan={11} className="py-8 text-center text-muted">
                         {loading
                           ? lang === "hi"
                             ? "डेटा लोड हो रहा है..."
@@ -1328,16 +1357,21 @@ export function ReportsView({
                     <tr>
                       <td className="py-2.5 px-2"></td>
                       <td className="py-2.5 px-3">{lang === "hi" ? "कुल योग" : "Total"}</td>
-                      <td className="py-2.5 px-2.5 text-center font-mono">
+                      <td className="py-2.5 px-2 text-center font-mono">
                         {sortedItemParties.reduce((acc, p) => acc + p.bills_count, 0)}
                       </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono">
+                      <td className="py-2.5 px-2 text-right font-mono">
                         {(
                           sortedItemParties.reduce((acc, p) => acc + p.total_qty, 0) / 1000
                         ).toFixed(2)}{" "}
                         {itemPartiesReport?.base_unit || ""}
                       </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono">
+                      <td className="py-2.5 px-2 text-right font-mono">
+                        {formatCurrency(
+                          sortedItemParties.reduce((acc, p) => acc + (p.total_taxable ?? p.total_amount), 0)
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-right font-mono text-emerald-700">
                         {formatCurrency(
                           sortedItemParties.reduce((acc, p) => acc + p.total_amount, 0)
                         )}
@@ -1386,7 +1420,15 @@ export function ReportsView({
                   </span>
                 </span>
                 <span>
-                  {lang === "hi" ? "कुल राशि:" : "Total Amount:"}{" "}
+                  {lang === "hi" ? "कर योग्य राशि:" : "Taxable Amount:"}{" "}
+                  <span className="font-mono text-ink">
+                    {formatCurrency(
+                      partyItemsReport.items.reduce((acc, it) => acc + (it.total_taxable ?? it.total_amount), 0)
+                    )}
+                  </span>
+                </span>
+                <span>
+                  {lang === "hi" ? "कुल राशि (GST सहित):" : "Total (incl. GST):"}{" "}
                   <span className="font-mono text-emerald-700">
                     {formatCurrency(
                       partyItemsReport.items.reduce((acc, it) => acc + it.total_amount, 0)
@@ -1425,29 +1467,35 @@ export function ReportsView({
                     </th>
                     <th
                       onClick={() => handleSort("bills_count")}
-                      className="py-2 px-2.5 text-center cursor-pointer hover:text-ink select-none"
+                      className="w-14 py-2 px-2 text-center cursor-pointer hover:text-ink select-none"
                     >
-                      {lang === "hi" ? "बिल संख्या" : "Bills"} {sortField === "bills_count" && (sortAsc ? "▲" : "▼")}
+                      {lang === "hi" ? "बिल" : "Bills"} {sortField === "bills_count" && (sortAsc ? "▲" : "▼")}
                     </th>
                     <th
                       onClick={() => handleSort("total_qty")}
-                      className="py-2 px-2.5 text-right cursor-pointer hover:text-ink select-none"
+                      className="w-24 py-2 px-2 text-right cursor-pointer hover:text-ink select-none"
                     >
                       {lang === "hi" ? "कुल मात्रा" : "Total Qty"} {sortField === "total_qty" && (sortAsc ? "▲" : "▼")}
                     </th>
                     <th
-                      onClick={() => handleSort("total_amount")}
-                      className="py-2 px-2.5 text-right cursor-pointer hover:text-ink select-none"
+                      onClick={() => handleSort("total_taxable")}
+                      className="w-24 py-2 px-2 text-right cursor-pointer hover:text-ink select-none"
                     >
-                      {lang === "hi" ? "कुल राशि (₹)" : "Total Amount (₹)"} {sortField === "total_amount" && (sortAsc ? "▲" : "▼")}
+                      {lang === "hi" ? "कर योग्य (₹)" : "Taxable (₹)"} {sortField === "total_taxable" && (sortAsc ? "▲" : "▼")}
                     </th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "न्यूनतम दर (₹)" : "Min Rate (₹)"}</th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "अधिकतम दर (₹)" : "Max Rate (₹)"}</th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "औसत दर (₹)" : "Avg Rate (₹)"}</th>
-                    <th className="py-2 px-2 text-right">{lang === "hi" ? "अंतिम दर (₹)" : "Last Rate (₹)"}</th>
+                    <th
+                      onClick={() => handleSort("total_amount")}
+                      className="w-28 py-2 px-2.5 text-right cursor-pointer hover:text-ink select-none"
+                    >
+                      {lang === "hi" ? "कुल (GST सहित) (₹)" : "Total (incl. GST) (₹)"} {sortField === "total_amount" && (sortAsc ? "▲" : "▼")}
+                    </th>
+                    <th className="w-24 py-2 px-2 text-right">{lang === "hi" ? "न्यूनतम दर (₹/यूनिट)" : "Min Rate (₹/unit)"}</th>
+                    <th className="w-24 py-2 px-2 text-right">{lang === "hi" ? "अधिकतम दर (₹/यूनिट)" : "Max Rate (₹/unit)"}</th>
+                    <th className="w-24 py-2 px-2 text-right">{lang === "hi" ? "औसत दर (₹/यूनिट)" : "Avg Rate (₹/unit)"}</th>
+                    <th className="w-24 py-2 px-2 text-right">{lang === "hi" ? "अंतिम दर (₹/यूनिट)" : "Last Rate (₹/unit)"}</th>
                     <th
                       onClick={() => handleSort("last_date")}
-                      className="py-2 px-3 text-right cursor-pointer hover:text-ink select-none"
+                      className="w-24 py-2 px-3 text-right cursor-pointer hover:text-ink select-none"
                     >
                       {lang === "hi" ? "अंतिम तारीख" : "Last Date"} {sortField === "last_date" && (sortAsc ? "▲" : "▼")}
                     </th>
@@ -1459,7 +1507,7 @@ export function ReportsView({
                       const isExpanded = expandedItems.has(it.item_id);
                       return (
                         <tr key={it.item_id} className="hover:bg-indigo-50/40 transition-colors">
-                          <td colSpan={10} className="p-0">
+                          <td colSpan={11} className="p-0">
                             <div
                               onClick={() => toggleItemExpand(it.item_id)}
                               className="flex items-center w-full py-2 cursor-pointer hover:bg-indigo-50/50"
@@ -1470,26 +1518,29 @@ export function ReportsView({
                               <div className="flex-1 font-bold text-ink px-3 truncate">
                                 {it.item_name}
                               </div>
-                              <div className="w-16 text-center font-mono font-bold text-ink px-2 flex-shrink-0">
+                              <div className="w-14 text-center font-mono font-bold text-ink px-2 flex-shrink-0">
                                 {it.bills_count}
                               </div>
                               <div className="w-24 text-right font-mono text-ink px-2 flex-shrink-0">
                                 {(it.total_qty / 1000).toFixed(2)} {it.base_unit}
                               </div>
-                              <div className="w-28 text-right font-mono font-bold text-ink px-2 flex-shrink-0">
+                              <div className="w-24 text-right font-mono text-ink px-2 flex-shrink-0">
+                                {formatCurrency(it.total_taxable ?? it.total_amount)}
+                              </div>
+                              <div className="w-28 text-right font-mono font-bold text-emerald-700 px-2.5 flex-shrink-0">
                                 {formatCurrency(it.total_amount)}
                               </div>
-                              <div className="w-20 text-right font-mono text-muted px-2 flex-shrink-0">
-                                {(it.min_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0" title={`प्रति ${it.base_unit}`}>
+                                {(it.min_rate / 100).toFixed(2)}/{it.base_unit}
                               </div>
-                              <div className="w-20 text-right font-mono text-muted px-2 flex-shrink-0">
-                                {(it.max_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0" title={`प्रति ${it.base_unit}`}>
+                                {(it.max_rate / 100).toFixed(2)}/{it.base_unit}
                               </div>
-                              <div className="w-20 text-right font-mono text-muted px-2 flex-shrink-0">
-                                {(it.average_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono text-muted px-2 flex-shrink-0" title={`प्रति ${it.base_unit}`}>
+                                {(it.average_rate / 100).toFixed(2)}/{it.base_unit}
                               </div>
-                              <div className="w-20 text-right font-mono font-bold text-indigo-700 px-2 flex-shrink-0">
-                                {(it.last_rate / 100).toFixed(2)}
+                              <div className="w-24 text-right font-mono font-bold text-indigo-700 px-2 flex-shrink-0" title={`प्रति ${it.base_unit}`}>
+                                {(it.last_rate / 100).toFixed(2)}/{it.base_unit}
                               </div>
                               <div className="w-24 text-right font-mono text-muted px-3 flex-shrink-0 whitespace-nowrap">
                                 {formatDate(it.last_date)}
@@ -1506,8 +1557,9 @@ export function ReportsView({
                                         <th className="py-1.5 px-2.5">{lang === "hi" ? "बिल नं" : "Invoice No"}</th>
                                         <th className="py-1.5 px-2">{lang === "hi" ? "तारीख" : "Date"}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "मात्रा" : "Qty"}</th>
-                                        <th className="py-1.5 px-2 text-right">{lang === "hi" ? "दर (₹)" : "Rate (₹)"}</th>
+                                        <th className="py-1.5 px-2 text-right">{lang === "hi" ? `दर (₹/${it.base_unit})` : `Rate (₹/${it.base_unit})`}</th>
                                         <th className="py-1.5 px-2 text-right">{lang === "hi" ? "कर योग्य (₹)" : "Taxable (₹)"}</th>
+                                        <th className="py-1.5 px-2 text-right">{lang === "hi" ? "टैक्स (₹)" : "GST (₹)"}</th>
                                         <th className="py-1.5 px-2.5 text-right">{lang === "hi" ? "कुल बिल रकम (₹)" : "Total Bill (₹)"}</th>
                                       </tr>
                                     </thead>
@@ -1529,6 +1581,9 @@ export function ReportsView({
                                           <td className="py-1.5 px-2 text-right font-mono">
                                             {formatCurrency(b.taxable)}
                                           </td>
+                                          <td className="py-1.5 px-2 text-right font-mono text-emerald-700">
+                                            {formatCurrency(b.tax_amount)}
+                                          </td>
                                           <td className="py-1.5 px-2.5 text-right font-mono font-bold text-ink">
                                             {formatCurrency(b.total_amount)}
                                           </td>
@@ -1545,7 +1600,7 @@ export function ReportsView({
                     })
                   ) : (
                     <tr>
-                      <td colSpan={10} className="py-8 text-center text-muted">
+                      <td colSpan={11} className="py-8 text-center text-muted">
                         {loading
                           ? lang === "hi"
                             ? "डेटा लोड हो रहा है..."
@@ -1562,11 +1617,16 @@ export function ReportsView({
                     <tr>
                       <td className="py-2.5 px-2"></td>
                       <td className="py-2.5 px-3">{lang === "hi" ? "कुल योग" : "Total"}</td>
-                      <td className="py-2.5 px-2.5 text-center font-mono">
+                      <td className="py-2.5 px-2 text-center font-mono">
                         {sortedPartyItems.reduce((acc, it) => acc + it.bills_count, 0)}
                       </td>
-                      <td className="py-2.5 px-2.5 text-right font-mono">-</td>
-                      <td className="py-2.5 px-2.5 text-right font-mono">
+                      <td className="py-2.5 px-2 text-right font-mono">-</td>
+                      <td className="py-2.5 px-2 text-right font-mono">
+                        {formatCurrency(
+                          sortedPartyItems.reduce((acc, it) => acc + (it.total_taxable ?? it.total_amount), 0)
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2.5 text-right font-mono text-emerald-700">
                         {formatCurrency(
                           sortedPartyItems.reduce((acc, it) => acc + it.total_amount, 0)
                         )}

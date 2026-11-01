@@ -138,15 +138,17 @@ export function prepareGroupInvoicesCsv(group: SalesGstModeGroupSummary): { head
  */
 export function prepareItemPartiesCsv(report: ItemPartiesReport): { headers: string[]; rows: (string | number)[][] } {
   const isPurchase = report.direction !== "sold_to";
+  const unit = report.base_unit || "यूनिट";
   const headers = [
     isPurchase ? "सप्लायर का नाम" : "ग्राहक का नाम",
     "बिल संख्या",
-    `कुल मात्रा (${report.base_unit})`,
-    "कुल राशि (₹)",
-    "न्यूनतम भाव (₹)",
-    "अधिकतम भाव (₹)",
-    "औसत भाव (₹)",
-    "अंतिम भाव (₹)",
+    `कुल मात्रा (${unit})`,
+    "कर योग्य राशि (Taxable ₹)",
+    "कुल राशि (GST सहित ₹)",
+    `न्यूनतम भाव (₹/${unit})`,
+    `अधिकतम भाव (₹/${unit})`,
+    `औसत भाव (₹/${unit})`,
+    `अंतिम भाव (₹/${unit})`,
     "अंतिम तारीख",
   ];
 
@@ -154,6 +156,7 @@ export function prepareItemPartiesCsv(report: ItemPartiesReport): { headers: str
     p.party_name,
     p.bills_count,
     formatQty(p.total_qty),
+    ((p.total_taxable ?? p.total_amount) / 100).toFixed(2),
     (p.total_amount / 100).toFixed(2),
     (p.min_rate / 100).toFixed(2),
     (p.max_rate / 100).toFixed(2),
@@ -167,6 +170,7 @@ export function prepareItemPartiesCsv(report: ItemPartiesReport): { headers: str
     "कुल योग (Total)",
     report.total_bills_count,
     formatQty(report.total_qty),
+    ((report.total_taxable ?? report.total_amount) / 100).toFixed(2),
     (report.total_amount / 100).toFixed(2),
     "-",
     "-",
@@ -186,11 +190,12 @@ export function preparePartyItemsCsv(report: PartyItemsReport): { headers: strin
     "सामान का नाम (Item)",
     "बिल संख्या",
     "कुल मात्रा",
-    "कुल राशि (₹)",
-    "न्यूनतम भाव (₹)",
-    "अधिकतम भाव (₹)",
-    "औसत भाव (₹)",
-    "अंतिम भाव (₹)",
+    "कर योग्य राशि (Taxable ₹)",
+    "कुल राशि (GST सहित ₹)",
+    "न्यूनतम भाव (₹/यूनिट)",
+    "अधिकतम भाव (₹/यूनिट)",
+    "औसत भाव (₹/यूनिट)",
+    "अंतिम भाव (₹/यूनिट)",
     "अंतिम तारीख",
   ];
 
@@ -198,11 +203,12 @@ export function preparePartyItemsCsv(report: PartyItemsReport): { headers: strin
     it.item_name,
     it.bills_count,
     `${formatQty(it.total_qty)} ${it.base_unit}`,
+    ((it.total_taxable ?? it.total_amount) / 100).toFixed(2),
     (it.total_amount / 100).toFixed(2),
-    (it.min_rate / 100).toFixed(2),
-    (it.max_rate / 100).toFixed(2),
-    (it.average_rate / 100).toFixed(2),
-    (it.last_rate / 100).toFixed(2),
+    `${(it.min_rate / 100).toFixed(2)}/${it.base_unit}`,
+    `${(it.max_rate / 100).toFixed(2)}/${it.base_unit}`,
+    `${(it.average_rate / 100).toFixed(2)}/${it.base_unit}`,
+    `${(it.last_rate / 100).toFixed(2)}/${it.base_unit}`,
     formatDate(it.last_date),
   ]);
 
@@ -210,7 +216,8 @@ export function preparePartyItemsCsv(report: PartyItemsReport): { headers: strin
   rows.push([
     "कुल योग (Total)",
     report.total_bills_count,
-    "-",
+    report.total_qty ? formatQty(report.total_qty) : "-",
+    ((report.total_taxable ?? report.total_amount) / 100).toFixed(2),
     (report.total_amount / 100).toFixed(2),
     "-",
     "-",

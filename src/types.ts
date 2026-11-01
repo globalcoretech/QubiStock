@@ -630,7 +630,8 @@ export interface ItemPartySummary {
   bills_count: number;
   total_qty: number;    // milli-units
   unit: string;
-  total_amount: number; // paise
+  total_taxable: number; // paise
+  total_amount: number; // paise (including GST)
   min_rate: number;     // paise
   max_rate: number;     // paise
   average_rate: number; // paise
@@ -647,6 +648,7 @@ export interface ItemPartiesReport {
   parties: ItemPartySummary[];
   total_bills_count: number;
   total_qty: number;
+  total_taxable: number;
   total_amount: number;
 }
 
@@ -667,7 +669,8 @@ export interface PartyItemSummary {
   base_unit: string;
   bills_count: number;
   total_qty: number;    // milli-units in base unit
-  total_amount: number; // paise
+  total_taxable: number; // paise
+  total_amount: number; // paise (including GST)
   min_rate: number;     // paise
   max_rate: number;     // paise
   average_rate: number; // paise
@@ -682,6 +685,8 @@ export interface PartyItemsReport {
   direction: "purchased_from" | "sold_to" | string;
   items: PartyItemSummary[];
   total_bills_count: number;
+  total_qty: number;
+  total_taxable: number;
   total_amount: number;
 }
 
