@@ -544,12 +544,17 @@ export function TransactionView({
 
     try {
       if (alteringInvoiceNo) {
-        const cmd = isSale ? "alter_sale_cmd" : "alter_purchase_cmd";
-        const finalInvNo = await invoke<string>(cmd, {
-          invoiceNo: alteringInvoiceNo,
-          payload,
-          reason: alterationReason.trim() || null,
-        });
+        const finalInvNo = isSale
+          ? await invoke<string>("alter_sale_cmd", {
+              invoiceNo: alteringInvoiceNo,
+              payload,
+              reason: alterationReason.trim() || null,
+            })
+          : await invoke<string>("alter_purchase_cmd", {
+              invoiceNo: alteringInvoiceNo,
+              payload,
+              reason: alterationReason.trim() || null,
+            });
         const displayInv = finalInvNo || savedInv;
         setLastSavedInvoiceNo(displayInv);
         setFeedback({

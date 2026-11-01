@@ -10,6 +10,8 @@ import { formatCurrency } from "../utils/formatters";
 
 interface LenDenViewProps {
   refreshTrigger: number;
+  onRefresh?: () => void;
+  booksLockedUntil?: string | null;
   t: Translations;
   lang: Language;
   shopName?: string;
@@ -18,7 +20,15 @@ interface LenDenViewProps {
 
 type BalanceFilter = "all" | "receivable" | "payable" | "settled";
 
-export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री राम कृषि केंद्र", onOpenPayment }: LenDenViewProps) {
+export function LenDenView({
+  refreshTrigger,
+  onRefresh,
+  booksLockedUntil,
+  t,
+  lang,
+  shopName = "श्री राम कृषि केंद्र",
+  onOpenPayment,
+}: LenDenViewProps) {
   const [balances, setBalances] = useState<PartyBalance[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFilter, setActiveFilter] = useState<BalanceFilter>("all");
@@ -348,6 +358,11 @@ export function LenDenView({ refreshTrigger, t, lang, shopName = "श्री �
         t={t}
         lang={lang}
         shopName={shopName}
+        onRefresh={() => {
+          loadBalances();
+          if (onRefresh) onRefresh();
+        }}
+        booksLockedUntil={booksLockedUntil}
       />
     </div>
   );

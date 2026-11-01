@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { PartyStatement } from "../types";
+import { PartyStatement, PartyStatementItem } from "../types";
 import { Translations, Language } from "../i18n";
 import { formatCurrency, formatDate, formatPaymentMode } from "../utils/formatters";
 import {
@@ -13,6 +13,7 @@ import {
   Phone,
   MapPin,
   FileText,
+  Edit,
 } from "./icons";
 import { EmptyTableMessage } from "./FeedbackBanner";
 
@@ -23,6 +24,8 @@ interface StatementModalProps {
   t: Translations;
   lang: Language;
   shopName: string;
+  onRefresh?: () => void;
+  booksLockedUntil?: string | null;
 }
 
 export function StatementModal({
@@ -32,17 +35,39 @@ export function StatementModal({
   t,
   lang,
   shopName,
+  onRefresh,
+  booksLockedUntil,
 }: StatementModalProps) {
   const [statement, setStatement] = useState<PartyStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Payment Alteration and Cancellation States
+  const [alterModalOpen, setAlterModalOpen] = useState(false);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [activePaymentEntry, setActivePaymentEntry] = useState<PartyStatementItem | null>(null);
+
+  const [alterDate, setAlterDate] = useState("");
+  const [alterAmountRupees, setAlterAmountRupees] = useState("");
+  const [alterPaymentMode, setAlterPaymentMode] = useState("cash");
+  const [alterRemark, setAlterRemark] = useState("");
+  const [alterReason, setAlterReason] = useState("");
+
+  const [cancelReason, setCancelReason] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<{ message: string; isError: boolean } | null>(null);
+
   useEffect(() => {
     if (isOpen && partyId) {
       loadStatement(partyId);
+      setActionFeedback(null);
     } else {
       setStatement(null);
       setSearchTerm("");
+      setAlterModalOpen(false);
+      setCancelModalOpen(false);
+      setActivePaymentEntry(null);
+      setActionFeedback(null);
     }
   }, [isOpen, partyId]);
 
@@ -55,6 +80,142 @@ export function StatementModal({
       console.error("get_party_statement_cmd error:", e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOpenAlter = (entry: PartyStatementItem) => {
+    setActivePaymentEntry(entry);
+    setAlterDate(entry.date);
+    const amount = entry.credit > 0 ? entry.credit : entry.debit;
+    setAlterAmountRupees((amount / 100).toFixed(2));
+    setAlterPaymentMode(entry.payment_mode || "cash");
+    setAlterRemark(entry.remark || "");
+    setAlterReason("");
+    setActionFeedback(null);
+    setAlterModalOpen(true);
+  };
+
+  const handleOpenCancel = (entry: PartyStatementItem) => {
+    setActivePaymentEntry(entry);
+    setCancelReason("");
+    setActionFeedback(null);
+    setCancelModalOpen(true);
+  };
+
+  const handleConfirmAlter = async () => {
+    if (!activePaymentEntry) return;
+    const amountVal = parseFloat(alterAmountRupees);
+    if (isNaN(amountVal) || amountVal <= 0) {
+      setActionFeedback({
+        message: lang === "hi" ? "कृपया मान्य राशि दर्ज करें" : "Please enter a valid amount",
+        isError: true,
+      });
+      return;
+    }
+    if (!alterReason.trim()) {
+      setActionFeedback({
+        message: lang === "hi" ? "संशोधन का कारण लिखना अनिवार्य है" : "Reason for alteration is required",
+        isError: true,
+      });
+      return;
+    }
+
+    if (booksLockedUntil && (activePaymentEntry.date <= booksLockedUntil || alterDate <= booksLockedUntil)) {
+      setActionFeedback({
+        message:
+          lang === "hi"
+            ? `अवधि बंद है (${booksLockedUntil} तक)। इस भुगतान को संशोधित नहीं किया जा सकता।`
+            : `Books are locked until ${booksLockedUntil}. Cannot alter this payment.`,
+        isError: true,
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await invoke("alter_payment_cmd", {
+        payload: {
+          ledgerId: activePaymentEntry.id,
+          date: alterDate,
+          amountPaise: Math.round(amountVal * 100),
+          paymentMode: alterPaymentMode,
+          remark: alterRemark.trim() || null,
+          refId: activePaymentEntry.ref_id,
+          reason: alterReason.trim() || null,
+        },
+      });
+
+      setActionFeedback({
+        message:
+          lang === "hi"
+            ? `भुगतान सफलता से संशोधित हुआ (₹${amountVal.toFixed(2)})`
+            : `Payment altered successfully (₹${amountVal.toFixed(2)})`,
+        isError: false,
+      });
+      setAlterModalOpen(false);
+      setActivePaymentEntry(null);
+      if (partyId) await loadStatement(partyId);
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      console.error("alter_payment_cmd error:", err);
+      const raw = typeof err === "string" ? err : err?.message || String(err || "");
+      setActionFeedback({
+        message: lang === "hi" ? `भुगतान संशोधन में त्रुटि: ${raw}` : `Error altering payment: ${raw}`,
+        isError: true,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!activePaymentEntry) return;
+    if (!cancelReason.trim()) {
+      setActionFeedback({
+        message: lang === "hi" ? "रद्द करने का कारण लिखना अनिवार्य है" : "Cancellation reason is required",
+        isError: true,
+      });
+      return;
+    }
+
+    if (booksLockedUntil && activePaymentEntry.date <= booksLockedUntil) {
+      setActionFeedback({
+        message:
+          lang === "hi"
+            ? `अवधि बंद है (${booksLockedUntil} तक)। इस भुगतान को रद्द नहीं किया जा सकता।`
+            : `Books are locked until ${booksLockedUntil}. Cannot cancel this payment.`,
+        isError: true,
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await invoke("cancel_payment_cmd", {
+        ledgerId: activePaymentEntry.id,
+        reason: cancelReason.trim(),
+      });
+
+      setActionFeedback({
+        message:
+          lang === "hi"
+            ? `भुगतान सफलतापूर्वक रद्द (Cancelled) किया गया।`
+            : `Payment cancelled successfully.`,
+        isError: false,
+      });
+      setCancelModalOpen(false);
+      setActivePaymentEntry(null);
+      if (partyId) await loadStatement(partyId);
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      console.error("cancel_payment_cmd error:", err);
+      const raw = typeof err === "string" ? err : err?.message || String(err || "");
+      setActionFeedback({
+        message: lang === "hi" ? `भुगतान रद्द करने में त्रुटि: ${raw}` : `Error cancelling payment: ${raw}`,
+        isError: true,
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -216,6 +377,63 @@ export function StatementModal({
                 {/* Net Closing Balance */}
                 <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
                   <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+              {/* Action feedback message */}
+              {actionFeedback && (
+                <div
+                  className={`p-3 rounded-xl border text-xs font-medium flex items-center justify-between ${
+                    actionFeedback.isError
+                      ? "bg-rose-50 border-rose-200 text-rose-800"
+                      : "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  }`}
+                >
+                  <span>{actionFeedback.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => setActionFeedback(null)}
+                    className="p-1 hover:bg-black/5 rounded"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
+              {/* 3 Summary KPI Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Total Debit */}
+                <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+                    <span>{lang === "hi" ? "कुल नामे (डेबिट)" : "Total Debit"}</span>
+                    <span className="p-1 rounded bg-emerald-50 text-emerald-600">
+                      <ArrowDownLeft size={16} strokeWidth={2} />
+                    </span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-emerald-700 mt-1">
+                    {formatCurrency(statement.total_debit)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {lang === "hi" ? "बिक्री / भुगतान दिया" : "Sales / Paid to party"}
+                  </div>
+                </div>
+
+                {/* Total Credit */}
+                <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+                    <span>{lang === "hi" ? "कुल जमा (क्रेडिट)" : "Total Credit"}</span>
+                    <span className="p-1 rounded bg-rose-50 text-rose-600">
+                      <ArrowUpRight size={16} strokeWidth={2} />
+                    </span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-rose-700 mt-1">
+                    {formatCurrency(statement.total_credit)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {lang === "hi" ? "खरीदी / पैसा मिला" : "Purchases / Received"}
+                  </div>
+                </div>
+
+                {/* Net Closing Balance */}
+                <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
                     <span>{lang === "hi" ? "अंतिम बकाया (Net Status)" : "Net Balance"}</span>
                     <span className="p-1 rounded bg-slate-100 text-slate-600">
                       <FileText size={16} strokeWidth={2} />
@@ -290,12 +508,15 @@ export function StatementModal({
                         <th className="py-2.5 px-3.5 text-right font-semibold whitespace-nowrap">
                           {t.statement.balance}
                         </th>
+                        <th className="py-2.5 px-3.5 text-center font-semibold whitespace-nowrap no-print">
+                          {lang === "hi" ? "कार्रवाई" : "Actions"}
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredEntries.length === 0 ? (
                         <tr>
-                          <td colSpan={8}>
+                          <td colSpan={9}>
                             <EmptyTableMessage message={t.statement.emptyStatement} />
                           </td>
                         </tr>
@@ -303,6 +524,9 @@ export function StatementModal({
                         filteredEntries.map((entry) => {
                           const typeLabel = getEntryTypeLabel(entry.entry_type, entry.debit, entry.credit);
                           const badgeColor = getEntryBadgeColor(entry.entry_type, entry.debit, entry.credit);
+                          const isLocked = Boolean(
+                            booksLockedUntil && entry.date <= booksLockedUntil
+                          );
 
                           return (
                             <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
@@ -351,6 +575,58 @@ export function StatementModal({
                                   </span>
                                 </span>
                               </td>
+                              <td className="py-2.5 px-3.5 whitespace-nowrap text-center no-print">
+                                {entry.entry_type === "payment" ? (
+                                  <div className="inline-flex items-center gap-1.5 justify-center">
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={() => handleOpenAlter(entry)}
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                        isLocked
+                                          ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                                          : "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
+                                      }`}
+                                      title={
+                                        isLocked
+                                          ? lang === "hi"
+                                            ? `अवधि बंद (${booksLockedUntil})`
+                                            : `Books locked until ${booksLockedUntil}`
+                                          : lang === "hi"
+                                          ? "भुगतान संशोधित करें"
+                                          : "Alter Payment"
+                                      }
+                                    >
+                                      <Edit size={12} strokeWidth={2} />
+                                      <span>{lang === "hi" ? "संशोधित" : "Alter"}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={() => handleOpenCancel(entry)}
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                        isLocked
+                                          ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                                          : "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
+                                      }`}
+                                      title={
+                                        isLocked
+                                          ? lang === "hi"
+                                            ? `अवधि बंद (${booksLockedUntil})`
+                                            : `Books locked until ${booksLockedUntil}`
+                                          : lang === "hi"
+                                          ? "भुगतान रद्द करें"
+                                          : "Cancel Payment"
+                                      }
+                                    >
+                                      <X size={12} strokeWidth={2} />
+                                      <span>{lang === "hi" ? "रद्द" : "Cancel"}</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-300">-</span>
+                                )}
+                              </td>
                             </tr>
                           );
                         })
@@ -374,6 +650,212 @@ export function StatementModal({
           </button>
         </div>
       </div>
+
+      {/* Alter Payment Modal */}
+      {alterModalOpen && activePaymentEntry && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
+              <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <Edit size={16} className="text-blue-600" />
+                <span>{lang === "hi" ? "भुगतान संशोधन (Alter Payment)" : "Alter Payment"}</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setAlterModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">
+                  {lang === "hi" ? "तारीख (Date)" : "Date"}
+                </label>
+                <input
+                  type="date"
+                  value={alterDate}
+                  onChange={(e) => setAlterDate(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">
+                  {lang === "hi" ? "राशि (Amount ₹)" : "Amount (₹)"}
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={alterAmountRupees}
+                  onChange={(e) => setAlterAmountRupees(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">
+                  {lang === "hi" ? "भुगतान माध्यम (Payment Mode)" : "Payment Mode"}
+                </label>
+                <select
+                  value={alterPaymentMode}
+                  onChange={(e) => setAlterPaymentMode(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                >
+                  <option value="cash">{lang === "hi" ? "नकद (Cash)" : "Cash"}</option>
+                  <option value="bank">{lang === "hi" ? "बैंक (Bank)" : "Bank"}</option>
+                  <option value="upi">{lang === "hi" ? "यूपीआई (UPI)" : "UPI"}</option>
+                  <option value="cheque">{lang === "hi" ? "चेक (Cheque)" : "Cheque"}</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">
+                  {lang === "hi" ? "टिप्पणी (Remark)" : "Remark"}
+                </label>
+                <input
+                  type="text"
+                  value={alterRemark}
+                  onChange={(e) => setAlterRemark(e.target.value)}
+                  placeholder={lang === "hi" ? "वैकल्पिक टिप्पणी" : "Optional remark"}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  {lang === "hi" ? "संशोधन का कारण (Reason) *" : "Reason for Alteration *"}
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={alterReason}
+                  onChange={(e) => setAlterReason(e.target.value)}
+                  placeholder={
+                    lang === "hi"
+                      ? "संशोधन का कारण लिखना अनिवार्य है..."
+                      : "Reason for alteration is mandatory..."
+                  }
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              {booksLockedUntil && (alterDate <= booksLockedUntil || activePaymentEntry.date <= booksLockedUntil) && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[11px]">
+                  ⚠️ {lang === "hi" ? `अवधि बंद है (${booksLockedUntil} तक)। इस तारीख पर संशोधन वर्जित है।` : `Period is locked until ${booksLockedUntil}.`}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setAlterModalOpen(false)}
+                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-xs font-medium"
+              >
+                {lang === "hi" ? "रद्द करें" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  isSubmitting ||
+                  !alterReason.trim() ||
+                  Boolean(
+                    booksLockedUntil &&
+                      (alterDate <= booksLockedUntil || activePaymentEntry.date <= booksLockedUntil)
+                  )
+                }
+                onClick={handleConfirmAlter}
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs"
+              >
+                {isSubmitting ? (lang === "hi" ? "सहेज रहे हैं..." : "Saving...") : (lang === "hi" ? "संशोधन सहेजें" : "Save Changes")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Payment Modal */}
+      {cancelModalOpen && activePaymentEntry && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl shadow-2xl border border-rose-200 w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
+              <h4 className="font-bold text-rose-800 text-sm flex items-center gap-2">
+                <X size={16} className="text-rose-600" />
+                <span>{lang === "hi" ? "भुगतान रद्द करें (Cancel Payment)" : "Cancel Payment"}</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setCancelModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <p className="text-slate-700">
+                {lang === "hi"
+                  ? `क्या आप वाकई ${formatDate(activePaymentEntry.date)} का यह भुगतान (${formatCurrency(
+                      activePaymentEntry.credit > 0 ? activePaymentEntry.credit : activePaymentEntry.debit
+                    )}) रद्द करना चाहते हैं?`
+                  : `Are you sure you want to cancel this payment of ${formatCurrency(
+                      activePaymentEntry.credit > 0 ? activePaymentEntry.credit : activePaymentEntry.debit
+                    )} on ${formatDate(activePaymentEntry.date)}?`}
+              </p>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  {lang === "hi" ? "रद्द करने का कारण (Reason) *" : "Cancellation Reason *"}
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder={
+                    lang === "hi"
+                      ? "रद्द करने का कारण लिखना अनिवार्य है..."
+                      : "Reason for cancellation is mandatory..."
+                  }
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-rose-500"
+                />
+              </div>
+
+              {booksLockedUntil && activePaymentEntry.date <= booksLockedUntil && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-[11px]">
+                  ⚠️ {lang === "hi" ? `अवधि बंद है (${booksLockedUntil} तक)। इस भुगतान को रद्द नहीं किया जा सकता।` : `Period is locked until ${booksLockedUntil}.`}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setCancelModalOpen(false)}
+                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-xs font-medium"
+              >
+                {lang === "hi" ? "पीछे हटें" : "Go Back"}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  isSubmitting ||
+                  !cancelReason.trim() ||
+                  Boolean(booksLockedUntil && activePaymentEntry.date <= booksLockedUntil)
+                }
+                onClick={handleConfirmCancel}
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs"
+              >
+                {isSubmitting ? (lang === "hi" ? "रद्द कर रहे हैं..." : "Cancelling...") : (lang === "hi" ? "हाँ, रद्द करें" : "Yes, Cancel Payment")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

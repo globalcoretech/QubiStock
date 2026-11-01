@@ -12,6 +12,26 @@ function camelToSnake(s: string): string {
   return s.replace(/([A-Z])/g, "_$1").toLowerCase();
 }
 
+interface RustParam {
+  name: string;
+  type: string;
+  isOption: boolean;
+}
+
+interface ArgDetail {
+  key: string;
+  value: string;
+}
+
+interface FrontendInvoke {
+  file: string;
+  line: number;
+  cmdName: string;
+  argKeys: string[];
+  args: ArgDetail[];
+  hasSpread: boolean;
+}
+
 describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
   const rootDir = path.resolve(__dirname, "..", "..");
   const mainRsPath = path.join(rootDir, "src-tauri", "src", "main.rs");
@@ -30,9 +50,10 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
       .map((s) => s.replace(/^commands::/, ""))
   );
 
-  // 2. Parse command parameter names in Rust
+  // 2. Parse command parameter signatures in Rust
   const rustFiles = [commandsRsPath];
   const commandParams = new Map<string, Set<string>>();
+  const commandSignatures = new Map<string, RustParam[]>();
 
   for (const rf of rustFiles) {
     if (!fs.existsSync(rf)) continue;
@@ -43,15 +64,16 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
     while ((m = cmdRegex.exec(content)) !== null) {
       const fnName = m[1];
       const rawArgs = m[2].trim();
-      const params = new Set<string>();
+      const paramsSet = new Set<string>();
+      const paramsList: RustParam[] = [];
 
       if (rawArgs.length > 0) {
         let depth = 0;
         let current = "";
         const parts: string[] = [];
         for (const ch of rawArgs) {
-          if (ch === "<") depth++;
-          else if (ch === ">") depth--;
+          if (ch === "<" || ch === "(") depth++;
+          else if (ch === ">" || ch === ")") depth--;
           if (ch === "," && depth === 0) {
             parts.push(current.trim());
             current = "";
@@ -64,17 +86,20 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
         for (const p of parts) {
           const colonIdx = p.indexOf(":");
           if (colonIdx !== -1) {
-            const pName = p.substring(0, colonIdx).trim();
+            const pName = p.substring(0, colonIdx).trim().replace(/^mut\s+/, "");
             const pType = p.substring(colonIdx + 1).trim();
             if (pType !== "AppHandle" && !pType.startsWith("State<")) {
-              params.add(pName);
-              params.add(snakeToCamel(pName));
-              params.add(camelToSnake(pName));
+              const isOption = pType.startsWith("Option<");
+              paramsSet.add(pName);
+              paramsSet.add(snakeToCamel(pName));
+              paramsSet.add(camelToSnake(pName));
+              paramsList.push({ name: pName, type: pType, isOption });
             }
           }
         }
       }
-      commandParams.set(fnName, params);
+      commandParams.set(fnName, paramsSet);
+      commandSignatures.set(fnName, paramsList);
     }
   }
 
@@ -99,12 +124,6 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
   }
 
   const frontendFiles = getFrontendFiles(path.join(rootDir, "src"));
-  interface FrontendInvoke {
-    file: string;
-    line: number;
-    cmdName: string;
-    argKeys: string[];
-  }
   const frontendInvokes: FrontendInvoke[] = [];
 
   for (const f of frontendFiles) {
@@ -138,6 +157,9 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
 
       const firstComma = callStr.indexOf(",");
       const argKeys: string[] = [];
+      const args: ArgDetail[] = [];
+      let hasSpread = false;
+
       if (firstComma !== -1) {
         const argObjStr = callStr.substring(firstComma + 1, callStr.length - 1).trim();
         if (argObjStr.startsWith("{")) {
@@ -160,16 +182,22 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
           for (const it of items) {
             const colonIdx = it.indexOf(":");
             let key = "";
+            let val = "";
             if (colonIdx !== -1) {
               key = it.substring(0, colonIdx).trim().replace(/['"]/g, "");
+              val = it.substring(colonIdx + 1).trim();
             } else {
               const trimmed = it.trim();
-              if (/^[a-zA-Z0-9_]+$/.test(trimmed)) {
+              if (trimmed.startsWith("...")) {
+                hasSpread = true;
+              } else if (/^[a-zA-Z0-9_]+$/.test(trimmed)) {
                 key = trimmed;
+                val = trimmed;
               }
             }
-            if (key && !key.startsWith("...")) {
+            if (key) {
               argKeys.push(key);
+              args.push({ key, value: val });
             }
           }
         }
@@ -180,6 +208,8 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
         line,
         cmdName,
         argKeys,
+        args,
+        hasSpread,
       });
     }
   }
@@ -205,7 +235,6 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
       if (!allowedParams) continue; // Checked in first test
 
       for (const k of inv.argKeys) {
-        // Rust commands that accept a wrapped payload allow `payload`
         if (
           !allowedParams.has(k) &&
           !allowedParams.has(camelToSnake(k)) &&
@@ -221,6 +250,67 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
     expect(
       mismatchedArgs,
       `Frontend passes argument keys that do not exist in Rust commands: \n${mismatchedArgs.join("\n")}`
+    ).toEqual([]);
+  });
+
+  it("ensures frontend invoke does not omit any required (non-Option) Rust parameter", () => {
+    const missingRequired: string[] = [];
+
+    for (const inv of frontendInvokes) {
+      const rustParams = commandSignatures.get(inv.cmdName);
+      if (!rustParams) continue;
+
+      const passedKeys = new Set(inv.argKeys);
+
+      for (const p of rustParams) {
+        if (!p.isOption) {
+          const matches =
+            passedKeys.has(p.name) ||
+            passedKeys.has(snakeToCamel(p.name)) ||
+            passedKeys.has("payload") ||
+            inv.hasSpread;
+
+          if (!matches) {
+            missingRequired.push(
+              `${inv.file}:${inv.line} calls "${inv.cmdName}" without required parameter "${p.name}: ${p.type}"`
+            );
+          }
+        }
+      }
+    }
+
+    expect(
+      missingRequired,
+      `Frontend invoke calls missing required parameters: \n${missingRequired.join("\n")}`
+    ).toEqual([]);
+  });
+
+  it("ensures frontend invoke does not pass null or undefined for non-Option Rust parameters", () => {
+    const nullViolations: string[] = [];
+
+    for (const inv of frontendInvokes) {
+      const rustParams = commandSignatures.get(inv.cmdName);
+      if (!rustParams) continue;
+
+      for (const arg of inv.args) {
+        const matchingParam = rustParams.find(
+          (p) => p.name === arg.key || snakeToCamel(p.name) === arg.key
+        );
+
+        if (matchingParam && !matchingParam.isOption) {
+          const isNullOrUndefined = arg.value === "null" || arg.value === "undefined";
+          if (isNullOrUndefined) {
+            nullViolations.push(
+              `${inv.file}:${inv.line} passes "${arg.value}" for non-Option Rust parameter "${matchingParam.name}: ${matchingParam.type}" in command "${inv.cmdName}"`
+            );
+          }
+        }
+      }
+    }
+
+    expect(
+      nullViolations,
+      `Frontend passes null/undefined to non-Option Rust parameters: \n${nullViolations.join("\n")}`
     ).toEqual([]);
   });
 });

@@ -393,6 +393,8 @@ export default function App() {
           {currentView === "Len-Den" && (
             <LenDenView
               refreshTrigger={refreshTrigger}
+              onRefresh={triggerGlobalRefresh}
+              booksLockedUntil={settings.booksLockedUntil}
               t={t}
               lang={lang}
               shopName={settings.shopName}
