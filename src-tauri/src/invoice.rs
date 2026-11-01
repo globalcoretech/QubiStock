@@ -139,6 +139,12 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
         
         let qty_base = (line.qty * factor) / 1000;
 
+        let (item_hsn, item_gst_rate): (Option<String>, Option<i64>) = tx.query_row(
+            "SELECT hsn, gst_rate FROM items WHERE id = ?1",
+            params![line.item_id],
+            |row| Ok((row.get(0)?, row.get(1)?))
+        ).unwrap_or((None, None));
+
         if is_sale {
             // Check stock logic
             let mut stmt = tx.prepare("SELECT COALESCE(SUM(qty_base), 0) FROM stock_ledger WHERE item_id = ?1 AND godown_id = ?2")?;
@@ -152,13 +158,13 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
             let cost_paise = (qty_base * wac) / 1000;
 
             tx.execute(
-                "INSERT INTO sale_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, cost_paise) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![payload.invoice_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, cost_paise]
+                "INSERT INTO sale_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, cost_paise, hsn, gst_rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![payload.invoice_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, cost_paise, item_hsn, item_gst_rate]
             )?;
         } else {
             tx.execute(
-                "INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![payload.invoice_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst]
+                "INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, hsn, gst_rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![payload.invoice_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, item_hsn, item_gst_rate]
             )?;
         }
 

@@ -24,7 +24,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             hsn TEXT,
             gst_rate INTEGER, -- milli-percent (e.g. 5000 = 5.0%)
             gst_status TEXT DEFAULT 'not_set', -- 'taxable', 'nil_rated', 'exempt', 'not_set'
-            base_unit TEXT NOT NULL
+            base_unit TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS item_units (
@@ -42,8 +43,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             type TEXT NOT NULL, -- 'supplier', 'customer', or 'both'
             category TEXT NOT NULL DEFAULT 'unregistered', -- 'regular', 'composition', 'unregistered'
             village TEXT,
+            address TEXT,
+            phone TEXT,
             gstin TEXT,
-            phone TEXT
+            state_code TEXT
         );
 
         CREATE TABLE IF NOT EXISTS godowns (
@@ -73,6 +76,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             cgst INTEGER, -- paise
             sgst INTEGER, -- paise
             igst INTEGER, -- paise
+            hsn TEXT,
+            gst_rate INTEGER,
             FOREIGN KEY(invoice_no) REFERENCES purchases(invoice_no),
             FOREIGN KEY(item_id) REFERENCES items(id)
         );
@@ -100,6 +105,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             sgst INTEGER, -- paise
             igst INTEGER, -- paise
             cost_paise INTEGER NOT NULL DEFAULT 0, -- snapshotted cost at sale time
+            hsn TEXT,
+            gst_rate INTEGER,
             FOREIGN KEY(invoice_no) REFERENCES sales(invoice_no),
             FOREIGN KEY(item_id) REFERENCES items(id)
         );
@@ -238,6 +245,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // Safely apply column migrations if running on existing database file
     let _ = conn.execute("ALTER TABLE parties ADD COLUMN category TEXT NOT NULL DEFAULT 'unregistered'", []);
+    let _ = conn.execute("ALTER TABLE parties ADD COLUMN address TEXT", []);
+    let _ = conn.execute("ALTER TABLE parties ADD COLUMN state_code TEXT", []);
+    let _ = conn.execute("UPDATE parties SET state_code = SUBSTR(TRIM(gstin), 1, 2) WHERE gstin IS NOT NULL AND TRIM(gstin) <> '' AND state_code IS NULL", []);
     let _ = conn.execute("ALTER TABLE purchases ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'cash'", []);
     let _ = conn.execute("ALTER TABLE purchases ADD COLUMN paid_amount INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE purchases ADD COLUMN total_amount INTEGER NOT NULL DEFAULT 0", []);
@@ -245,6 +255,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE sales ADD COLUMN paid_amount INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE sales ADD COLUMN total_amount INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE sale_lines ADD COLUMN cost_paise INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE sale_lines ADD COLUMN hsn TEXT", []);
+    let _ = conn.execute("ALTER TABLE sale_lines ADD COLUMN gst_rate INTEGER", []);
+    let _ = conn.execute("ALTER TABLE purchase_lines ADD COLUMN hsn TEXT", []);
+    let _ = conn.execute("ALTER TABLE purchase_lines ADD COLUMN gst_rate INTEGER", []);
     let _ = conn.execute("ALTER TABLE party_ledger ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'cash'", []);
     let _ = conn.execute("ALTER TABLE party_ledger ADD COLUMN remark TEXT", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN is_gst_registered INTEGER NOT NULL DEFAULT 1", []);
@@ -261,9 +275,15 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN reason TEXT", []);
     let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN created_at TEXT", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
+    let _ = conn.execute("ALTER TABLE items ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'nil_rated' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate = 0", []);
 
+    // Backfill HSN and GST rate on existing sale_lines and purchase_lines from items where NULL
+    let _ = conn.execute("UPDATE sale_lines SET hsn = (SELECT hsn FROM items WHERE items.id = sale_lines.item_id) WHERE hsn IS NULL", []);
+    let _ = conn.execute("UPDATE sale_lines SET gst_rate = (SELECT gst_rate FROM items WHERE items.id = sale_lines.item_id) WHERE gst_rate IS NULL", []);
+    let _ = conn.execute("UPDATE purchase_lines SET hsn = (SELECT hsn FROM items WHERE items.id = purchase_lines.item_id) WHERE hsn IS NULL", []);
+    let _ = conn.execute("UPDATE purchase_lines SET gst_rate = (SELECT gst_rate FROM items WHERE items.id = purchase_lines.item_id) WHERE gst_rate IS NULL", []);
 
     // Create Default "Cash Sale (Walk-in)" party if not exists
     let _ = conn.execute(

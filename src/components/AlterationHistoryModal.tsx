@@ -9,6 +9,7 @@ interface AlterationHistoryModalProps {
   entityType?: string;
   entityId?: string;
   title?: string;
+  lang?: string;
 }
 
 export function AlterationHistoryModal({

@@ -111,6 +111,23 @@ export function setupDemoMocks() {
       case "add_item_unit_cmd":
         return true;
 
+      case "get_item_units_cmd":
+        return [];
+
+      case "update_item_cmd": {
+        const it = store.items.find((x) => x.id === payload.id);
+        if (it) {
+          if (payload.name) it.name = payload.name;
+          if (payload.hsn !== undefined) it.hsn = payload.hsn;
+          if (payload.gstRate !== undefined) it.gst_rate = payload.gstRate;
+          if (payload.gstStatus) it.gst_status = payload.gstStatus;
+          if (payload.baseUnit) it.base_unit = payload.baseUnit;
+          if (payload.category !== undefined) it.category = payload.category;
+          if (payload.isActive !== undefined) it.is_active = payload.isActive;
+        }
+        return true;
+      }
+
       case "get_godowns_cmd":
         return store.godowns;
 
@@ -137,6 +154,21 @@ export function setupDemoMocks() {
         };
         store.parties.push(newParty);
         return newId;
+      }
+
+      case "update_party_cmd": {
+        const p = store.parties.find((x) => x.id === payload.id);
+        if (p) {
+          if (payload.name) p.name = payload.name;
+          if (payload.partyType) p.party_type = payload.partyType;
+          if (payload.category) p.category = payload.category;
+          if (payload.village !== undefined) p.village = payload.village;
+          if (payload.address !== undefined) p.address = payload.address;
+          if (payload.gstin !== undefined) p.gstin = payload.gstin;
+          if (payload.phone !== undefined) p.phone = payload.phone;
+          if (payload.stateCode !== undefined) p.state_code = payload.stateCode;
+        }
+        return true;
       }
 
       case "cleanup_accounting_parties_cmd":

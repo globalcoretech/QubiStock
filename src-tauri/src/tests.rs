@@ -2852,6 +2852,398 @@ fn test_stage1_period_lock_enforcement() {
     assert!(check_period_lock(&conn, "2026-10-15").is_ok());
 }
 
+#[test]
+fn test_stage2_item_alteration_rules() {
+    use crate::commands::{
+        add_item_inner, update_item_inner, delete_item_inner, get_items_filtered_inner,
+        UpdateItemPayload,
+    };
+    use crate::audit::get_audit_logs_inner;
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
 
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
 
+    // 1. Create initial items
+    let id1 = add_item_inner(&conn, "DAP Fertilizer".to_string(), None, Some("3102".to_string()), Some(5000), "bag".to_string(), Some("taxable".to_string())).unwrap();
+    let id2 = add_item_inner(&conn, "Urea 50kg".to_string(), None, Some("3102".to_string()), Some(5000), "bag".to_string(), Some("taxable".to_string())).unwrap();
 
+    // 2. Duplicate name rejection
+    let dup_err = update_item_inner(&mut conn, UpdateItemPayload {
+        id: id2,
+        name: "DAP Fertilizer".to_string(),
+        category: None,
+        hsn: Some("3102".to_string()),
+        gst_rate: Some(5000),
+        base_unit: "bag".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(1),
+        reason: None,
+        units: None,
+    }).unwrap_err();
+    assert!(dup_err.contains("already exists"));
+
+    // 3. GST rate sanity (must be <= 28000)
+    let gst_err = update_item_inner(&mut conn, UpdateItemPayload {
+        id: id1,
+        name: "DAP Fertilizer".to_string(),
+        category: None,
+        hsn: Some("3102".to_string()),
+        gst_rate: Some(35000),
+        base_unit: "bag".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(1),
+        reason: None,
+        units: None,
+    }).unwrap_err();
+    assert!(gst_err.contains("between 0% and 28%"));
+
+    // 4. HSN digits validation
+    let hsn_err = update_item_inner(&mut conn, UpdateItemPayload {
+        id: id1,
+        name: "DAP Fertilizer".to_string(),
+        category: None,
+        hsn: Some("ABC12".to_string()),
+        gst_rate: Some(5000),
+        base_unit: "bag".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(1),
+        reason: None,
+        units: None,
+    }).unwrap_err();
+    assert!(hsn_err.contains("digits only"));
+
+    // 5. When no transactions exist, base_unit CAN be changed
+    update_item_inner(&mut conn, UpdateItemPayload {
+        id: id1,
+        name: "DAP Super".to_string(),
+        category: None,
+        hsn: Some("3105".to_string()),
+        gst_rate: Some(5000),
+        base_unit: "kg".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(1),
+        reason: Some("Changed to kg".to_string()),
+        units: None,
+    }).unwrap();
+
+    // Add initial stock so sale does not trigger oversell block
+    crate::inventory::add_stock_ledger_entry(&conn, "2026-10-01", id1, 1, 100_000, "opening", Some("OP-001"), None, None, None).unwrap();
+
+    // 6. Save a transaction with this item
+    let sale_payload = InvoicePayload {
+        invoice_no: "INV-SALE-001".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 1, // Walk-in
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 12500,
+        shop_state: Some("23".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: id1,
+            qty: 5000, // 5 kg
+            unit: "kg".to_string(),
+            rate: 2500, // 25.00
+            taxable: 11905,
+            cgst: 297,
+            sgst: 298,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, sale_payload).expect("Sale invoice save failed");
+
+    // 7. Now with transactions, changing base unit MUST be BLOCKED
+    let unit_block_err = update_item_inner(&mut conn, UpdateItemPayload {
+        id: id1,
+        name: "DAP Super".to_string(),
+        category: None,
+        hsn: Some("3105".to_string()),
+        gst_rate: Some(5000),
+        base_unit: "bag".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(1),
+        reason: None,
+        units: None,
+    }).unwrap_err();
+    assert!(unit_block_err.contains("base unit cannot be changed"));
+
+    // 8. Deleting item with transactions MUST be BLOCKED
+    let del_err = delete_item_inner(&mut conn, id1).unwrap_err();
+    assert!(del_err.contains("cannot be deleted"));
+
+    // 9. Disabling item (is_active = 0)
+    update_item_inner(&mut conn, UpdateItemPayload {
+        id: id1,
+        name: "DAP Super".to_string(),
+        category: None,
+        hsn: Some("3105".to_string()),
+        gst_rate: Some(5000),
+        base_unit: "kg".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(0),
+        reason: Some("Seasonal deactivation".to_string()),
+        units: None,
+    }).unwrap();
+
+    // Active filter hides inactive item
+    let active_only = get_items_filtered_inner(&conn, false).unwrap();
+    assert!(!active_only.iter().any(|it| it.id == id1));
+    let all_items = get_items_filtered_inner(&conn, true).unwrap();
+    assert!(all_items.iter().any(|it| it.id == id1));
+
+    // 10. Verify audit log was recorded
+    let logs = get_audit_logs_inner(&conn, Some("item"), Some(&id1.to_string()), None).unwrap();
+    assert!(logs.len() >= 2);
+    let last_log = &logs[0];
+    assert_eq!(last_log.action, "update");
+    assert_eq!(last_log.reason.as_deref(), Some("Seasonal deactivation"));
+    assert!(last_log.before_json.as_deref().unwrap().contains("\"is_active\":1"));
+    assert!(last_log.after_json.as_deref().unwrap().contains("\"is_active\":0"));
+}
+
+#[test]
+fn test_stage2_party_alteration_rules() {
+    use crate::commands::{
+        add_item_inner, add_party_inner, update_party_inner, delete_party_inner,
+        UpdatePartyPayload,
+    };
+    use crate::audit::get_audit_logs_inner;
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // 1. Cash Sale Party (ID 1) cannot be renamed, retyped or deleted
+    let p1_rename = update_party_inner(&mut conn, UpdatePartyPayload {
+        id: 1,
+        name: "Random Name".to_string(),
+        party_type: "customer".to_string(),
+        category: "unregistered".to_string(),
+        village: None,
+        address: None,
+        gstin: None,
+        phone: None,
+        state_code: None,
+        reason: None,
+    }).unwrap_err();
+    assert!(p1_rename.contains("Default Cash Sale (Walk-in) party cannot be renamed"));
+
+    let p1_retype = update_party_inner(&mut conn, UpdatePartyPayload {
+        id: 1,
+        name: "Cash Sale (Walk-in)".to_string(),
+        party_type: "supplier".to_string(),
+        category: "unregistered".to_string(),
+        village: None,
+        address: None,
+        gstin: None,
+        phone: None,
+        state_code: None,
+        reason: None,
+    }).unwrap_err();
+    assert!(p1_retype.contains("Default Cash Sale (Walk-in) party type cannot be changed"));
+
+    let p1_del = delete_party_inner(&mut conn, 1).unwrap_err();
+    assert!(p1_del.contains("Default Cash Sale (Walk-in) party cannot be deleted"));
+
+    // 2. Create customer and save sale
+    let cust_id = add_party_inner(&conn, "Ramesh Kisan", "customer", "unregistered", Some("Sehore"), None, Some("9826011111")).unwrap();
+    let item_id = add_item_inner(&conn, "Urea 45kg".to_string(), None, Some("3102".to_string()), Some(5000), "bag".to_string(), Some("taxable".to_string())).unwrap();
+
+    // Add stock so sale succeeds
+    crate::inventory::add_stock_ledger_entry(&conn, "2026-10-01", item_id, 1, 100_000, "opening", Some("OP-001"), None, None, None).unwrap();
+
+    let sale_payload = InvoicePayload {
+        invoice_no: "INV-SALE-002".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: cust_id,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        lines: vec![InvoiceLine {
+            item_id,
+            qty: 1000,
+            unit: "kg".to_string(),
+            rate: 1000,
+            taxable: 952,
+            cgst: 24,
+            sgst: 24,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, sale_payload).expect("Sale invoice save failed");
+
+    // Attempt to change customer to supplier-only MUST be BLOCKED
+    let retype_err = update_party_inner(&mut conn, UpdatePartyPayload {
+        id: cust_id,
+        name: "Ramesh Kisan".to_string(),
+        party_type: "supplier".to_string(),
+        category: "unregistered".to_string(),
+        village: Some("Sehore".to_string()),
+        address: None,
+        gstin: None,
+        phone: Some("9826011111".to_string()),
+        state_code: None,
+        reason: None,
+    }).unwrap_err();
+    assert!(retype_err.contains("cannot change type to supplier-only"));
+
+    // 3. Create supplier and save purchase
+    let supp_id = add_party_inner(&conn, "Narmada Bio Agro", "supplier", "regular", Some("Indore"), Some("23AAACN1234F1Z1"), Some("9826022222")).unwrap();
+    let pur_payload = InvoicePayload {
+        invoice_no: "INV-PUR-001".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: supp_id,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        lines: vec![InvoiceLine {
+            item_id,
+            qty: 10000,
+            unit: "kg".to_string(),
+            rate: 800,
+            taxable: 7619,
+            cgst: 190,
+            sgst: 191,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, pur_payload).expect("Purchase invoice save failed");
+
+    // Attempt to change supplier to customer-only MUST be BLOCKED
+    let supp_retype_err = update_party_inner(&mut conn, UpdatePartyPayload {
+        id: supp_id,
+        name: "Narmada Bio Agro".to_string(),
+        party_type: "customer".to_string(),
+        category: "regular".to_string(),
+        village: Some("Indore".to_string()),
+        address: None,
+        gstin: Some("23AAACN1234F1Z1".to_string()),
+        phone: Some("9826022222".to_string()),
+        state_code: None,
+        reason: None,
+    }).unwrap_err();
+    assert!(supp_retype_err.contains("cannot change type to customer-only"));
+
+    // Changing to 'both' is ALLOWED
+    update_party_inner(&mut conn, UpdatePartyPayload {
+        id: cust_id,
+        name: "Ramesh Kisan".to_string(),
+        party_type: "both".to_string(),
+        category: "unregistered".to_string(),
+        village: Some("Sehore".to_string()),
+        address: Some("Village Road".to_string()),
+        gstin: None,
+        phone: Some("9826011111".to_string()),
+        state_code: None,
+        reason: Some("Now also a supplier".to_string()),
+    }).unwrap();
+
+    // 4. GSTIN auto-derives state code
+    update_party_inner(&mut conn, UpdatePartyPayload {
+        id: cust_id,
+        name: "Ramesh Kisan".to_string(),
+        party_type: "both".to_string(),
+        category: "regular".to_string(),
+        village: Some("Sehore".to_string()),
+        address: Some("Village Road".to_string()),
+        gstin: Some("23AABCU9603R1ZM".to_string()),
+        phone: Some("9826011111".to_string()),
+        state_code: None,
+        reason: Some("Registered under GST".to_string()),
+    }).unwrap();
+
+    let derived_code: Option<String> = conn.query_row("SELECT state_code FROM parties WHERE id = ?", [cust_id], |r| r.get(0)).unwrap();
+    assert_eq!(derived_code.as_deref(), Some("23"));
+
+    // 5. Verify audit log
+    let logs = get_audit_logs_inner(&conn, Some("party"), Some(&cust_id.to_string()), None).unwrap();
+    assert!(!logs.is_empty());
+    assert_eq!(logs[0].action, "update");
+    assert_eq!(logs[0].reason.as_deref(), Some("Registered under GST"));
+}
+
+#[test]
+fn test_stage2_snapshot_preserves_old_bills() {
+    use crate::commands::{
+        add_item_inner, update_item_inner, get_invoice_details_inner, get_hsn_summary_inner,
+        UpdateItemPayload,
+    };
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+
+    // 1. Create item with HSN "3102" and 5% GST (5000)
+    let item_id = add_item_inner(&conn, "Bio Fertilizer Max".to_string(), None, Some("3102".to_string()), Some(5000), "bag".to_string(), Some("taxable".to_string())).unwrap();
+
+    // Add stock so sale does not hit oversell block
+    crate::inventory::add_stock_ledger_entry(&conn, "2026-10-01", item_id, 1, 100_000, "opening", Some("OP-001"), None, None, None).unwrap();
+
+    // 2. Save a sale bill
+    let payload = InvoicePayload {
+        invoice_no: "SALE-SNAPSHOT-001".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 1,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 100000,
+        shop_state: Some("23".to_string()),
+        lines: vec![InvoiceLine {
+            item_id,
+            qty: 2000, // 2 bags
+            rate: 50000, // 500.00
+            taxable: 95238,
+            cgst: 2381,
+            sgst: 2381,
+            igst: 0,
+            unit: "bag".to_string(),
+        }],
+    };
+    save_invoice(&mut conn, payload).expect("Sale invoice save failed");
+
+    // Check saved bill details before item alteration
+    let inv_before = get_invoice_details_inner(&conn, "SALE-SNAPSHOT-001").unwrap();
+    assert_eq!(inv_before.lines.len(), 1);
+    assert_eq!(inv_before.lines[0].hsn.as_deref(), Some("3102"));
+    assert_eq!(inv_before.lines[0].gst_rate, Some(5000));
+
+    // 3. Now alter the item in items table: change HSN to "3808" and GST rate to 18000 (18%)
+    update_item_inner(&mut conn, UpdateItemPayload {
+        id: item_id,
+        name: "Bio Fertilizer Max".to_string(),
+        category: None,
+        hsn: Some("3808".to_string()),
+        gst_rate: Some(18000),
+        base_unit: "bag".to_string(),
+        gst_status: Some("taxable".to_string()),
+        is_active: Some(1),
+        reason: Some("HSN & GST rate revised by government".to_string()),
+        units: None,
+    }).unwrap();
+
+    // Verify item in items table has changed
+    let (current_hsn, current_gst): (Option<String>, Option<i64>) = conn.query_row(
+        "SELECT hsn, gst_rate FROM items WHERE id = ?",
+        [item_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(current_hsn.as_deref(), Some("3808"));
+    assert_eq!(current_gst, Some(18000));
+
+    // 4. CRITICAL: Query the OLD bill details again - it MUST STILL report HSN 3102 and GST 5000!
+    let inv_after = get_invoice_details_inner(&conn, "SALE-SNAPSHOT-001").unwrap();
+    assert_eq!(inv_after.lines[0].hsn.as_deref(), Some("3102"), "Old bill HSN must remain snapshotted 3102!");
+    assert_eq!(inv_after.lines[0].gst_rate, Some(5000), "Old bill GST rate must remain snapshotted 5000!");
+
+    // 5. Query HSN summary for the period - it must use the snapshotted HSN 3102
+    let hsn_summary = get_hsn_summary_inner(&conn, "2026-11-01", "2026-11-01", None).unwrap();
+    assert_eq!(hsn_summary.items.len(), 1);
+    assert_eq!(hsn_summary.items[0].hsn, "3102", "HSN summary must group by snapshotted HSN 3102!");
+    assert_eq!(hsn_summary.items[0].taxable_value, 95238);
+}

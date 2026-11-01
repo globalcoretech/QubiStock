@@ -144,7 +144,7 @@ export function TransactionView({
 
   const loadAllData = async () => {
     try {
-      const itRes = await invoke<Item[]>("get_items_cmd");
+      const itRes = await invoke<Item[]>("get_items_cmd", { includeInactive: false });
       setItems(itRes);
     } catch (e) {
       console.error("get_items_cmd error:", e);

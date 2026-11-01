@@ -3,8 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { Party, Feedback } from "../types";
 import { Translations, Language } from "../i18n";
 import { AddPartyModal } from "../components/AddPartyModal";
+import { EditPartyModal } from "../components/EditPartyModal";
+import { AlterationHistoryModal } from "../components/AlterationHistoryModal";
 import { FeedbackBanner, EmptyTableMessage } from "../components/FeedbackBanner";
-import { Plus, Search, X, Trash2 } from "../components/icons";
+import { Plus, Search, X, Trash2, Edit, History } from "../components/icons";
 import { Pagination } from "../components/Pagination";
 
 interface PartiesViewProps {
@@ -22,6 +24,9 @@ export function PartiesView({
 }: PartiesViewProps) {
   const [parties, setParties] = useState<Party[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingParty, setEditingParty] = useState<Party | null>(null);
+  const [historyParty, setHistoryParty] = useState<Party | null>(null);
+
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -185,12 +190,13 @@ export function PartiesView({
                 <th className="py-2 px-3">GSTIN</th>
                 <th className="py-2 px-3">{t.common.village}</th>
                 <th className="py-2 px-3">{t.common.phone}</th>
+                <th className="py-2 px-3 text-right">{lang === "hi" ? "कार्रवाई" : "Actions"}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedParties.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <EmptyTableMessage
                       message={t.common.emptyMessage}
                       actionText={t.parties.addPartyBtn}
@@ -212,7 +218,7 @@ export function PartiesView({
                       <td className="py-2 px-3 font-mono text-slate-400 text-[11px]">
                         {p.id}
                       </td>
-                      <td className="py-2 px-3 font-semibold text-slate-900 truncate max-w-[200px]">
+                      <td className="py-2 px-3 font-semibold text-slate-900 truncate max-w-[180px]">
                         {p.name}
                       </td>
                       <td className="py-2 px-3">
@@ -240,11 +246,33 @@ export function PartiesView({
                       <td className="py-2 px-3 font-mono text-slate-600 text-[11px]">
                         {p.gstin || "-"}
                       </td>
-                      <td className="py-2 px-3 text-slate-600 text-[11px] truncate max-w-[120px]">
+                      <td className="py-2 px-3 text-slate-600 text-[11px] truncate max-w-[110px]">
                         {p.village || "-"}
                       </td>
                       <td className="py-2 px-3 font-mono text-slate-700 text-[11px]">
                         {p.phone || "-"}
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        <div className="inline-flex items-center gap-1.5 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setEditingParty(p)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded border border-slate-200 hover:border-emerald-200 transition-colors text-[11px] font-medium"
+                            title={lang === "hi" ? "संपादित करें" : "Edit"}
+                          >
+                            <Edit size={13} strokeWidth={1.75} />
+                            <span>{lang === "hi" ? "संपादित" : "Edit"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setHistoryParty(p)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded border border-slate-200 hover:border-blue-200 transition-colors text-[11px] font-medium"
+                            title={lang === "hi" ? "संशोधन इतिहास देखें" : "View History"}
+                          >
+                            <History size={13} strokeWidth={1.75} />
+                            <span>{lang === "hi" ? "इतिहास" : "History"}</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -276,6 +304,29 @@ export function PartiesView({
         }}
         t={t}
       />
+
+      <EditPartyModal
+        party={editingParty}
+        isOpen={!!editingParty}
+        onClose={() => setEditingParty(null)}
+        onSuccess={() => {
+          loadParties();
+          if (onRefresh) onRefresh();
+        }}
+        t={t}
+        lang={lang}
+      />
+
+      {historyParty && (
+        <AlterationHistoryModal
+          isOpen={!!historyParty}
+          onClose={() => setHistoryParty(null)}
+          entityType="party"
+          entityId={historyParty.id.toString()}
+          title={historyParty.name}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }

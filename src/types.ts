@@ -285,7 +285,14 @@ export interface Item {
   gst_rate: number | null;
   gst_status?: GstStatus;
   is_active?: number;
+  category?: string | null;
 }
+
+export interface ItemUnit {
+  unit_name: string;
+  factor_to_base: number;
+}
+
 
 export interface StockItem {
   id: number;

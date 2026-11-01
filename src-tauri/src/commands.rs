@@ -273,10 +273,22 @@ pub struct Item {
     pub hsn: Option<String>,
     pub gst_rate: Option<i64>,
     pub gst_status: Option<String>,
+    #[serde(default = "default_item_active")]
+    pub is_active: Option<i64>,
+    pub category: Option<String>,
 }
 
-pub fn get_items_inner(conn: &Connection) -> Result<Vec<Item>, String> {
-    let mut stmt = conn.prepare("SELECT id, name, base_unit, hsn, gst_rate, COALESCE(gst_status, CASE WHEN gst_rate > 0 THEN 'taxable' WHEN gst_rate = 0 THEN 'nil_rated' ELSE 'not_set' END) FROM items").map_err(|e| e.to_string())?;
+fn default_item_active() -> Option<i64> {
+    Some(1)
+}
+
+pub fn get_items_filtered_inner(conn: &Connection, include_inactive: bool) -> Result<Vec<Item>, String> {
+    let sql = if include_inactive {
+        "SELECT id, name, base_unit, hsn, gst_rate, COALESCE(gst_status, CASE WHEN gst_rate > 0 THEN 'taxable' WHEN gst_rate = 0 THEN 'nil_rated' ELSE 'not_set' END), COALESCE(is_active, 1), category FROM items ORDER BY name ASC"
+    } else {
+        "SELECT id, name, base_unit, hsn, gst_rate, COALESCE(gst_status, CASE WHEN gst_rate > 0 THEN 'taxable' WHEN gst_rate = 0 THEN 'nil_rated' ELSE 'not_set' END), COALESCE(is_active, 1), category FROM items WHERE COALESCE(is_active, 1) = 1 ORDER BY name ASC"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], |row| {
         Ok(Item {
             id: row.get(0)?,
@@ -285,6 +297,8 @@ pub fn get_items_inner(conn: &Connection) -> Result<Vec<Item>, String> {
             hsn: row.get(3)?,
             gst_rate: row.get(4)?,
             gst_status: row.get(5)?,
+            is_active: row.get(6)?,
+            category: row.get(7)?,
         })
     }).map_err(|e| e.to_string())?;
     let mut items = Vec::new();
@@ -294,10 +308,14 @@ pub fn get_items_inner(conn: &Connection) -> Result<Vec<Item>, String> {
     Ok(items)
 }
 
+pub fn get_items_inner(conn: &Connection) -> Result<Vec<Item>, String> {
+    get_items_filtered_inner(conn, true)
+}
+
 #[command]
-pub fn get_items_cmd(app: AppHandle) -> Result<Vec<Item>, String> {
+pub fn get_items_cmd(app: AppHandle, include_inactive: Option<bool>) -> Result<Vec<Item>, String> {
     let conn = get_conn(&app)?;
-    get_items_inner(&conn)
+    get_items_filtered_inner(&conn, include_inactive.unwrap_or(true))
 }
 
 pub fn add_item_inner(
@@ -317,7 +335,7 @@ pub fn add_item_inner(
         }
     });
     conn.execute(
-        "INSERT INTO items (name, category, hsn, gst_rate, base_unit, gst_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO items (name, category, hsn, gst_rate, base_unit, gst_status, is_active) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
         rusqlite::params![name, category, hsn, gst_rate, base_unit, effective_status]
     ).map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
@@ -336,6 +354,237 @@ pub fn add_item_cmd(
     let conn = get_conn(&app)?;
     add_item_inner(&conn, name, category, hsn, gst_rate, base_unit, gst_status)
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpdateItemUnitItem {
+    pub unit_name: String,
+    pub factor_to_base: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpdateItemPayload {
+    pub id: i64,
+    pub name: String,
+    pub category: Option<String>,
+    pub hsn: Option<String>,
+    pub gst_rate: Option<i64>,
+    pub base_unit: String,
+    pub gst_status: Option<String>,
+    pub is_active: Option<i64>,
+    pub units: Option<Vec<UpdateItemUnitItem>>,
+    pub reason: Option<String>,
+}
+
+pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> Result<(), String> {
+    let name_trimmed = payload.name.trim();
+    if name_trimmed.is_empty() {
+        return Err("सामान का नाम खाली नहीं हो सकता! / Item name cannot be empty!".to_string());
+    }
+
+    // Name uniqueness check (case-insensitive across other items)
+    let duplicate_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM items WHERE LOWER(TRIM(name)) = LOWER(TRIM(?1)) AND id <> ?2",
+        rusqlite::params![name_trimmed, payload.id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    if duplicate_count > 0 {
+        return Err(format!("इस नाम ({}) का सामान पहले से मौजूद है! / An item with this name already exists!", name_trimmed));
+    }
+
+    // GST rate validation: between 0 and 28000 milli-percent
+    if let Some(r) = payload.gst_rate {
+        if r < 0 || r > 28000 {
+            return Err("GST दर 0% से 28% के बीच होनी चाहिए! / GST rate must be between 0% and 28%!".to_string());
+        }
+    }
+
+    // HSN validation: digits only if provided
+    if let Some(ref hsn_str) = payload.hsn {
+        let trimmed_hsn = hsn_str.trim();
+        if !trimmed_hsn.is_empty() && !trimmed_hsn.chars().all(|c| c.is_ascii_digit()) {
+            return Err("HSN कोड में केवल अंक होने चाहिए! / HSN code must contain digits only!".to_string());
+        }
+    }
+
+    // Fetch existing item for before_json and transaction checks
+    let (old_name, old_category, old_hsn, old_gst_rate, old_base_unit, old_gst_status, old_is_active): (String, Option<String>, Option<String>, Option<i64>, String, Option<String>, i64) = conn.query_row(
+        "SELECT name, category, hsn, gst_rate, base_unit, gst_status, COALESCE(is_active, 1) FROM items WHERE id = ?1",
+        rusqlite::params![payload.id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+    ).map_err(|e| format!("Item not found: {}", e))?;
+
+    // Check existing transactions
+    let tx_count: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM sale_lines WHERE item_id = ?1) +
+                (SELECT COUNT(*) FROM purchase_lines WHERE item_id = ?1) +
+                (SELECT COUNT(*) FROM stock_ledger WHERE item_id = ?1)",
+        rusqlite::params![payload.id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+
+    let has_transactions = tx_count > 0;
+
+    if has_transactions {
+        // Block changing base unit
+        if !old_base_unit.trim().eq_ignore_ascii_case(payload.base_unit.trim()) {
+            return Err("इस वस्तु में पुराने लेनदेन मौजूद हैं, इसलिए मूल इकाई (Base Unit) नहीं बदली जा सकती। / Item has existing transactions; base unit cannot be changed.".to_string());
+        }
+
+        // If units provided, verify that existing conversion factors haven't been altered or deleted
+        if let Some(ref new_units) = payload.units {
+            let mut stmt = conn.prepare("SELECT unit_name, factor_to_base FROM item_units WHERE item_id = ?1").map_err(|e| e.to_string())?;
+            let existing_units = stmt.query_map(rusqlite::params![payload.id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            }).map_err(|e| e.to_string())?;
+
+            for eu in existing_units {
+                let (eu_name, eu_factor) = eu.map_err(|e| e.to_string())?;
+                let found = new_units.iter().find(|u| u.unit_name.trim().eq_ignore_ascii_case(eu_name.trim()));
+                match found {
+                    None => {
+                        return Err(format!(
+                            "इस वस्तु में पुराने लेनदेन मौजूद हैं, इसलिए इकाई '{}' को हटाया नहीं जा सकता! / Unit '{}' cannot be removed because item has transactions.",
+                            eu_name, eu_name
+                        ));
+                    }
+                    Some(u) => {
+                        if u.factor_to_base != eu_factor {
+                            return Err(format!(
+                                "पुराने लेनदेन होने के कारण इकाई '{}' का कन्वर्शन फ़ैक्टर बदला नहीं जा सकता! / Conversion factor for unit '{}' cannot be changed because item has transactions.",
+                                eu_name, eu_name
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let before_obj = serde_json::json!({
+        "name": old_name,
+        "category": old_category,
+        "hsn": old_hsn,
+        "gst_rate": old_gst_rate,
+        "base_unit": old_base_unit,
+        "gst_status": old_gst_status,
+        "is_active": old_is_active,
+    });
+
+    let effective_status = payload.gst_status.clone().unwrap_or_else(|| {
+        match payload.gst_rate {
+            Some(r) if r > 0 => "taxable".to_string(),
+            Some(r) if r == 0 => "nil_rated".to_string(),
+            _ => "not_set".to_string(),
+        }
+    });
+
+    let is_active_val = payload.is_active.unwrap_or(1);
+
+    conn.execute(
+        "UPDATE items SET name = ?1, category = ?2, hsn = ?3, gst_rate = ?4, base_unit = ?5, gst_status = ?6, is_active = ?7 WHERE id = ?8",
+        rusqlite::params![
+            name_trimmed,
+            payload.category,
+            payload.hsn.as_ref().map(|s| s.trim()),
+            payload.gst_rate,
+            payload.base_unit.trim(),
+            effective_status,
+            is_active_val,
+            payload.id
+        ],
+    ).map_err(|e| e.to_string())?;
+
+    // Update or insert new units if provided
+    if let Some(ref new_units) = payload.units {
+        for u in new_units {
+            conn.execute(
+                "INSERT INTO item_units (item_id, unit_name, factor_to_base) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(item_id, unit_name) DO UPDATE SET factor_to_base = ?3",
+                rusqlite::params![payload.id, u.unit_name.trim(), u.factor_to_base],
+            ).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let after_obj = serde_json::json!({
+        "name": name_trimmed,
+        "category": payload.category,
+        "hsn": payload.hsn.as_ref().map(|s| s.trim()),
+        "gst_rate": payload.gst_rate,
+        "base_unit": payload.base_unit.trim(),
+        "gst_status": effective_status,
+        "is_active": is_active_val,
+    });
+
+    crate::audit::write_audit(
+        conn,
+        "item",
+        &payload.id.to_string(),
+        "update",
+        Some(&before_obj.to_string()),
+        Some(&after_obj.to_string()),
+        payload.reason.as_deref(),
+    )?;
+
+    Ok(())
+}
+
+#[command]
+pub fn update_item_cmd(app: AppHandle, payload: UpdateItemPayload) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    update_item_inner(&mut conn, payload)
+}
+
+pub fn delete_item_inner(conn: &mut Connection, item_id: i64) -> Result<(), String> {
+    let tx_count: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM sale_lines WHERE item_id = ?1) +
+                (SELECT COUNT(*) FROM purchase_lines WHERE item_id = ?1) +
+                (SELECT COUNT(*) FROM stock_ledger WHERE item_id = ?1)",
+        rusqlite::params![item_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+
+    if tx_count > 0 {
+        return Err("इस सामान के पुराने लेनदेन मौजूद हैं, इसे हटाया नहीं जा सकता! इसके बजाय इसे निष्क्रिय (Inactive) करें। / Item has existing transactions and cannot be deleted. Please mark it inactive instead.".to_string());
+    }
+
+    conn.execute("DELETE FROM item_units WHERE item_id = ?1", rusqlite::params![item_id]).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM items WHERE id = ?1", rusqlite::params![item_id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn delete_item_cmd(app: AppHandle, id: i64) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    delete_item_inner(&mut conn, id)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ItemUnit {
+    pub unit_name: String,
+    pub factor_to_base: i64,
+}
+
+pub fn get_item_units_inner(conn: &Connection, item_id: i64) -> Result<Vec<ItemUnit>, String> {
+    let mut stmt = conn.prepare("SELECT unit_name, factor_to_base FROM item_units WHERE item_id = ?1").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(rusqlite::params![item_id], |r| {
+        Ok(ItemUnit {
+            unit_name: r.get(0)?,
+            factor_to_base: r.get(1)?,
+        })
+    }).map_err(|e| e.to_string())?;
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(list)
+}
+
+#[command]
+pub fn get_item_units_cmd(app: AppHandle, item_id: i64) -> Result<Vec<ItemUnit>, String> {
+    let conn = get_conn(&app)?;
+    get_item_units_inner(&conn, item_id)
+}
+
 
 #[command]
 pub fn add_ledger_entry_cmd(
@@ -424,8 +673,10 @@ pub struct Party {
     pub party_type: String, // 'supplier', 'customer', or 'both'
     pub category: String,   // 'regular', 'composition', or 'unregistered'
     pub village: Option<String>,
-    pub gstin: Option<String>,
+    pub address: Option<String>,
     pub phone: Option<String>,
+    pub gstin: Option<String>,
+    pub state_code: Option<String>,
 }
 
 pub fn validate_gstin(gstin: &str) -> bool {
@@ -436,14 +687,11 @@ pub fn validate_gstin(gstin: &str) -> bool {
     clean.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-#[command]
-pub fn get_parties_cmd(app: AppHandle, party_type: String) -> Result<Vec<Party>, String> {
-    let conn = get_conn(&app)?;
-    
-    let query = match party_type.as_str() {
-        "supplier" => "SELECT id, name, type, category, village, gstin, phone FROM parties WHERE type = 'supplier' OR type = 'both'",
-        "customer" => "SELECT id, name, type, category, village, gstin, phone FROM parties WHERE type = 'customer' OR type = 'both'",
-        _ => "SELECT id, name, type, category, village, gstin, phone FROM parties",
+pub fn get_parties_inner(conn: &Connection, party_type: &str) -> Result<Vec<Party>, String> {
+    let query = match party_type {
+        "supplier" => "SELECT id, name, type, category, village, address, phone, gstin, state_code FROM parties WHERE type = 'supplier' OR type = 'both' ORDER BY name ASC",
+        "customer" => "SELECT id, name, type, category, village, address, phone, gstin, state_code FROM parties WHERE type = 'customer' OR type = 'both' ORDER BY name ASC",
+        _ => "SELECT id, name, type, category, village, address, phone, gstin, state_code FROM parties ORDER BY name ASC",
     };
 
     let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
@@ -454,8 +702,10 @@ pub fn get_parties_cmd(app: AppHandle, party_type: String) -> Result<Vec<Party>,
             party_type: row.get(2)?,
             category: row.get(3)?,
             village: row.get(4)?,
-            gstin: row.get(5)?,
+            address: row.get(5)?,
             phone: row.get(6)?,
+            gstin: row.get(7)?,
+            state_code: row.get(8)?,
         })
     }).map_err(|e| e.to_string())?;
 
@@ -464,6 +714,12 @@ pub fn get_parties_cmd(app: AppHandle, party_type: String) -> Result<Vec<Party>,
         if let Ok(p) = row { items.push(p); }
     }
     Ok(items)
+}
+
+#[command]
+pub fn get_parties_cmd(app: AppHandle, party_type: String) -> Result<Vec<Party>, String> {
+    let conn = get_conn(&app)?;
+    get_parties_inner(&conn, &party_type)
 }
 
 pub fn add_party_inner(
@@ -485,9 +741,13 @@ pub fn add_party_inner(
         }
     }
 
+    let state_code = gstin_clean.as_ref().and_then(|g| {
+        if g.len() >= 2 { Some(g[0..2].to_string()) } else { None }
+    });
+
     conn.execute(
-        "INSERT INTO parties (name, type, category, village, gstin, phone, guid) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
-        rusqlite::params![name, party_type, cat, village, gstin_clean, phone]
+        "INSERT INTO parties (name, type, category, village, gstin, phone, state_code, guid) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+        rusqlite::params![name, party_type, cat, village, gstin_clean, phone, state_code]
     ).map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
 }
@@ -500,12 +760,188 @@ pub fn add_party_cmd(
     category: Option<String>,
     village: Option<String>,
     gstin: Option<String>,
-    phone: Option<String>
+    phone: Option<String>,
+    address: Option<String>,
+    state_code: Option<String>,
 ) -> Result<i64, String> {
     let conn = get_conn(&app)?;
     let cat = category.unwrap_or_else(|| "unregistered".to_string());
-    add_party_inner(&conn, &name, &party_type, &cat, village.as_deref(), gstin.as_deref(), phone.as_deref())
+    let gstin_clean = gstin.map(|g| g.trim().to_uppercase());
+
+    if cat.to_lowercase() == "regular" {
+        match &gstin_clean {
+            Some(g) if validate_gstin(g) => {},
+            _ => return Err("Valid 15-character GSTIN is required for Regular parties (e.g. 22AAAAA0000A1Z5)".to_string()),
+        }
+    }
+
+    let derived_state = state_code.or_else(|| {
+        gstin_clean.as_ref().and_then(|g| if g.len() >= 2 { Some(g[0..2].to_string()) } else { None })
+    });
+
+    conn.execute(
+        "INSERT INTO parties (name, type, category, village, address, phone, gstin, state_code, guid) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+        rusqlite::params![name, party_type, cat, village, address, phone, gstin_clean, derived_state]
+    ).map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpdatePartyPayload {
+    pub id: i64,
+    pub name: String,
+    #[serde(alias = "party_type", alias = "type_")]
+    pub party_type: String, // 'customer', 'supplier', or 'both'
+    pub category: String,   // 'regular', 'composition', 'unregistered'
+    pub village: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub gstin: Option<String>,
+    pub state_code: Option<String>,
+    pub reason: Option<String>,
+}
+
+pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) -> Result<(), String> {
+    let name_trimmed = payload.name.trim();
+    if name_trimmed.is_empty() {
+        return Err("पार्टी का नाम खाली नहीं हो सकता! / Party name cannot be empty!".to_string());
+    }
+
+    // Default "Cash Sale (Walk-in)" party id 1 cannot be renamed, retyped or deleted
+    if payload.id == 1 {
+        if name_trimmed != "Cash Sale (Walk-in)" {
+            return Err("डिफ़ॉल्ट 'Cash Sale (Walk-in)' पार्टी का नाम नहीं बदला जा सकता! / Default Cash Sale (Walk-in) party cannot be renamed.".to_string());
+        }
+        if payload.party_type != "both" {
+            return Err("डिफ़ॉल्ट 'Cash Sale (Walk-in)' पार्टी का प्रकार केवल 'both' ही रह सकता है! / Default Cash Sale (Walk-in) party type cannot be changed.".to_string());
+        }
+    }
+
+    // Fetch existing party
+    let (old_name, old_type, old_category, old_village, old_address, old_phone, old_gstin, old_state_code): (String, String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = conn.query_row(
+        "SELECT name, type, category, village, address, phone, gstin, state_code FROM parties WHERE id = ?1",
+        rusqlite::params![payload.id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
+    ).map_err(|e| format!("Party not found: {}", e))?;
+
+    // Validate type conflicts with existing transactions
+    if payload.party_type == "supplier" {
+        let sales_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sales WHERE customer_id = ?1",
+            rusqlite::params![payload.id],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        if sales_count > 0 {
+            return Err("इस पार्टी के बिक्री बिल (Sales) मौजूद हैं, अतः इसे केवल सप्लायर (Supplier) नहीं बनाया जा सकता! / Party has existing sales; cannot change type to supplier-only.".to_string());
+        }
+    }
+
+    if payload.party_type == "customer" {
+        let pur_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM purchases WHERE supplier_id = ?1",
+            rusqlite::params![payload.id],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        if pur_count > 0 {
+            return Err("इस पार्टी के खरीद बिल (Purchases) मौजूद हैं, अतः इसे केवल ग्राहक (Customer) नहीं बनाया जा सकता! / Party has existing purchases; cannot change type to customer-only.".to_string());
+        }
+    }
+
+    // GSTIN format and state code
+    let clean_gstin = payload.gstin.map(|g| g.trim().to_uppercase()).filter(|g| !g.is_empty());
+    let mut auto_state = payload.state_code.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
+    if let Some(ref g) = clean_gstin {
+        if g.len() != 15 || !g.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("GSTIN 15 अक्षरों/अंकों का होना चाहिए! / GSTIN must be 15 alphanumeric characters!".to_string());
+        }
+        auto_state = Some(g[0..2].to_string());
+    }
+
+    let before_obj = serde_json::json!({
+        "name": old_name,
+        "type": old_type,
+        "category": old_category,
+        "village": old_village,
+        "address": old_address,
+        "phone": old_phone,
+        "gstin": old_gstin,
+        "state_code": old_state_code,
+    });
+
+    conn.execute(
+        "UPDATE parties SET name = ?1, type = ?2, category = ?3, village = ?4, address = ?5, phone = ?6, gstin = ?7, state_code = ?8 WHERE id = ?9",
+        rusqlite::params![
+            name_trimmed,
+            payload.party_type,
+            payload.category,
+            payload.village.as_ref().map(|s| s.trim()),
+            payload.address.as_ref().map(|s| s.trim()),
+            payload.phone.as_ref().map(|s| s.trim()),
+            clean_gstin,
+            auto_state,
+            payload.id
+        ],
+    ).map_err(|e| e.to_string())?;
+
+    let after_obj = serde_json::json!({
+        "name": name_trimmed,
+        "type": payload.party_type,
+        "category": payload.category,
+        "village": payload.village.as_ref().map(|s| s.trim()),
+        "address": payload.address.as_ref().map(|s| s.trim()),
+        "phone": payload.phone.as_ref().map(|s| s.trim()),
+        "gstin": clean_gstin,
+        "state_code": auto_state,
+    });
+
+    crate::audit::write_audit(
+        conn,
+        "party",
+        &payload.id.to_string(),
+        "update",
+        Some(&before_obj.to_string()),
+        Some(&after_obj.to_string()),
+        payload.reason.as_deref(),
+    )?;
+
+    Ok(())
+}
+
+#[command]
+pub fn update_party_cmd(app: AppHandle, payload: UpdatePartyPayload) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    update_party_inner(&mut conn, payload)
+}
+
+pub fn delete_party_inner(conn: &mut Connection, party_id: i64) -> Result<(), String> {
+    if party_id == 1 {
+        return Err("डिफ़ॉल्ट 'Cash Sale (Walk-in)' पार्टी को हटाया नहीं जा सकता! / Default Cash Sale (Walk-in) party cannot be deleted.".to_string());
+    }
+
+    let tx_count: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM sales WHERE customer_id = ?1) +
+                (SELECT COUNT(*) FROM purchases WHERE supplier_id = ?1) +
+                (SELECT COUNT(*) FROM party_ledger WHERE party_id = ?1)",
+        rusqlite::params![party_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+
+    if tx_count > 0 {
+        return Err("इस पार्टी के पुराने लेनदेन मौजूद हैं, इसे हटाया नहीं जा सकता! / Party has existing transactions and cannot be deleted.".to_string());
+    }
+
+    conn.execute("DELETE FROM parties WHERE id = ?1", rusqlite::params![party_id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn delete_party_cmd(app: AppHandle, id: i64) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    delete_party_inner(&mut conn, id)
+}
+
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PartyBalance {
@@ -707,10 +1143,14 @@ pub fn get_recent_entries_cmd(app: AppHandle) -> Result<Vec<RecentEntry>, String
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InvoicePrintLine {
     pub item_name: String,
+    #[serde(default)]
+    pub hsn: Option<String>,
     pub qty: i64,      // milli
     pub unit: String,
     pub rate: i64,     // paise
     pub taxable: i64,  // paise
+    #[serde(default)]
+    pub gst_rate: Option<i64>,
     pub gst_amount: i64,// paise
     pub total: i64,    // paise
 }
@@ -723,6 +1163,10 @@ pub struct InvoicePrintDetails {
     pub party_phone: Option<String>,
     pub party_gstin: Option<String>,
     pub party_village: Option<String>,
+    #[serde(default)]
+    pub party_address: Option<String>,
+    #[serde(default)]
+    pub party_state_code: Option<String>,
     pub payment_mode: String,
     pub paid_amount: i64,
     pub total_amount: i64,
@@ -731,7 +1175,7 @@ pub struct InvoicePrintDetails {
 
 pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<InvoicePrintDetails, String> {
     let sale_res = conn.query_row(
-        "SELECT s.invoice_no, s.date, p.name, p.phone, p.gstin, p.village, s.payment_mode, s.paid_amount, s.total_amount
+        "SELECT s.invoice_no, s.date, p.name, p.phone, p.gstin, p.village, s.payment_mode, s.paid_amount, s.total_amount, p.address, p.state_code
          FROM sales s
          JOIN parties p ON s.customer_id = p.id
          WHERE s.invoice_no = ?1",
@@ -746,12 +1190,16 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             row.get::<_, String>(6)?,
             row.get::<_, i64>(7)?,
             row.get::<_, i64>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<String>>(10)?,
         ))
     );
 
-    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount)) = sale_res {
+    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code)) = sale_res {
         let mut stmt = conn.prepare(
-            "SELECT i.name, sl.qty, sl.unit, sl.rate, sl.taxable, (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as gst_amt
+            "SELECT i.name, sl.qty, sl.unit, sl.rate, sl.taxable, (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as gst_amt,
+                    COALESCE(sl.hsn, i.hsn) as line_hsn,
+                    COALESCE(sl.gst_rate, i.gst_rate) as line_gst_rate
              FROM sale_lines sl
              JOIN items i ON sl.item_id = i.id
              WHERE sl.invoice_no = ?1"
@@ -764,12 +1212,16 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             let rate: i64 = row.get(3)?;
             let taxable: i64 = row.get(4)?;
             let gst_amt: i64 = row.get(5)?;
+            let line_hsn: Option<String> = row.get(6)?;
+            let line_gst_rate: Option<i64> = row.get(7)?;
             Ok(InvoicePrintLine {
                 item_name,
+                hsn: line_hsn,
                 qty,
                 unit,
                 rate,
                 taxable,
+                gst_rate: line_gst_rate,
                 gst_amount: gst_amt,
                 total: taxable + gst_amt,
             })
@@ -787,6 +1239,8 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             party_phone,
             party_gstin,
             party_village,
+            party_address,
+            party_state_code,
             payment_mode,
             paid_amount,
             total_amount,
@@ -795,7 +1249,7 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
     }
 
     let pur_res = conn.query_row(
-        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount
+        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code
          FROM purchases p
          JOIN parties pr ON p.supplier_id = pr.id
          WHERE p.invoice_no = ?1",
@@ -810,12 +1264,16 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             row.get::<_, String>(6)?,
             row.get::<_, i64>(7)?,
             row.get::<_, i64>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<String>>(10)?,
         ))
     );
 
-    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount)) = pur_res {
+    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code)) = pur_res {
         let mut stmt = conn.prepare(
-            "SELECT i.name, pl.qty, pl.unit, pl.rate, pl.taxable, (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as gst_amt
+            "SELECT i.name, pl.qty, pl.unit, pl.rate, pl.taxable, (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as gst_amt,
+                    COALESCE(pl.hsn, i.hsn) as line_hsn,
+                    COALESCE(pl.gst_rate, i.gst_rate) as line_gst_rate
              FROM purchase_lines pl
              JOIN items i ON pl.item_id = i.id
              WHERE pl.invoice_no = ?1"
@@ -828,12 +1286,16 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             let rate: i64 = row.get(3)?;
             let taxable: i64 = row.get(4)?;
             let gst_amt: i64 = row.get(5)?;
+            let line_hsn: Option<String> = row.get(6)?;
+            let line_gst_rate: Option<i64> = row.get(7)?;
             Ok(InvoicePrintLine {
                 item_name,
+                hsn: line_hsn,
                 qty,
                 unit,
                 rate,
                 taxable,
+                gst_rate: line_gst_rate,
                 gst_amount: gst_amt,
                 total: taxable + gst_amt,
             })
@@ -851,12 +1313,15 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             party_phone,
             party_gstin,
             party_village,
+            party_address,
+            party_state_code,
             payment_mode,
             paid_amount,
             total_amount,
             lines,
         });
     }
+
 
     Err(format!("Invoice '{}' not found", invoice_no))
 }
@@ -1290,7 +1755,7 @@ pub fn get_hsn_summary_inner(
     shop_state: Option<&str>,
 ) -> Result<HsnSummaryReport, String> {
     let mut stmt = conn.prepare(
-        "SELECT COALESCE(NULLIF(TRIM(i.hsn), ''), 'अन्य / बिना HSN') as hsn_code,
+        "SELECT COALESCE(NULLIF(TRIM(sl.hsn), ''), NULLIF(TRIM(i.hsn), ''), 'अन्य / बिना HSN') as hsn_code,
                 i.name, i.base_unit, sl.qty, sl.unit, sl.taxable,
                 (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as tax_amt,
                 pt.gstin, i.id
