@@ -531,39 +531,10 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
 #[command]
 pub fn update_item_cmd(
     app: AppHandle,
-    payload: Option<UpdateItemPayload>,
-    id: Option<i64>,
-    name: Option<String>,
-    category: Option<String>,
-    hsn: Option<String>,
-    gst_rate: Option<i64>,
-    base_unit: Option<String>,
-    gst_status: Option<String>,
-    is_active: Option<i64>,
-    units: Option<Vec<UpdateItemUnitItem>>,
-    reason: Option<String>,
+    payload: UpdateItemPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    let final_payload = if let Some(p) = payload {
-        p
-    } else {
-        let item_id = id.ok_or_else(|| "Item ID is required".to_string())?;
-        let item_name = name.ok_or_else(|| "Item name is required".to_string())?;
-        let b_unit = base_unit.unwrap_or_else(|| "kg".to_string());
-        UpdateItemPayload {
-            id: item_id,
-            name: item_name,
-            category,
-            hsn,
-            gst_rate,
-            base_unit: b_unit,
-            gst_status,
-            is_active,
-            units,
-            reason,
-        }
-    };
-    update_item_inner(&mut conn, final_payload)
+    update_item_inner(&mut conn, payload)
 }
 
 pub fn delete_item_inner(conn: &mut Connection, item_id: i64) -> Result<(), String> {
@@ -944,40 +915,10 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
 #[command]
 pub fn update_party_cmd(
     app: AppHandle,
-    payload: Option<UpdatePartyPayload>,
-    id: Option<i64>,
-    name: Option<String>,
-    party_type: Option<String>,
-    category: Option<String>,
-    village: Option<String>,
-    address: Option<String>,
-    phone: Option<String>,
-    gstin: Option<String>,
-    state_code: Option<String>,
-    reason: Option<String>,
+    payload: UpdatePartyPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    let final_payload = if let Some(p) = payload {
-        p
-    } else {
-        let party_id = id.ok_or_else(|| "Party ID is required".to_string())?;
-        let party_name = name.ok_or_else(|| "Party name is required".to_string())?;
-        let p_type = party_type.unwrap_or_else(|| "customer".to_string());
-        let cat = category.unwrap_or_else(|| "unregistered".to_string());
-        UpdatePartyPayload {
-            id: party_id,
-            name: party_name,
-            party_type: p_type,
-            category: cat,
-            village,
-            address,
-            phone,
-            gstin,
-            state_code,
-            reason,
-        }
-    };
-    update_party_inner(&mut conn, final_payload)
+    update_party_inner(&mut conn, payload)
 }
 
 pub fn delete_party_inner(conn: &mut Connection, party_id: i64) -> Result<(), String> {
@@ -3016,8 +2957,18 @@ pub fn record_payment_inner(conn: &mut Connection, payload: PaymentPayload) -> R
         ).map_err(|e| e.to_string())?;
 
         // Optional invoice matching: If ref_id is an existing sale invoice for this customer
+        let is_cancelled_sale: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sales WHERE invoice_no = ?1 AND customer_id = ?2 AND status = 'cancelled')",
+            rusqlite::params![ref_id, payload.party_id],
+            |row| row.get(0)
+        ).unwrap_or(false);
+
+        if is_cancelled_sale {
+            return Err(format!("Cannot record payment against cancelled invoice '{}' / रद्द किए गए बिल के विरुद्ध भुगतान दर्ज नहीं किया जा सकता", ref_id));
+        }
+
         let is_matched_sale: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sales WHERE invoice_no = ?1 AND customer_id = ?2)",
+            "SELECT EXISTS(SELECT 1 FROM sales WHERE invoice_no = ?1 AND customer_id = ?2 AND COALESCE(status, 'active') <> 'cancelled')",
             rusqlite::params![ref_id, payload.party_id],
             |row| row.get(0)
         ).unwrap_or(false);
@@ -3037,8 +2988,18 @@ pub fn record_payment_inner(conn: &mut Connection, payload: PaymentPayload) -> R
         ).map_err(|e| e.to_string())?;
 
         // Optional invoice matching: If ref_id is an existing purchase invoice for this supplier
+        let is_cancelled_purchase: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM purchases WHERE invoice_no = ?1 AND supplier_id = ?2 AND status = 'cancelled')",
+            rusqlite::params![ref_id, payload.party_id],
+            |row| row.get(0)
+        ).unwrap_or(false);
+
+        if is_cancelled_purchase {
+            return Err(format!("Cannot record payment against cancelled invoice '{}' / रद्द किए गए बिल के विरुद्ध भुगतान दर्ज नहीं किया जा सकता", ref_id));
+        }
+
         let is_matched_purchase: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM purchases WHERE invoice_no = ?1 AND supplier_id = ?2)",
+            "SELECT EXISTS(SELECT 1 FROM purchases WHERE invoice_no = ?1 AND supplier_id = ?2 AND COALESCE(status, 'active') <> 'cancelled')",
             rusqlite::params![ref_id, payload.party_id],
             |row| row.get(0)
         ).unwrap_or(false);
@@ -3144,6 +3105,8 @@ pub struct PartyStatementItem {
     pub payment_mode: String,
     pub remark: Option<String>,
     pub running_balance: i64, // (+ receivable, - payable)
+    #[serde(default)]
+    pub is_cancelled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -3178,7 +3141,8 @@ pub fn get_party_statement_inner(conn: &Connection, party_id: i64) -> Result<Par
     let mut stmt = conn.prepare(
         "SELECT pl.id, pl.date, pl.type, 
                 CASE WHEN pl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, pl.ref_id) ELSE pl.ref_id END as display_ref_id,
-                pl.debit, pl.credit, COALESCE(pl.payment_mode, 'cash'), pl.remark 
+                pl.debit, pl.credit, COALESCE(pl.payment_mode, 'cash'), pl.remark,
+                EXISTS(SELECT 1 FROM audit_log al WHERE al.entity_type = 'party_ledger' AND al.entity_id = CAST(pl.id AS TEXT) AND al.action = 'cancel') as is_cancelled
          FROM party_ledger pl 
          LEFT JOIN purchases p ON pl.ref_id = p.invoice_no AND pl.type = 'purchase'
          WHERE pl.party_id = ?1 
@@ -3195,6 +3159,7 @@ pub fn get_party_statement_inner(conn: &Connection, party_id: i64) -> Result<Par
             row.get::<_, i64>(5)?,
             row.get::<_, String>(6)?,
             row.get::<_, Option<String>>(7)?,
+            row.get::<_, bool>(8)?,
         ))
     }).map_err(|e| e.to_string())?;
 
@@ -3204,7 +3169,7 @@ pub fn get_party_statement_inner(conn: &Connection, party_id: i64) -> Result<Par
     let mut running_balance = 0i64;
 
     for r in rows {
-        if let Ok((id, date, entry_type, ref_id, debit, credit, payment_mode, remark)) = r {
+        if let Ok((id, date, entry_type, ref_id, debit, credit, payment_mode, remark, is_cancelled)) = r {
             total_debit += debit;
             total_credit += credit;
             running_balance += debit - credit;
@@ -3219,6 +3184,7 @@ pub fn get_party_statement_inner(conn: &Connection, party_id: i64) -> Result<Par
                 payment_mode,
                 remark,
                 running_balance,
+                is_cancelled,
             });
         }
     }
@@ -5032,6 +4998,16 @@ pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) 
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
     ).map_err(|_| format!("Payment ledger entry #{} not found / भुगतान प्रविष्टि नहीं मिली", payload.ledger_id))?;
 
+    let is_cancelled: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM audit_log WHERE entity_type = 'party_ledger' AND entity_id = ?1 AND action = 'cancel')",
+        rusqlite::params![payload.ledger_id.to_string()],
+        |r| r.get(0)
+    ).unwrap_or(false);
+
+    if is_cancelled {
+        return Err(format!("Payment #{} is cancelled and cannot be altered / रद्द किया गया भुगतान संशोधित नहीं किया जा सकता", payload.ledger_id));
+    }
+
     // Period lock check
     crate::audit::check_period_lock(conn, &old_date)?;
     crate::audit::check_period_lock(conn, &payload.date)?;
@@ -5051,6 +5027,27 @@ pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) 
 
     let new_mode = if payload.payment_mode.trim().is_empty() { "cash" } else { payload.payment_mode.trim() };
     let new_ref = payload.ref_id.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(&old_ref_id);
+
+    // If new_ref is a cancelled invoice, reject alteration
+    let is_cancelled_sale: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sales WHERE invoice_no = ?1 AND customer_id = ?2 AND status = 'cancelled')",
+        rusqlite::params![new_ref, party_id],
+        |row| row.get(0)
+    ).unwrap_or(false);
+
+    if is_cancelled_sale {
+        return Err(format!("Cannot match payment to cancelled invoice '{}' / रद्द किए गए बिल से भुगतान लिंक नहीं किया जा सकता", new_ref));
+    }
+
+    let is_cancelled_purchase: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM purchases WHERE invoice_no = ?1 AND supplier_id = ?2 AND status = 'cancelled')",
+        rusqlite::params![new_ref, party_id],
+        |row| row.get(0)
+    ).unwrap_or(false);
+
+    if is_cancelled_purchase {
+        return Err(format!("Cannot match payment to cancelled invoice '{}' / रद्द किए गए बिल से भुगतान लिंक नहीं किया जा सकता", new_ref));
+    }
 
     let after_json = serde_json::json!({
         "id": payload.ledger_id,
@@ -5144,6 +5141,16 @@ pub fn cancel_payment_inner(conn: &mut Connection, ledger_id: i64, reason: Optio
         rusqlite::params![ledger_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
     ).map_err(|_| format!("Payment ledger entry #{} not found / भुगतान प्रविष्टि नहीं मिली", ledger_id))?;
+
+    let is_cancelled: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM audit_log WHERE entity_type = 'party_ledger' AND entity_id = ?1 AND action = 'cancel')",
+        rusqlite::params![ledger_id.to_string()],
+        |r| r.get(0)
+    ).unwrap_or(false);
+
+    if is_cancelled {
+        return Err(format!("Payment #{} is already cancelled / यह भुगतान पहले से रद्द है", ledger_id));
+    }
 
     crate::audit::check_period_lock(conn, &old_date)?;
 

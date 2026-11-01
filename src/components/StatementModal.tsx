@@ -491,25 +491,40 @@ export function StatementModal({
                             booksLockedUntil && entry.date <= booksLockedUntil
                           );
 
+                          const isCancelled = Boolean(entry.is_cancelled);
+                          const isRealActivePayment = entry.entry_type === "payment" && !isCancelled;
+
                           return (
-                            <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
+                            <tr
+                              key={entry.id}
+                              className={`transition-colors ${
+                                isCancelled
+                                  ? "bg-slate-50/80 opacity-75 hover:bg-slate-100/80"
+                                  : "hover:bg-slate-50/70"
+                              }`}
+                            >
                               <td className="py-2.5 px-3.5 whitespace-nowrap text-slate-700 font-mono">
                                 {formatDate(entry.date)}
                               </td>
                               <td className="py-2.5 px-3.5 whitespace-nowrap">
                                 <span
-                                  className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium border ${badgeColor}`}
+                                  className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                    isCancelled
+                                      ? "bg-slate-100 text-slate-500 border-slate-300 line-through"
+                                      : badgeColor
+                                  }`}
                                 >
                                   {typeLabel}
+                                  {isCancelled ? ` (${lang === "hi" ? "रद्द" : "Cancelled"})` : ""}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3.5 whitespace-nowrap font-mono text-slate-600 font-medium">
+                              <td className={`py-2.5 px-3.5 whitespace-nowrap font-mono text-slate-600 font-medium ${isCancelled ? "line-through text-slate-400" : ""}`}>
                                 {entry.ref_id || "-"}
                               </td>
-                              <td className="py-2.5 px-3.5 whitespace-nowrap text-right font-mono font-semibold text-emerald-700">
+                              <td className={`py-2.5 px-3.5 whitespace-nowrap text-right font-mono font-semibold ${isCancelled ? "line-through text-slate-400" : "text-emerald-700"}`}>
                                 {entry.debit > 0 ? formatCurrency(entry.debit) : "-"}
                               </td>
-                              <td className="py-2.5 px-3.5 whitespace-nowrap text-right font-mono font-semibold text-rose-700">
+                              <td className={`py-2.5 px-3.5 whitespace-nowrap text-right font-mono font-semibold ${isCancelled ? "line-through text-slate-400" : "text-rose-700"}`}>
                                 {entry.credit > 0 ? formatCurrency(entry.credit) : "-"}
                               </td>
                               <td className="py-2.5 px-3.5 whitespace-nowrap text-slate-600">
@@ -539,7 +554,7 @@ export function StatementModal({
                                 </span>
                               </td>
                               <td className="py-2.5 px-3.5 whitespace-nowrap text-center no-print">
-                                {entry.entry_type === "payment" ? (
+                                {isRealActivePayment ? (
                                   <div className="inline-flex items-center gap-1.5 justify-center">
                                     <button
                                       type="button"
@@ -586,6 +601,10 @@ export function StatementModal({
                                       <span>{lang === "hi" ? "रद्द" : "Cancel"}</span>
                                     </button>
                                   </div>
+                                ) : isCancelled ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                    {lang === "hi" ? "रद्द (Cancelled)" : "Cancelled"}
+                                  </span>
                                 ) : (
                                   <span className="text-slate-300">-</span>
                                 )}

@@ -5480,3 +5480,268 @@ fn test_end_to_end_payment_against_purchase_invoice() {
     assert_eq!(pur_paid_final, 0);
 }
 
+#[test]
+fn test_cancelling_same_payment_twice_is_rejected() {
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute(
+        "INSERT INTO parties (id, name, type) VALUES (2, 'Test Customer', 'customer')",
+        [],
+    ).unwrap();
+    use crate::commands::{record_payment_inner, PaymentPayload, cancel_payment_inner};
+
+    // Record receipt payment for party 2
+    let ref_id = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 500000, // Rs 5,000
+        payment_mode: "cash".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Initial payment".to_string()),
+        ref_id: None,
+    }).unwrap();
+
+    let ledger_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = ?1 AND type = 'payment'",
+        rusqlite::params![ref_id],
+        |r| r.get(0),
+    ).unwrap();
+
+    // First cancellation succeeds
+    assert!(cancel_payment_inner(&mut conn, ledger_id, Some("First cancel")).is_ok());
+
+    // Second cancellation on the same payment must be rejected
+    let second_cancel_err = cancel_payment_inner(&mut conn, ledger_id, Some("Second cancel"))
+        .expect_err("Cancelling the same payment twice must be rejected");
+    assert!(
+        second_cancel_err.contains("already cancelled"),
+        "Expected 'already cancelled' error, got: {}",
+        second_cancel_err
+    );
+}
+
+#[test]
+fn test_altering_cancelled_payment_is_rejected() {
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute(
+        "INSERT INTO parties (id, name, type) VALUES (2, 'Test Customer', 'customer')",
+        [],
+    ).unwrap();
+    use crate::commands::{record_payment_inner, PaymentPayload, cancel_payment_inner, alter_payment_inner, AlterPaymentPayload};
+
+    let ref_id = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 300000,
+        payment_mode: "cash".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Payment to cancel".to_string()),
+        ref_id: None,
+    }).unwrap();
+
+    let ledger_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = ?1 AND type = 'payment'",
+        rusqlite::params![ref_id],
+        |r| r.get(0),
+    ).unwrap();
+
+    cancel_payment_inner(&mut conn, ledger_id, Some("Cancelled voucher")).unwrap();
+
+    // Attempting to alter the cancelled payment voucher must fail
+    let alter_err = alter_payment_inner(&mut conn, AlterPaymentPayload {
+        ledger_id,
+        date: "2026-11-01".to_string(),
+        amount_paise: 400000,
+        payment_mode: "bank".to_string(),
+        remark: Some("Trying to alter".to_string()),
+        ref_id: None,
+        reason: Some("Altering after cancel".to_string()),
+    }).expect_err("Altering a cancelled payment must be rejected");
+
+    assert!(
+        alter_err.contains("cancelled and cannot be altered"),
+        "Expected error mentioning cancelled and cannot be altered, got: {}",
+        alter_err
+    );
+}
+
+#[test]
+fn test_alter_cancel_payment_blocked_in_locked_period() {
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute(
+        "INSERT INTO parties (id, name, type) VALUES (2, 'Test Customer', 'customer')",
+        [],
+    ).unwrap();
+    use crate::commands::{record_payment_inner, PaymentPayload, cancel_payment_inner, alter_payment_inner, AlterPaymentPayload};
+
+    // Record payment in October
+    let ref_id = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 500000,
+        payment_mode: "cash".to_string(),
+        date: "2026-10-15".to_string(),
+        remark: Some("October payment".to_string()),
+        ref_id: None,
+    }).unwrap();
+
+    let ledger_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = ?1 AND type = 'payment'",
+        rusqlite::params![ref_id],
+        |r| r.get(0),
+    ).unwrap();
+
+    // Lock books until October 31, 2026
+    conn.execute("UPDATE settings SET books_locked_until = '2026-10-31' WHERE id = 1", []).unwrap();
+
+    // Cancelling an entry in locked period must be rejected
+    let cancel_err = cancel_payment_inner(&mut conn, ledger_id, Some("Try cancel in locked period"))
+        .expect_err("Cancelling locked period payment must fail");
+    assert!(
+        cancel_err.contains("बंद है") || cancel_err.contains("locked"),
+        "Expected locked period error, got: {}",
+        cancel_err
+    );
+
+    // Altering an entry in locked period must be rejected
+    let alter_err = alter_payment_inner(&mut conn, AlterPaymentPayload {
+        ledger_id,
+        date: "2026-11-02".to_string(),
+        amount_paise: 600000,
+        payment_mode: "cash".to_string(),
+        remark: Some("Try alter in locked period".to_string()),
+        ref_id: None,
+        reason: Some("Update payment".to_string()),
+    }).expect_err("Altering locked period payment must fail");
+    assert!(
+        alter_err.contains("बंद है") || alter_err.contains("locked"),
+        "Expected locked period error, got: {}",
+        alter_err
+    );
+}
+
+#[test]
+fn test_cancelling_payment_never_changes_invoice_total_only_paid_amount() {
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute(
+        "INSERT INTO parties (id, name, type) VALUES (2, 'Test Customer', 'customer')",
+        [],
+    ).unwrap();
+    use crate::commands::{record_payment_inner, PaymentPayload, cancel_payment_inner};
+
+    // Insert an active sale invoice for party 2 with total Rs 10,000 (1,000,000 paise)
+    conn.execute(
+        "INSERT INTO sales (invoice_no, date, customer_id, total_amount, paid_amount, payment_mode, status)
+         VALUES ('SALE-SAFE-01', '2026-11-01', 2, 1000000, 0, 'credit', 'active')",
+        [],
+    ).unwrap();
+
+    // Record payment of Rs 4,000 (400,000 paise) matched to this sale
+    let _ref_id = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 400000,
+        payment_mode: "bank".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Partial payment on sale".to_string()),
+        ref_id: Some("SALE-SAFE-01".to_string()),
+    }).unwrap();
+
+    // Verify invoice after payment: total = 10,000, paid = 4,000
+    let (total_after_pay, paid_after_pay): (i64, i64) = conn.query_row(
+        "SELECT total_amount, paid_amount FROM sales WHERE invoice_no = 'SALE-SAFE-01'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(total_after_pay, 1000000);
+    assert_eq!(paid_after_pay, 400000);
+
+    let ledger_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = 'SALE-SAFE-01' AND type = 'payment'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+
+    // Cancel the payment
+    cancel_payment_inner(&mut conn, ledger_id, Some("Customer cheque returned")).unwrap();
+
+    // Verify invoice after payment cancellation: total_amount is STILL 1,000,000, paid_amount is 0
+    let (total_after_cancel, paid_after_cancel): (i64, i64) = conn.query_row(
+        "SELECT total_amount, paid_amount FROM sales WHERE invoice_no = 'SALE-SAFE-01'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(total_after_cancel, 1000000, "Invoice total_amount must NEVER change when payment is cancelled!");
+    assert_eq!(paid_after_cancel, 0, "paid_amount must decrease back to 0");
+}
+
+#[test]
+fn test_payment_matched_to_cancelled_invoice_behaves_sanely() {
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute(
+        "INSERT INTO parties (id, name, type) VALUES (2, 'Test Customer', 'customer')",
+        [],
+    ).unwrap();
+    use crate::commands::{record_payment_inner, PaymentPayload, cancel_invoice_inner, cancel_payment_inner};
+
+    // 1. Create a sale invoice
+    conn.execute(
+        "INSERT INTO sales (invoice_no, date, customer_id, total_amount, paid_amount, payment_mode, status)
+         VALUES ('SALE-SANELY-01', '2026-11-01', 2, 500000, 0, 'credit', 'active')",
+        [],
+    ).unwrap();
+
+    // Cancel the sale invoice
+    cancel_invoice_inner(&mut conn, "SALE-SANELY-01", Some("Cancelled prior to payment")).unwrap();
+
+    // Assert that attempting to record a new payment matched to this cancelled invoice is rejected
+    let err = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 200000,
+        payment_mode: "cash".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: None,
+        ref_id: Some("SALE-SANELY-01".to_string()),
+    }).expect_err("Recording payment against cancelled invoice must be rejected");
+    assert!(err.contains("Cannot record payment against cancelled invoice"));
+
+    // 2. Sane behavior when payment was recorded BEFORE invoice was cancelled, then payment is cancelled:
+    conn.execute(
+        "INSERT INTO sales (invoice_no, date, customer_id, total_amount, paid_amount, payment_mode, status)
+         VALUES ('SALE-SANELY-02', '2026-11-01', 2, 800000, 0, 'credit', 'active')",
+        [],
+    ).unwrap();
+
+    // Record payment of Rs 3,000
+    record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 300000,
+        payment_mode: "cash".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: None,
+        ref_id: Some("SALE-SANELY-02".to_string()),
+    }).unwrap();
+
+    let pay_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = 'SALE-SANELY-02' AND type = 'payment'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+
+    // Now invoice is cancelled (cancel_invoice_inner reverses unreversed ledger entries and issues refund reversal)
+    cancel_invoice_inner(&mut conn, "SALE-SANELY-02", Some("Order cancelled by buyer")).unwrap();
+
+    // Now cancelling the earlier payment voucher should cleanly reverse the payment without altering invoice total
+    assert!(cancel_payment_inner(&mut conn, pay_id, Some("Cancel payment on cancelled invoice")).is_ok());
+
+    let (tot, paid, st): (i64, i64, String) = conn.query_row(
+        "SELECT total_amount, paid_amount, status FROM sales WHERE invoice_no = 'SALE-SANELY-02'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).unwrap();
+    assert_eq!(tot, 800000, "Invoice total must remain unchanged");
+    assert_eq!(paid, 0, "paid_amount must be clamped to 0");
+    assert_eq!(st, "cancelled", "Invoice status remains cancelled");
+}
+

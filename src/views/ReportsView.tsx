@@ -33,6 +33,12 @@ import {
 } from "../components/icons";
 import { formatCurrency, formatDate } from "../utils/formatters";
 import {
+  localDateIso,
+  localTodayIso,
+  localMonthStartIso,
+  localFyStartIso,
+} from "../utils/dateUtils";
+import {
   prepareSalesGstModeCsv,
   prepareGroupInvoicesCsv,
   prepareItemPartiesCsv,
@@ -93,10 +99,10 @@ export function ReportsView({
   const [activeTab, setActiveTab] = useState<ReportTab>("sales_reg");
 
   const getInitialDates = () => {
-    const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
-    const to = now.toISOString().split("T")[0];
-    return { from, to };
+    return {
+      from: localMonthStartIso(),
+      to: localTodayIso(),
+    };
   };
 
   const initial = getInitialDates();
@@ -213,7 +219,7 @@ export function ReportsView({
   }, [refreshTrigger]);
 
   const setToday = () => {
-    const today = new Date().toISOString().split("T")[0];
+    const today = localTodayIso();
     setFromDate(today);
     setToDate(today);
     setActiveDatePreset("today");
@@ -221,27 +227,23 @@ export function ReportsView({
   };
 
   const setLast7Days = () => {
-    const now = new Date();
-    const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    setFromDate(past.toISOString().split("T")[0]);
-    setToDate(now.toISOString().split("T")[0]);
+    const past = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    setFromDate(localDateIso(past));
+    setToDate(localTodayIso());
     setActiveDatePreset("7_days");
     setPage(1);
   };
 
   const setThisMonth = () => {
-    const now = new Date();
-    setFromDate(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0]);
-    setToDate(now.toISOString().split("T")[0]);
+    setFromDate(localMonthStartIso());
+    setToDate(localTodayIso());
     setActiveDatePreset("this_month");
     setPage(1);
   };
 
   const setThisFiscalYear = () => {
-    const now = new Date();
-    const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-    setFromDate(`${year}-04-01`);
-    setToDate(now.toISOString().split("T")[0]);
+    setFromDate(localFyStartIso());
+    setToDate(localTodayIso());
     setActiveDatePreset("fiscal_year");
     setPage(1);
   };

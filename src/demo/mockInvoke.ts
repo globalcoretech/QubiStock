@@ -30,6 +30,7 @@ import {
   PartyBalance,
   InvoicePrintDetails,
 } from "../types";
+import { localTodayIso } from "../utils/dateUtils";
 
 // In-memory cloneable state for mutations during interactive demo/screenshots
 class DemoStore {
@@ -115,15 +116,16 @@ export function setupDemoMocks() {
         return [];
 
       case "update_item_cmd": {
-        const it = store.items.find((x) => x.id === payload.id);
+        const pld = payload?.payload || payload;
+        const it = store.items.find((x) => x.id === pld.id);
         if (it) {
-          if (payload.name) it.name = payload.name;
-          if (payload.hsn !== undefined) it.hsn = payload.hsn;
-          if (payload.gstRate !== undefined) it.gst_rate = payload.gstRate;
-          if (payload.gstStatus) it.gst_status = payload.gstStatus;
-          if (payload.baseUnit) it.base_unit = payload.baseUnit;
-          if (payload.category !== undefined) it.category = payload.category;
-          if (payload.isActive !== undefined) it.is_active = payload.isActive;
+          if (pld.name) it.name = pld.name;
+          if (pld.hsn !== undefined) it.hsn = pld.hsn;
+          if (pld.gstRate !== undefined || pld.gst_rate !== undefined) it.gst_rate = pld.gstRate ?? pld.gst_rate;
+          if (pld.gstStatus || pld.gst_status) it.gst_status = pld.gstStatus ?? pld.gst_status;
+          if (pld.baseUnit || pld.base_unit) it.base_unit = pld.baseUnit ?? pld.base_unit;
+          if (pld.category !== undefined) it.category = pld.category;
+          if (pld.isActive !== undefined || pld.is_active !== undefined) it.is_active = pld.isActive ?? pld.is_active;
         }
         return true;
       }
@@ -157,16 +159,17 @@ export function setupDemoMocks() {
       }
 
       case "update_party_cmd": {
-        const p = store.parties.find((x) => x.id === payload.id);
+        const pld = payload?.payload || payload;
+        const p = store.parties.find((x) => x.id === pld.id);
         if (p) {
-          if (payload.name) p.name = payload.name;
-          if (payload.partyType) p.party_type = payload.partyType;
-          if (payload.category) p.category = payload.category;
-          if (payload.village !== undefined) p.village = payload.village;
-          if (payload.address !== undefined) p.address = payload.address;
-          if (payload.gstin !== undefined) p.gstin = payload.gstin;
-          if (payload.phone !== undefined) p.phone = payload.phone;
-          if (payload.stateCode !== undefined) p.state_code = payload.stateCode;
+          if (pld.name) p.name = pld.name;
+          if (pld.partyType || pld.party_type) p.party_type = pld.partyType ?? pld.party_type;
+          if (pld.category) p.category = pld.category;
+          if (pld.village !== undefined) p.village = pld.village;
+          if (pld.address !== undefined) p.address = pld.address;
+          if (pld.gstin !== undefined) p.gstin = pld.gstin;
+          if (pld.phone !== undefined) p.phone = pld.phone;
+          if (pld.stateCode !== undefined || pld.state_code !== undefined) p.state_code = pld.stateCode ?? pld.state_code;
         }
         return true;
       }
@@ -264,7 +267,7 @@ export function setupDemoMocks() {
 
         store.invoices[invNo] = {
           invoice_no: invNo,
-          date: invPayload.date || new Date().toISOString().split("T")[0],
+          date: invPayload.date || localTodayIso(),
           party_name: partyName,
           party_phone: party?.phone || null,
           party_gstin: party?.gstin || null,
@@ -300,7 +303,7 @@ export function setupDemoMocks() {
         }
 
         store.recentEntries.unshift({
-          date: invPayload.date || new Date().toISOString().split("T")[0],
+          date: invPayload.date || localTodayIso(),
           entry_type: entryType,
           invoice_no: invNo,
           party_name: partyName,
@@ -345,7 +348,7 @@ export function setupDemoMocks() {
 
         const party = store.parties.find((p) => p.id === pPayload.party_id);
         store.recentEntries.unshift({
-          date: pPayload.date || new Date().toISOString().split("T")[0],
+          date: pPayload.date || localTodayIso(),
           entry_type: "payment",
           invoice_no: ref,
           party_name: party ? party.name : "पार्टी",
@@ -355,6 +358,12 @@ export function setupDemoMocks() {
 
         return ref;
       }
+
+      case "alter_payment_cmd":
+        return true;
+
+      case "cancel_payment_cmd":
+        return true;
 
       case "get_party_statement_cmd": {
         const pId = payload.partyId as number;

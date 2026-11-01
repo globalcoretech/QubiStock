@@ -13,6 +13,7 @@ import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database } f
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";
+import { localTodayIso } from "../utils/dateUtils";
 import { PrinterSetupView } from "./PrinterSetupView";
 
 interface SettingsViewProps {
@@ -120,7 +121,7 @@ export function SettingsView({
       settings: formData,
       invoiceDetails: {
         invoice_no: invNo,
-        date: new Date().toISOString().split("T")[0],
+        date: localTodayIso(),
         party_name: "सुरेश कुमार पाटीदार (किसान)",
         party_village: "ग्राम बिलकिसगंज, सीहोर",
         party_phone: "9826012345",

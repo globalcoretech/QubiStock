@@ -10,6 +10,7 @@ import {
 import { numberToWordsHindi, numberToWordsEnglish } from "./numberToWords";
 import { determineBillType, formatBillNumber } from "./billNumber";
 import { generateUpiQrDataUrl } from "./qrCode";
+import { localTodayIso } from "./dateUtils";
 
 export { determineBillType, formatBillNumber };
 
@@ -304,7 +305,7 @@ export function calculateBill(
   });
 
   const invoiceNo = invoiceDetails.invoice_no || formatBillNumber(1, settings.fyPrefix || "KK", invoiceDetails.date);
-  const date = invoiceDetails.date || new Date().toISOString().split("T")[0];
+  const date = invoiceDetails.date || localTodayIso();
 
   // Party address: Show "-" when address / village is missing. No default "सीहोर".
   const partyAddress = (invoiceDetails.party_village && invoiceDetails.party_village.trim())

@@ -5,6 +5,7 @@ import { Translations, Language } from "../i18n";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { SlidersHorizontal, ArrowDownLeft, ArrowUpRight } from "../components/icons";
+import { localTodayIso } from "../utils/dateUtils";
 
 interface StockAdjustmentViewProps {
   refreshTrigger: number;
@@ -28,7 +29,7 @@ export function StockAdjustmentView({
   const [qty, setQty] = useState("");
   const [unit, setUnit] = useState("kg");
   const [reason, setReason] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(localTodayIso);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   useEffect(() => {

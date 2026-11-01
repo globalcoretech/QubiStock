@@ -106,7 +106,6 @@ export function EditItemModal({
       };
       await invoke("update_item_cmd", {
         payload: updatePayload,
-        ...updatePayload,
       });
 
       setIsSaving(false);

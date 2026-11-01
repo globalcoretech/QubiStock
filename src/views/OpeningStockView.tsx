@@ -6,6 +6,7 @@ import { SearchableSelect } from "../components/SearchableSelect";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { Plus } from "../components/icons";
 import { formatCurrency } from "../utils/formatters";
+import { localTodayIso } from "../utils/dateUtils";
 
 interface OpeningStockViewProps {
   refreshTrigger: number;
@@ -28,7 +29,7 @@ export function OpeningStockView({
   const [qty, setQty] = useState("");
   const [rate, setRate] = useState("");
   const [unit, setUnit] = useState("kg");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(localTodayIso);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   useEffect(() => {

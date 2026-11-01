@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Party, PartyBalance, PendingBill, SearchableOption, Feedback } from "../types";
 import { Translations, Language } from "../i18n";
 import { formatCurrency, formatRupeesCompact, formatDate } from "../utils/formatters";
+import { localTodayIso } from "../utils/dateUtils";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { AddPartyModal } from "../components/AddPartyModal";
@@ -62,7 +63,7 @@ export function PaymentView({
   });
   const [amountRupees, setAmountRupees] = useState(initialAmount || "");
   const [paymentMode, setPaymentMode] = useState<"cash" | "upi_bank" | "bank">("cash");
-  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(() => localTodayIso());
   const [remark, setRemark] = useState("");
   const [customRefId, setCustomRefId] = useState(initialMatchedInvoiceNo || "");
   const [matchedInvoiceNo, setMatchedInvoiceNo] = useState(initialMatchedInvoiceNo || "");
@@ -75,11 +76,12 @@ export function PaymentView({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
 
-  // Load parties and party balances
-  const loadPartiesAndBalances = async () => {
+  // Load parties and party balances with partyType filter based on tab
+  const loadPartiesAndBalances = async (targetType?: "customer" | "supplier") => {
     try {
+      const activeFilter = targetType || (paymentType === "receipt" ? "customer" : "supplier");
       const [ptList, balList] = await Promise.all([
-        invoke<Party[]>("get_parties_cmd", { partyType: null }),
+        invoke<Party[]>("get_parties_cmd", { partyType: activeFilter }),
         invoke<PartyBalance[]>("get_party_balances_cmd"),
       ]);
       setParties(ptList);
@@ -90,8 +92,9 @@ export function PaymentView({
   };
 
   useEffect(() => {
-    loadPartiesAndBalances();
-  }, [refreshTrigger]);
+    const targetType = paymentType === "receipt" ? "customer" : "supplier";
+    loadPartiesAndBalances(targetType);
+  }, [paymentType, refreshTrigger]);
 
   useEffect(() => {
     if (initialType) {
@@ -265,9 +268,10 @@ export function PaymentView({
       await invoke<string>("record_payment_cmd", { payload });
       const partyName = selectedParty?.name || "";
 
-      // Fetch fresh balances from Rust
+      // Fetch fresh balances and filtered parties from Rust
+      const currentTargetType = paymentType === "receipt" ? "customer" : "supplier";
       const [ptList, balList] = await Promise.all([
-        invoke<Party[]>("get_parties_cmd", { partyType: null }),
+        invoke<Party[]>("get_parties_cmd", { partyType: currentTargetType }),
         invoke<PartyBalance[]>("get_party_balances_cmd"),
       ]);
       setParties(ptList);
@@ -338,6 +342,7 @@ export function PaymentView({
             data-testid="payment-tab-receipt"
             onClick={() => {
               setPaymentType("receipt");
+              setPartyId("");
               setMatchedInvoiceNo("");
               setCustomRefId("");
             }}
@@ -355,6 +360,7 @@ export function PaymentView({
             data-testid="payment-tab-payment"
             onClick={() => {
               setPaymentType("payment");
+              setPartyId("");
               setMatchedInvoiceNo("");
               setCustomRefId("");
             }}

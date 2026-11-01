@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { X, Edit, AlertCircle } from "./icons";
 import { Language } from "../i18n";
+import { localTodayIso } from "../utils/dateUtils";
 
 interface EditInvoiceNoModalProps {
   isOpen: boolean;
@@ -35,7 +36,7 @@ export function EditInvoiceNoModal({
   useEffect(() => {
     if (isOpen) {
       setNewInvoiceNo(currentInvoiceNo || "");
-      setNewSuppDate(supplierInvoiceDate || new Date().toISOString().split("T")[0]);
+      setNewSuppDate(supplierInvoiceDate || localTodayIso());
       setReason("");
       setErrorMsg("");
       setWarningMsg("");

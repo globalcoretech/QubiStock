@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { formatCurrency } from "../utils/formatters";
+import { localTodayIso } from "../utils/dateUtils";
 import {
   BahiLogoMark,
   DuotoneReceipt,
@@ -70,16 +71,7 @@ export function DashboardView({
   const isBillBlocked =
     !settings.shopName?.trim() || (settings.isGstRegistered && !settings.gstin?.trim());
 
-  // Use local timezone date (YYYY-MM-DD) instead of UTC to prevent date mismatch
-  const getLocalTodayIso = (): string => {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  };
-
-  const todayIso = getLocalTodayIso();
+  const todayIso = localTodayIso();
 
   const loadAllData = async () => {
     const errors: string[] = [];

@@ -110,7 +110,6 @@ export function EditPartyModal({
       };
       await invoke("update_party_cmd", {
         payload: updatePayload,
-        ...updatePayload,
       });
 
       setIsSaving(false);

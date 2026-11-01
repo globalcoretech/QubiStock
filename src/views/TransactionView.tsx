@@ -5,6 +5,7 @@ import { AppSettings, Item, Godown, Party, Feedback, LastRates, SearchableOption
 import { Translations, Language } from "../i18n";
 import { formatCurrency } from "../utils/formatters";
 import { formatBillNumber } from "../utils/billNumber";
+import { localTodayIso } from "../utils/dateUtils";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { AddPartyModal } from "../components/AddPartyModal";
@@ -47,14 +48,14 @@ export function TransactionView({
   const [godowns, setGodowns] = useState<Godown[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
 
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(localTodayIso);
   const [invoiceNo, setInvoiceNo] = useState(() => {
     const prefix = type === "purchase" ? "PUR" : settings?.fyPrefix || "KK";
     return formatBillNumber(1, prefix, new Date());
   });
 
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
-  const [supplierInvoiceDate, setSupplierInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
+  const [supplierInvoiceDate, setSupplierInvoiceDate] = useState(localTodayIso);
   const [invoiceNoWarning, setInvoiceNoWarning] = useState("");
   const [invoiceNoError, setInvoiceNoError] = useState("");
 
@@ -599,7 +600,7 @@ export function TransactionView({
       if (type === "purchase") {
         setPartyId("");
       }
-      const today = new Date().toISOString().split("T")[0];
+      const today = localTodayIso();
       setDate(today);
       setSupplierInvoiceDate(today);
       await refreshNextInvoicePreview(today);

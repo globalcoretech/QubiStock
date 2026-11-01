@@ -538,6 +538,7 @@ export interface PartyStatementItem {
   payment_mode: string;
   remark: string | null;
   running_balance: number;
+  is_cancelled?: boolean;
 }
 
 export interface PartyStatement {
