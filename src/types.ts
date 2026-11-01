@@ -376,6 +376,7 @@ export interface RecentEntry {
 }
 
 export interface InvoicePrintLine {
+  item_id?: number | null;
   item_name: string;
   hsn?: string;
   qty: number;      // milli
@@ -392,6 +393,8 @@ export interface InvoicePrintDetails {
   invoice_no: string;
   date: string;
   party_name: string;
+  party_id?: number | null;
+  godown_id?: number | null;
   party_phone: string | null;
   party_gstin: string | null;
   party_village: string | null;
@@ -403,6 +406,7 @@ export interface InvoicePrintDetails {
   supplier_invoice_no?: string | null;
   supplier_invoice_date?: string | null;
   bill_mode?: "WITH_GST" | "WITHOUT_GST" | string | null;
+  status?: string | null;
   lines: InvoicePrintLine[];
 }
 
@@ -420,6 +424,7 @@ export interface RegisterEntry {
   payment_mode: string;
   paid_amount: number;
   supplier_invoice_no?: string | null;
+  status?: string;
 }
 
 export interface RegisterReport {
@@ -721,4 +726,14 @@ export interface AuditLogEntry {
   after_json: string | null;
   reason: string | null;
   created_at: string;
+}
+
+export interface AlterPaymentPayload {
+  ledger_id: number;
+  date: string;
+  amount_paise: number;
+  payment_mode: string;
+  remark?: string | null;
+  ref_id?: string | null;
+  reason?: string | null;
 }

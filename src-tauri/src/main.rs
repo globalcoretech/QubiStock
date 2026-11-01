@@ -102,7 +102,11 @@ fn main() {
             commands::get_party_items_report_cmd,
             commands::get_audit_logs_cmd,
             commands::change_sales_invoice_no_cmd,
-            commands::update_purchase_supplier_invoice_cmd
+            commands::update_purchase_supplier_invoice_cmd,
+            commands::cancel_invoice_cmd,
+            commands::alter_sale_cmd,
+            commands::alter_purchase_cmd,
+            commands::alter_payment_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

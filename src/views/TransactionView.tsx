@@ -28,6 +28,8 @@ interface TransactionViewProps {
   onPrintInvoice: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
   t: Translations;
   lang: Language;
+  alteringInvoiceNo?: string | null;
+  onCancelAlteration?: () => void;
 }
 
 export function TransactionView({
@@ -38,6 +40,8 @@ export function TransactionView({
   onPrintInvoice,
   t,
   lang,
+  alteringInvoiceNo,
+  onCancelAlteration,
 }: TransactionViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [godowns, setGodowns] = useState<Godown[]>([]);
@@ -94,6 +98,8 @@ export function TransactionView({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [lastSavedInvoiceNo, setLastSavedInvoiceNo] = useState("");
   const [pendingTaxMode, setPendingTaxMode] = useState<"with_tax" | "without_tax" | "none">("with_tax");
+  const [alterationReason, setAlterationReason] = useState("");
+  const [isLoadingAlteration, setIsLoadingAlteration] = useState(false);
   const [lines, setLines] = useState<any[]>([
     {
       itemId: "",
@@ -170,8 +176,75 @@ export function TransactionView({
   };
 
   useEffect(() => {
-    refreshNextInvoicePreview(date);
-  }, [type, date, settings?.fyPrefix, refreshTrigger]);
+    if (!alteringInvoiceNo) {
+      refreshNextInvoicePreview(date);
+    }
+  }, [type, date, settings?.fyPrefix, refreshTrigger, alteringInvoiceNo]);
+
+  // Load existing invoice for alteration
+  useEffect(() => {
+    if (!alteringInvoiceNo) {
+      setAlterationReason("");
+      return;
+    }
+    let isMounted = true;
+    setIsLoadingAlteration(true);
+    invoke<any>("get_invoice_details_cmd", { invoiceNo: alteringInvoiceNo })
+      .then((details) => {
+        if (!isMounted) return;
+        if (details.invoice_no) setInvoiceNo(details.invoice_no);
+        if (details.date) setDate(details.date);
+        if (details.party_id) setPartyId(details.party_id.toString());
+        if (details.godown_id) setGodownId(details.godown_id.toString());
+        if (details.payment_mode) setPaymentMode(details.payment_mode);
+        if (typeof details.paid_amount === "number") {
+          setPaidAmountRupees((details.paid_amount / 100).toString());
+        }
+        if (details.supplier_invoice_no) setSupplierInvoiceNo(details.supplier_invoice_no);
+        if (details.supplier_invoice_date) setSupplierInvoiceDate(details.supplier_invoice_date);
+
+        if (details.lines && details.lines.length > 0) {
+          const loaded = details.lines.map((l: any) => {
+            const taxb = (l.taxable || 0) / 100;
+            const tax = ((l.cgst || 0) + (l.sgst || 0) + (l.igst || 0)) / 100;
+            const gstPct = taxb > 0 ? Math.round((tax * 100) / taxb) : 0;
+            return {
+              itemId: (l.item_id || "").toString(),
+              qty: ((l.qty || 0) / 1000).toString(),
+              unit: l.unit || "kg",
+              rate: ((l.rate || 0) / 100).toString(),
+              gst: gstPct,
+              availableStock: 0,
+              lastRates: null,
+            };
+          });
+          setLines(loaded);
+          const gId = details.godown_id ? details.godown_id.toString() : "1";
+          loaded.forEach((l: any, idx: number) => {
+            if (l.itemId) {
+              fetchLineInfo(idx, l.itemId, gId);
+            }
+          });
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load invoice details for alteration:", err);
+        setFeedback({
+          message:
+            lang === "hi"
+              ? "संशोधन हेतु बिल लोड करने में विफल: " + String(err)
+              : "Failed to load invoice for alteration: " + String(err),
+          isError: true,
+        });
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingAlteration(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [alteringInvoiceNo]);
 
   const loadAllData = async () => {
     try {
@@ -375,6 +448,17 @@ export function TransactionView({
       }
     }
 
+    if (alteringInvoiceNo && !alterationReason.trim()) {
+      setFeedback({
+        message:
+          lang === "hi"
+            ? "संशोधन का कारण (Reason for Alteration) भरना अनिवार्य है!"
+            : "Reason for alteration is required!",
+        isError: true,
+      });
+      return;
+    }
+
     if (!invoiceNo.trim() || !partyId || !godownId || lines.length === 0) {
       setFeedback({ message: t.salePurchase.validationError, isError: true });
       return;
@@ -459,6 +543,31 @@ export function TransactionView({
     };
 
     try {
+      if (alteringInvoiceNo) {
+        const cmd = isSale ? "alter_sale_cmd" : "alter_purchase_cmd";
+        const finalInvNo = await invoke<string>(cmd, {
+          invoiceNo: alteringInvoiceNo,
+          payload,
+          reason: alterationReason.trim() || null,
+        });
+        const displayInv = finalInvNo || savedInv;
+        setLastSavedInvoiceNo(displayInv);
+        setFeedback({
+          message:
+            lang === "hi"
+              ? `बिल सफलतापूर्वक संशोधित हुआ (${displayInv} • ${formatCurrency(Math.round(grandTotalRupees * 100))})`
+              : `Invoice altered successfully (${displayInv} • ${formatCurrency(Math.round(grandTotalRupees * 100))})`,
+          isError: false,
+        });
+        setAlterationReason("");
+        if (onRefresh) onRefresh();
+        if (onCancelAlteration) onCancelAlteration();
+        if (isSale && modeToUse !== "none") {
+          onPrintInvoice(displayInv, modeToUse);
+        }
+        return;
+      }
+
       const finalInvNo = await invoke<string>("save_invoice_cmd", { payload });
       const displayInv = finalInvNo || savedInv;
       setLastSavedInvoiceNo(displayInv);
@@ -656,6 +765,66 @@ export function TransactionView({
       </div>
 
       <FeedbackBanner feedback={feedback} />
+
+      {/* Alteration Mode Banner */}
+      {alteringInvoiceNo && (
+        <div
+          data-testid="transaction-alteration-banner"
+          className="p-2.5 px-3.5 bg-amber-50 border-2 border-amber-400 rounded-panel flex flex-wrap items-center justify-between gap-2.5 flex-shrink-0 shadow-xs"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="px-2 py-0.5 bg-amber-300 text-amber-950 font-black rounded text-[11px] uppercase tracking-wide">
+              {lang === "hi" ? "संशोधन मोड (Alteration)" : "Alteration Mode"}
+            </span>
+            <div className="text-xs">
+              <span className="font-bold text-slate-900">
+                {lang === "hi" ? "बिल संख्या: " : "Invoice: "}
+                <span className="font-mono text-amber-900 font-extrabold">{alteringInvoiceNo}</span>
+              </span>
+              {isLoadingAlteration ? (
+                <span className="text-[11px] text-amber-800 ml-2 animate-pulse font-semibold">
+                  {lang === "hi" ? "(डेटा लोड हो रहा है...)" : "(Loading details...)"}
+                </span>
+              ) : (
+                <span className="text-[11px] text-amber-800 ml-2 hidden sm:inline">
+                  {lang === "hi"
+                    ? "(मौजूदा बिल में बदलाव ऑडिट लॉग में दर्ज होंगे)"
+                    : "(Changes will be recorded in audit log)"}
+                </span>
+              )}
+            </div>
+          </div>
+          {onCancelAlteration && (
+            <button
+              type="button"
+              data-testid="cancel-alteration-btn"
+              onClick={onCancelAlteration}
+              className="px-2.5 py-1 bg-white border border-amber-400 hover:bg-amber-100 text-amber-900 rounded-lg text-xs font-bold flex items-center gap-1 shadow-2xs transition-colors"
+            >
+              <X size={14} />
+              <span>{lang === "hi" ? "संशोधन रद्द करें (Exit)" : "Exit Alteration"}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* WAC Notice for Purchase Alteration */}
+      {type === "purchase" && alteringInvoiceNo && (
+        <div
+          data-testid="purchase-wac-alteration-notice"
+          className="p-2.5 px-3 bg-blue-50 border border-blue-300 rounded-panel text-blue-950 text-xs flex items-start gap-2 flex-shrink-0 shadow-2xs"
+        >
+          <AlertCircle size={16} className="text-blue-600 flex-shrink-0 mt-0.5" />
+          <div className="leading-snug">
+            <strong className="font-bold">
+              {lang === "hi" ? "लागत (WAC) सम्बन्धी महत्वपूर्ण सूचना: " : "Important Cost (WAC) Notice: "}
+            </strong>
+            {lang === "hi"
+              ? "इस खरीद बिल में बदलाव से भविष्य की बिक्री के लिए औसत लागत (WAC) अपडेट होगी, लेकिन पहले से दर्ज बिक्री बिलों की लागत (cost_paise) अपरिवर्तित रहेगी।"
+              : "Modifying this purchase bill updates weighted average cost (WAC) for future sales, but historical sales snapshot costs remain unchanged."}
+          </div>
+        </div>
+      )}
 
       {/* Warning banner when shop details missing for sale */}
       {isBillBlocked && (
@@ -1092,6 +1261,27 @@ export function TransactionView({
                 </div>
               </div>
             )}
+
+            {alteringInvoiceNo && (
+              <div className="pt-2 text-xs">
+                <label className="block text-[11px] font-bold text-amber-950 mb-0.5">
+                  {lang === "hi" ? "संशोधन का कारण (Reason for Alteration) *" : "Reason for Alteration *"}
+                </label>
+                <input
+                  type="text"
+                  required
+                  data-testid="alteration-reason-input"
+                  value={alterationReason}
+                  onChange={(e) => setAlterationReason(e.target.value)}
+                  placeholder={
+                    lang === "hi"
+                      ? "उदा. मात्रा में भूल सुधार, रेट संशोधन, पार्टी का अनुरोध..."
+                      : "e.g. Corrected quantity, adjusted price, party request..."
+                  }
+                  className="w-full px-2 py-1.5 border-2 border-amber-400 bg-amber-50/60 rounded-lg font-bold text-amber-950 focus:outline-none focus:ring-1 focus:ring-amber-500 text-xs"
+                />
+              </div>
+            )}
           </div>
 
           {/* Bottom: Action Buttons */}
@@ -1103,17 +1293,19 @@ export function TransactionView({
                     type="button"
                     data-testid="transaction-submit-with-tax-btn"
                     onClick={() => handleInitiateSaveWithMode("with_tax")}
-                    disabled={lines.length === 0 || hasOversell || isBillBlocked}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked || (alteringInvoiceNo ? !alterationReason.trim() : false)}
                     className={`min-h-[46px] ${
                       isBillBlocked
                         ? "bg-slate-400 cursor-not-allowed opacity-60"
+                        : alteringInvoiceNo
+                        ? "bg-amber-700 hover:bg-amber-800"
                         : "bg-emerald-700 hover:bg-emerald-800"
                     } disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl shadow-md flex flex-col items-center justify-center gap-0.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
                     title="टैक्स विवरण (GST, HSN) सहित पक्का बिल बनाएं व प्रिंट करें"
                   >
                     <div className="flex items-center gap-1.5">
                       <Printer size={16} />
-                      <span>टैक्स सहित प्रिंट</span>
+                      <span>{alteringInvoiceNo ? (lang === "hi" ? "संशोधन सहेजें व GST प्रिंट" : "Save & Print GST") : "टैक्स सहित प्रिंट"}</span>
                     </div>
                     <span className="text-[10px] font-normal opacity-90">(GST बिल)</span>
                   </button>
@@ -1122,7 +1314,7 @@ export function TransactionView({
                     type="button"
                     data-testid="transaction-submit-without-tax-btn"
                     onClick={() => handleInitiateSaveWithMode("without_tax")}
-                    disabled={lines.length === 0 || hasOversell || isBillBlocked}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked || (alteringInvoiceNo ? !alterationReason.trim() : false)}
                     className={`min-h-[46px] ${
                       isBillBlocked
                         ? "bg-slate-400 cursor-not-allowed opacity-60"
@@ -1132,7 +1324,7 @@ export function TransactionView({
                   >
                     <div className="flex items-center gap-1.5">
                       <Printer size={16} />
-                      <span>बिना टैक्स प्रिंट</span>
+                      <span>{alteringInvoiceNo ? (lang === "hi" ? "संशोधन सहेजें (सरल)" : "Save & Print Simple") : "बिना टैक्स प्रिंट"}</span>
                     </div>
                     <span className="text-[10px] font-normal opacity-90">(सरल खुदरा पर्ची)</span>
                   </button>
@@ -1145,10 +1337,12 @@ export function TransactionView({
                   <button
                     type="button"
                     onClick={() => handleInitiateSaveWithMode("none")}
-                    disabled={lines.length === 0 || hasOversell || isBillBlocked}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked || (alteringInvoiceNo ? !alterationReason.trim() : false)}
                     className="text-forest hover:underline font-bold disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    {lang === "hi" ? "सिर्फ सेव करें (बिना प्रिंट)" : "Save Only"}
+                    {alteringInvoiceNo
+                      ? (lang === "hi" ? "सिर्फ संशोधन सहेजें (बिना प्रिंट)" : "Save Alteration Only")
+                      : (lang === "hi" ? "सिर्फ सेव करें (बिना प्रिंट)" : "Save Only")}
                   </button>
                 </div>
               </div>
@@ -1161,17 +1355,24 @@ export function TransactionView({
                     lines.length === 0 ||
                     hasOversell ||
                     isBillBlocked ||
-                    (!isSale && (!partyId || partyId === "1" || selectedParty?.name?.toLowerCase().includes("walk-in")))
+                    (!isSale && (!partyId || partyId === "1" || selectedParty?.name?.toLowerCase().includes("walk-in"))) ||
+                    (alteringInvoiceNo ? !alterationReason.trim() : false)
                   }
                   title={
                     !isSale && (!partyId || partyId === "1")
                       ? "पहले सप्लायर चुनो"
                       : undefined
                   }
-                  className="w-full min-h-[48px] bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base rounded-xl shadow-md flex items-center justify-center gap-2.5 transition-all hover:scale-[1.01]"
+                  className={`w-full min-h-[48px] ${
+                    alteringInvoiceNo ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-600 hover:bg-blue-700"
+                  } disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base rounded-xl shadow-md flex items-center justify-center gap-2.5 transition-all hover:scale-[1.01]`}
                 >
                   <Printer size={20} className="flex-shrink-0" />
-                  <span>{lang === "hi" ? "माल दर्ज करो और पर्ची बनाओ" : "Record Purchase & Save"}</span>
+                  <span>
+                    {alteringInvoiceNo
+                      ? (lang === "hi" ? "खरीद बिल संशोधन सहेजें" : "Save Purchase Alteration")
+                      : (lang === "hi" ? "माल दर्ज करो और पर्ची बनाओ" : "Record Purchase & Save")}
+                  </span>
                 </button>
                 <p className="text-[10px] text-muted text-center font-medium">
                   शॉर्टकट: <span className="font-mono font-bold">Ctrl + Enter</span> से तुरंत सुरक्षित करें

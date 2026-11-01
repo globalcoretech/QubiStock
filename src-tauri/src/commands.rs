@@ -1075,13 +1075,13 @@ pub struct DashboardStats {
 
 pub fn get_dashboard_stats_inner(conn: &Connection, today_date: &str) -> Result<DashboardStats, String> {
     let today_sales: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![today_date],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let today_purchases: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![today_date],
         |row| row.get(0)
     ).unwrap_or(0);
@@ -1127,11 +1127,13 @@ pub fn get_recent_entries_inner(conn: &Connection) -> Result<Vec<RecentEntry>, S
                 COALESCE((SELECT name FROM parties WHERE id = customer_id), 'Walk-in') as party_name, 
                 total_amount, payment_mode
          FROM sales
+         WHERE COALESCE(status, 'active') <> 'cancelled'
          UNION ALL
          SELECT date, 'purchase' as entry_type, invoice_no, 
                 COALESCE((SELECT name FROM parties WHERE id = supplier_id), 'Supplier') as party_name, 
                 total_amount, payment_mode
          FROM purchases
+         WHERE COALESCE(status, 'active') <> 'cancelled'
          ORDER BY date DESC, invoice_no DESC
          LIMIT 5"
     ).map_err(|e| e.to_string())?;
@@ -1162,6 +1164,8 @@ pub fn get_recent_entries_cmd(app: AppHandle) -> Result<Vec<RecentEntry>, String
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InvoicePrintLine {
+    #[serde(default)]
+    pub item_id: Option<i64>,
     pub item_name: String,
     #[serde(default)]
     pub hsn: Option<String>,
@@ -1180,6 +1184,10 @@ pub struct InvoicePrintDetails {
     pub invoice_no: String,
     pub date: String,
     pub party_name: String,
+    #[serde(default)]
+    pub party_id: Option<i64>,
+    #[serde(default)]
+    pub godown_id: Option<i64>,
     pub party_phone: Option<String>,
     pub party_gstin: Option<String>,
     pub party_village: Option<String>,
@@ -1194,12 +1202,14 @@ pub struct InvoicePrintDetails {
     pub supplier_invoice_no: Option<String>,
     #[serde(default)]
     pub supplier_invoice_date: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
     pub lines: Vec<InvoicePrintLine>,
 }
 
 pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<InvoicePrintDetails, String> {
     let sale_res = conn.query_row(
-        "SELECT s.invoice_no, s.date, p.name, p.phone, p.gstin, p.village, s.payment_mode, s.paid_amount, s.total_amount, p.address, p.state_code
+        "SELECT s.invoice_no, s.date, p.name, p.phone, p.gstin, p.village, s.payment_mode, s.paid_amount, s.total_amount, p.address, p.state_code, s.customer_id, COALESCE(s.status, 'active')
          FROM sales s
          JOIN parties p ON s.customer_id = p.id
          WHERE s.invoice_no = ?1",
@@ -1216,14 +1226,23 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             row.get::<_, i64>(8)?,
             row.get::<_, Option<String>>(9)?,
             row.get::<_, Option<String>>(10)?,
+            row.get::<_, i64>(11)?,
+            row.get::<_, String>(12)?,
         ))
     );
 
-    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code)) = sale_res {
+    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code, customer_id, inv_status)) = sale_res {
+        let godown_id: Option<i64> = conn.query_row(
+            "SELECT godown_id FROM stock_ledger WHERE ref_id = ?1 LIMIT 1",
+            rusqlite::params![invoice_no],
+            |r| r.get(0)
+        ).ok();
+
         let mut stmt = conn.prepare(
             "SELECT i.name, sl.qty, sl.unit, sl.rate, sl.taxable, (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as gst_amt,
                     COALESCE(sl.hsn, i.hsn) as line_hsn,
-                    COALESCE(sl.gst_rate, i.gst_rate) as line_gst_rate
+                    COALESCE(sl.gst_rate, i.gst_rate) as line_gst_rate,
+                    sl.item_id
              FROM sale_lines sl
              JOIN items i ON sl.item_id = i.id
              WHERE sl.invoice_no = ?1"
@@ -1238,7 +1257,9 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             let gst_amt: i64 = row.get(5)?;
             let line_hsn: Option<String> = row.get(6)?;
             let line_gst_rate: Option<i64> = row.get(7)?;
+            let item_id: i64 = row.get(8)?;
             Ok(InvoicePrintLine {
+                item_id: Some(item_id),
                 item_name,
                 hsn: line_hsn,
                 qty,
@@ -1260,6 +1281,8 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             invoice_no: inv_no,
             date,
             party_name,
+            party_id: Some(customer_id),
+            godown_id,
             party_phone,
             party_gstin,
             party_village,
@@ -1270,12 +1293,13 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             total_amount,
             supplier_invoice_no: None,
             supplier_invoice_date: None,
+            status: Some(inv_status),
             lines,
         });
     }
 
     let pur_res = conn.query_row(
-        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code, p.supplier_invoice_no, p.supplier_invoice_date
+        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code, p.supplier_invoice_no, p.supplier_invoice_date, p.supplier_id, COALESCE(p.status, 'active')
          FROM purchases p
          JOIN parties pr ON p.supplier_id = pr.id
          WHERE p.invoice_no = ?1",
@@ -1294,14 +1318,23 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             row.get::<_, Option<String>>(10)?,
             row.get::<_, Option<String>>(11)?,
             row.get::<_, Option<String>>(12)?,
+            row.get::<_, i64>(13)?,
+            row.get::<_, String>(14)?,
         ))
     );
 
-    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code, supp_inv_no, supp_inv_date)) = pur_res {
+    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code, supp_inv_no, supp_inv_date, supplier_id, inv_status)) = pur_res {
+        let godown_id: Option<i64> = conn.query_row(
+            "SELECT godown_id FROM stock_ledger WHERE ref_id = ?1 LIMIT 1",
+            rusqlite::params![invoice_no],
+            |r| r.get(0)
+        ).ok();
+
         let mut stmt = conn.prepare(
             "SELECT i.name, pl.qty, pl.unit, pl.rate, pl.taxable, (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as gst_amt,
                     COALESCE(pl.hsn, i.hsn) as line_hsn,
-                    COALESCE(pl.gst_rate, i.gst_rate) as line_gst_rate
+                    COALESCE(pl.gst_rate, i.gst_rate) as line_gst_rate,
+                    pl.item_id
              FROM purchase_lines pl
              JOIN items i ON pl.item_id = i.id
              WHERE pl.invoice_no = ?1"
@@ -1316,7 +1349,9 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             let gst_amt: i64 = row.get(5)?;
             let line_hsn: Option<String> = row.get(6)?;
             let line_gst_rate: Option<i64> = row.get(7)?;
+            let item_id: i64 = row.get(8)?;
             Ok(InvoicePrintLine {
+                item_id: Some(item_id),
                 item_name,
                 hsn: line_hsn,
                 qty,
@@ -1338,6 +1373,8 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             invoice_no: inv_no,
             date,
             party_name,
+            party_id: Some(supplier_id),
+            godown_id,
             party_phone,
             party_gstin,
             party_village,
@@ -1348,10 +1385,10 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             total_amount,
             supplier_invoice_no: supp_inv_no,
             supplier_invoice_date: supp_inv_date,
+            status: Some(inv_status),
             lines,
         });
     }
-
 
     Err(format!("Invoice '{}' not found", invoice_no))
 }
@@ -1393,6 +1430,8 @@ pub struct RegisterEntry {
     pub paid_amount: i64,   // paise
     #[serde(default)]
     pub supplier_invoice_no: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1418,7 +1457,8 @@ pub fn get_purchase_register_inner(
                 COALESCE(SUM(pl.sgst), 0) as sgst,
                 COALESCE(SUM(pl.igst), 0) as igst,
                 p.total_amount,
-                p.supplier_invoice_no
+                p.supplier_invoice_no,
+                COALESCE(p.status, 'active') as status
          FROM purchases p
          JOIN parties pt ON p.supplier_id = pt.id
          LEFT JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
@@ -1441,6 +1481,7 @@ pub fn get_purchase_register_inner(
             row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
             row.get::<_, Option<String>>(11)?,
+            row.get::<_, String>(12)?,
         ))
     }).map_err(|e| e.to_string())?;
 
@@ -1452,7 +1493,7 @@ pub fn get_purchase_register_inner(
     let mut grand_total = 0i64;
 
     for r in rows {
-        let (inv_no, date, party_name, party_gstin, payment_mode, paid_amount, taxable, raw_cgst, raw_sgst, raw_igst, total_amt, supplier_inv) = r.map_err(|e| e.to_string())?;
+        let (inv_no, date, party_name, party_gstin, payment_mode, paid_amount, taxable, raw_cgst, raw_sgst, raw_igst, total_amt, supplier_inv, inv_status) = r.map_err(|e| e.to_string())?;
         
         let total_tax = raw_cgst + raw_sgst + raw_igst;
         let is_inter = is_interstate_party(party_gstin.as_deref(), shop_state);
@@ -1463,11 +1504,13 @@ pub fn get_purchase_register_inner(
             (half, total_tax - half, 0, "intrastate".to_string())
         };
 
-        total_taxable += taxable;
-        total_cgst += cgst;
-        total_sgst += sgst;
-        total_igst += igst;
-        grand_total += total_amt;
+        if inv_status != "cancelled" {
+            total_taxable += taxable;
+            total_cgst += cgst;
+            total_sgst += sgst;
+            total_igst += igst;
+            grand_total += total_amt;
+        }
 
         let display_no = supplier_inv.clone().filter(|s| !s.trim().is_empty()).unwrap_or(inv_no);
 
@@ -1485,6 +1528,7 @@ pub fn get_purchase_register_inner(
             payment_mode,
             paid_amount,
             supplier_invoice_no: supplier_inv,
+            status: Some(inv_status),
         });
     }
 
@@ -1521,7 +1565,8 @@ pub fn get_sales_register_inner(
                 COALESCE(SUM(sl.cgst), 0) as cgst,
                 COALESCE(SUM(sl.sgst), 0) as sgst,
                 COALESCE(SUM(sl.igst), 0) as igst,
-                s.total_amount
+                s.total_amount,
+                COALESCE(s.status, 'active') as status
          FROM sales s
          JOIN parties pt ON s.customer_id = pt.id
          LEFT JOIN sale_lines sl ON s.invoice_no = sl.invoice_no
@@ -1543,6 +1588,7 @@ pub fn get_sales_register_inner(
             row.get::<_, i64>(8)?,
             row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
+            row.get::<_, String>(11)?,
         ))
     }).map_err(|e| e.to_string())?;
 
@@ -1554,7 +1600,7 @@ pub fn get_sales_register_inner(
     let mut grand_total = 0i64;
 
     for r in rows {
-        let (inv_no, date, party_name, party_gstin, payment_mode, paid_amount, taxable, raw_cgst, raw_sgst, raw_igst, total_amt) = r.map_err(|e| e.to_string())?;
+        let (inv_no, date, party_name, party_gstin, payment_mode, paid_amount, taxable, raw_cgst, raw_sgst, raw_igst, total_amt, inv_status) = r.map_err(|e| e.to_string())?;
         
         let total_tax = raw_cgst + raw_sgst + raw_igst;
         let is_inter = is_interstate_party(party_gstin.as_deref(), shop_state);
@@ -1565,11 +1611,13 @@ pub fn get_sales_register_inner(
             (half, total_tax - half, 0, "intrastate".to_string())
         };
 
-        total_taxable += taxable;
-        total_cgst += cgst;
-        total_sgst += sgst;
-        total_igst += igst;
-        grand_total += total_amt;
+        if inv_status != "cancelled" {
+            total_taxable += taxable;
+            total_cgst += cgst;
+            total_sgst += sgst;
+            total_igst += igst;
+            grand_total += total_amt;
+        }
 
         entries.push(RegisterEntry {
             invoice_no: inv_no,
@@ -1585,6 +1633,7 @@ pub fn get_sales_register_inner(
             payment_mode,
             paid_amount,
             supplier_invoice_no: None,
+            status: Some(inv_status),
         });
     }
 
@@ -1644,7 +1693,7 @@ pub fn get_gst_summary_inner(
          FROM sales s
          JOIN parties pt ON s.customer_id = pt.id
          LEFT JOIN sale_lines sl ON s.invoice_no = sl.invoice_no
-         WHERE s.date >= ?1 AND s.date <= ?2
+         WHERE s.date >= ?1 AND s.date <= ?2 AND COALESCE(s.status, 'active') <> 'cancelled'
          GROUP BY s.invoice_no"
     ).map_err(|e| e.to_string())?;
 
@@ -1687,7 +1736,7 @@ pub fn get_gst_summary_inner(
          FROM purchases p
          JOIN parties pt ON p.supplier_id = pt.id
          LEFT JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
-         WHERE p.date >= ?1 AND p.date <= ?2
+         WHERE p.date >= ?1 AND p.date <= ?2 AND COALESCE(p.status, 'active') <> 'cancelled'
          GROUP BY p.invoice_no"
     ).map_err(|e| e.to_string())?;
 
@@ -1801,7 +1850,7 @@ pub fn get_hsn_summary_inner(
          JOIN sales s ON sl.invoice_no = s.invoice_no
          JOIN items i ON sl.item_id = i.id
          JOIN parties pt ON s.customer_id = pt.id
-         WHERE s.date >= ?1 AND s.date <= ?2
+         WHERE s.date >= ?1 AND s.date <= ?2 AND COALESCE(s.status, 'active') <> 'cancelled'
          ORDER BY hsn_code ASC, i.name ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -1949,7 +1998,7 @@ pub fn get_profit_report_inner(
          FROM sale_lines sl
          JOIN sales s ON sl.invoice_no = s.invoice_no
          JOIN items i ON sl.item_id = i.id
-         WHERE s.date >= ?1 AND s.date <= ?2
+         WHERE s.date >= ?1 AND s.date <= ?2 AND COALESCE(s.status, 'active') <> 'cancelled'
          ORDER BY i.name ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -2139,7 +2188,7 @@ pub fn get_sales_gst_mode_profit_report_inner(
                  GROUP BY invoice_no
              ) l2 ON l1.id = l2.max_id
          ) pl ON s.invoice_no = pl.invoice_no
-         WHERE s.date >= ?1 AND s.date <= ?2
+         WHERE s.date >= ?1 AND s.date <= ?2 AND COALESCE(s.status, 'active') <> 'cancelled'
          ORDER BY s.date ASC, s.invoice_no ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -2395,7 +2444,7 @@ pub fn get_item_parties_report_inner(
          FROM purchases p
          JOIN parties pt ON p.supplier_id = pt.id
          JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
-         WHERE pl.item_id = ?1 AND p.date >= ?2 AND p.date <= ?3
+         WHERE pl.item_id = ?1 AND p.date >= ?2 AND p.date <= ?3 AND COALESCE(p.status, 'active') <> 'cancelled'
          ORDER BY pt.name ASC, p.date DESC, p.invoice_no DESC"
     } else {
         "SELECT s.invoice_no, s.date, pt.id as party_id, pt.name as party_name,
@@ -2404,7 +2453,7 @@ pub fn get_item_parties_report_inner(
          FROM sales s
          JOIN parties pt ON s.customer_id = pt.id
          JOIN sale_lines sl ON s.invoice_no = sl.invoice_no
-         WHERE sl.item_id = ?1 AND s.date >= ?2 AND s.date <= ?3
+         WHERE sl.item_id = ?1 AND s.date >= ?2 AND s.date <= ?3 AND COALESCE(s.status, 'active') <> 'cancelled'
          ORDER BY pt.name ASC, s.date DESC, s.invoice_no DESC"
     };
 
@@ -2631,7 +2680,7 @@ pub fn get_party_items_report_inner(
          FROM purchases p
          JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
          JOIN items i ON pl.item_id = i.id
-         WHERE p.supplier_id = ?1 AND p.date >= ?2 AND p.date <= ?3
+         WHERE p.supplier_id = ?1 AND p.date >= ?2 AND p.date <= ?3 AND COALESCE(p.status, 'active') <> 'cancelled'
          ORDER BY i.name ASC, p.date DESC, p.invoice_no DESC"
     } else {
         "SELECT s.invoice_no, s.date, i.id as item_id, i.name as item_name, i.base_unit,
@@ -2640,7 +2689,7 @@ pub fn get_party_items_report_inner(
          FROM sales s
          JOIN sale_lines sl ON s.invoice_no = sl.invoice_no
          JOIN items i ON sl.item_id = i.id
-         WHERE s.customer_id = ?1 AND s.date >= ?2 AND s.date <= ?3
+         WHERE s.customer_id = ?1 AND s.date >= ?2 AND s.date <= ?3 AND COALESCE(s.status, 'active') <> 'cancelled'
          ORDER BY i.name ASC, s.date DESC, s.invoice_no DESC"
     };
 
@@ -2849,6 +2898,9 @@ pub fn record_payment_inner(conn: &mut Connection, payload: PaymentPayload) -> R
         return Err("Payment amount must be greater than zero".to_string());
     }
 
+    // Check period lock
+    crate::audit::check_period_lock(conn, &payload.date)?;
+
     // Verify party exists
     let _party_name: String = conn.query_row(
         "SELECT name FROM parties WHERE id = ?1",
@@ -2955,7 +3007,7 @@ pub fn get_pending_bills_inner(conn: &Connection, party_id: i64) -> Result<Vec<P
     let mut stmt1 = conn.prepare(
         "SELECT invoice_no, date, 'sale' as bill_type, total_amount, paid_amount, (total_amount - paid_amount) as pending_amount 
          FROM sales 
-         WHERE customer_id = ?1 AND paid_amount < total_amount 
+         WHERE customer_id = ?1 AND paid_amount < total_amount AND COALESCE(status, 'active') <> 'cancelled'
          ORDER BY date ASC, invoice_no ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -2978,7 +3030,7 @@ pub fn get_pending_bills_inner(conn: &Connection, party_id: i64) -> Result<Vec<P
     let mut stmt2 = conn.prepare(
         "SELECT invoice_no, date, 'purchase' as bill_type, total_amount, paid_amount, (total_amount - paid_amount) as pending_amount 
          FROM purchases 
-         WHERE supplier_id = ?1 AND paid_amount < total_amount 
+         WHERE supplier_id = ?1 AND paid_amount < total_amount AND COALESCE(status, 'active') <> 'cancelled' 
          ORDER BY date ASC, invoice_no ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -3145,13 +3197,13 @@ pub fn get_7_day_trend_inner(conn: &Connection, today_date: &str) -> Result<Vec<
         let date_str = current_date.format("%Y-%m-%d").to_string();
 
         let sales_paise: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1",
+            "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
             rusqlite::params![&date_str],
             |row| row.get(0)
         ).unwrap_or(0);
 
         let purchases_paise: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1",
+            "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
             rusqlite::params![&date_str],
             |row| row.get(0)
         ).unwrap_or(0);
@@ -3196,25 +3248,25 @@ pub fn get_yesterday_comparison_inner(conn: &Connection, today_date: &str) -> Re
     let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
 
     let today_sales: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&today_str],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let yesterday_sales: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&yesterday_str],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let today_purchases: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&today_str],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let yesterday_purchases: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&yesterday_str],
         |row| row.get(0)
     ).unwrap_or(0);
@@ -4042,6 +4094,955 @@ pub fn update_purchase_supplier_invoice_cmd(
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
     update_purchase_supplier_invoice_inner(&mut conn, &internal_invoice_no, &supplier_invoice_no, supplier_invoice_date.as_deref(), reason.as_deref())
+}
+
+// ==========================================
+// STAGE 4: INVOICE CANCELLATION & ALTERATION
+// ==========================================
+
+pub fn cancel_invoice_inner(conn: &mut Connection, invoice_no: &str, reason: Option<&str>) -> Result<(), String> {
+    let clean_inv = invoice_no.trim();
+    if clean_inv.is_empty() {
+        return Err("Invoice number is required / बिल नंबर आवश्यक है".to_string());
+    }
+
+    let sale_opt: Option<(String, i64, i64, i64, String)> = conn.query_row(
+        "SELECT date, customer_id, paid_amount, total_amount, COALESCE(status, 'active') FROM sales WHERE invoice_no = ?1",
+        rusqlite::params![clean_inv],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    ).optional().map_err(|e| e.to_string())?;
+
+    let is_sale;
+    let inv_date: String;
+    let party_id: i64;
+    let paid_amount: i64;
+    let total_amount: i64;
+    let status: String;
+
+    if let Some((d, cid, pa, ta, st)) = sale_opt {
+        is_sale = true;
+        inv_date = d;
+        party_id = cid;
+        paid_amount = pa;
+        total_amount = ta;
+        status = st;
+    } else {
+        let pur_opt: Option<(String, i64, i64, i64, String)> = conn.query_row(
+            "SELECT date, supplier_id, paid_amount, total_amount, COALESCE(status, 'active') FROM purchases WHERE invoice_no = ?1",
+            rusqlite::params![clean_inv],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        ).optional().map_err(|e| e.to_string())?;
+
+        if let Some((d, sid, pa, ta, st)) = pur_opt {
+            is_sale = false;
+            inv_date = d;
+            party_id = sid;
+            paid_amount = pa;
+            total_amount = ta;
+            status = st;
+        } else {
+            return Err(format!("Invoice '{}' not found / बिल नहीं मिला", clean_inv));
+        }
+    }
+
+    if status == "cancelled" {
+        return Err(format!("Invoice '{}' is already cancelled / बिल पहले से रद्द है", clean_inv));
+    }
+
+    // Period lock check
+    crate::audit::check_period_lock(conn, &inv_date)?;
+
+    // For purchases: cancelling removes stock. Ensure stock won't drop below zero!
+    if !is_sale {
+        let mut check_stmt = conn.prepare(
+            "SELECT item_id, godown_id, SUM(qty_base)
+             FROM stock_ledger
+             WHERE ref_id = ?1 AND (type = 'purchase' OR type = 'purchase_alteration')
+               AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')
+             GROUP BY item_id, godown_id"
+        ).map_err(|e| e.to_string())?;
+
+        let pur_stocks = check_stmt.query_map(rusqlite::params![clean_inv], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        }).map_err(|e| e.to_string())?;
+
+        for item_res in pur_stocks {
+            let (item_id, godown_id, qty_to_remove) = item_res.map_err(|e| e.to_string())?;
+            if qty_to_remove > 0 {
+                let current_stock: i64 = conn.query_row(
+                    "SELECT COALESCE(SUM(qty_base), 0) FROM stock_ledger WHERE item_id = ?1 AND godown_id = ?2",
+                    rusqlite::params![item_id, godown_id],
+                    |r| r.get(0)
+                ).unwrap_or(0);
+
+                if current_stock < qty_to_remove {
+                    let item_name: String = conn.query_row(
+                        "SELECT name FROM items WHERE id = ?1",
+                        rusqlite::params![item_id],
+                        |r| r.get(0)
+                    ).unwrap_or_else(|_| format!("Item #{}", item_id));
+
+                    return Err(format!(
+                        "Cannot cancel purchase: item '{}' in godown #{} would have negative stock (Current: {}, Required to cancel: {}). Stock is already sold / पर्याप्त स्टॉक नहीं है",
+                        item_name, godown_id, current_stock, qty_to_remove
+                    ));
+                }
+            }
+        }
+    }
+
+    let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    // Reverse unreversed stock entries
+    let entry_type = if is_sale { "sale" } else { "purchase" };
+    let alt_type = format!("{}_alteration", entry_type);
+    let mut stock_stmt = tx.prepare(
+        "SELECT id FROM stock_ledger 
+         WHERE ref_id = ?1 AND (type = ?2 OR type = ?3)
+           AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')"
+    ).map_err(|e| e.to_string())?;
+
+    let stock_ids: Vec<i64> = stock_stmt.query_map(
+        rusqlite::params![clean_inv, entry_type, alt_type],
+        |r| r.get(0)
+    ).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+    drop(stock_stmt);
+
+    for sid in stock_ids {
+        crate::inventory::reverse_stock_ledger_entry(&tx, sid, &today_str, clean_inv)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let reason_note = reason.unwrap_or("Cancelled").trim();
+    if is_sale {
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+             VALUES (?1, ?2, 'reversal', ?3, 0, ?4, 'cancel', ?5)",
+            rusqlite::params![today_str, party_id, clean_inv, total_amount, format!("Sale cancel: {}", reason_note)],
+        ).map_err(|e| e.to_string())?;
+
+        if paid_amount > 0 {
+            tx.execute(
+                "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+                 VALUES (?1, ?2, 'reversal', ?3, ?4, 0, 'cancel', ?5)",
+                rusqlite::params![today_str, party_id, clean_inv, paid_amount, format!("Sale payment refund: {}", reason_note)],
+            ).map_err(|e| e.to_string())?;
+        }
+
+        tx.execute(
+            "UPDATE sales SET status = 'cancelled' WHERE invoice_no = ?1",
+            rusqlite::params![clean_inv],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+             VALUES (?1, ?2, 'reversal', ?3, ?4, 0, 'cancel', ?5)",
+            rusqlite::params![today_str, party_id, clean_inv, total_amount, format!("Purchase cancel: {}", reason_note)],
+        ).map_err(|e| e.to_string())?;
+
+        if paid_amount > 0 {
+            tx.execute(
+                "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+                 VALUES (?1, ?2, 'reversal', ?3, 0, ?4, 'cancel', ?5)",
+                rusqlite::params![today_str, party_id, clean_inv, paid_amount, format!("Purchase payment refund: {}", reason_note)],
+            ).map_err(|e| e.to_string())?;
+        }
+
+        tx.execute(
+            "UPDATE purchases SET status = 'cancelled' WHERE invoice_no = ?1",
+            rusqlite::params![clean_inv],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    let before_json = serde_json::json!({
+        "status": "active",
+        "total_amount": total_amount,
+        "paid_amount": paid_amount,
+        "party_id": party_id,
+        "date": inv_date
+    }).to_string();
+
+    let after_json = serde_json::json!({
+        "status": "cancelled",
+        "cancel_date": today_str
+    }).to_string();
+
+    crate::audit::write_audit(
+        &tx,
+        if is_sale { "sale" } else { "purchase" },
+        clean_inv,
+        "cancel",
+        Some(&before_json),
+        Some(&after_json),
+        reason,
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn cancel_invoice_cmd(
+    app: AppHandle,
+    invoice_no: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    cancel_invoice_inner(&mut conn, &invoice_no, reason.as_deref())
+}
+
+pub fn alter_sale_inner(
+    conn: &mut Connection,
+    current_invoice_no: &str,
+    payload: crate::invoice::InvoicePayload,
+    reason: Option<&str>,
+) -> Result<String, String> {
+    let clean_current = current_invoice_no.trim();
+    if clean_current.is_empty() {
+        return Err("Current invoice number is required".to_string());
+    }
+
+    let (old_date, old_customer_id, old_payment_mode, old_paid_amount, old_total_amount, old_status): (String, i64, String, i64, i64, String) = conn.query_row(
+        "SELECT date, customer_id, payment_mode, paid_amount, total_amount, COALESCE(status, 'active') FROM sales WHERE invoice_no = ?1",
+        rusqlite::params![clean_current],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+    ).map_err(|_| format!("Sale invoice '{}' not found / बिक्री बिल नहीं मिला", clean_current))?;
+
+    if old_status == "cancelled" {
+        return Err("Cannot alter a cancelled invoice / रद्द किए गए बिल में बदलाव नहीं किया जा सकता".to_string());
+    }
+
+    // Period lock check
+    crate::audit::check_period_lock(conn, &old_date)?;
+    crate::audit::check_period_lock(conn, &payload.date)?;
+
+    // FY boundary check
+    let old_fy = calculate_financial_year(&old_date)?;
+    let new_fy = calculate_financial_year(&payload.date)?;
+    if old_fy != new_fy {
+        return Err(format!("Cannot change invoice date across financial years ({} -> {}) / वित्तीय वर्ष बदलकर बिल की तारीख नहीं बदली जा सकती", old_fy, new_fy));
+    }
+
+    // Check if renaming invoice number as part of alteration
+    let mut target_inv_no = clean_current.to_string();
+    let requested_no = payload.invoice_no.trim();
+    if !requested_no.is_empty() && requested_no != clean_current {
+        let rename_reason = reason.unwrap_or("Sale alteration invoice rename");
+        change_sales_invoice_no_inner(conn, clean_current, requested_no, rename_reason)?;
+        target_inv_no = requested_no.to_string();
+    }
+
+    // Calculate new lines and tax
+    let (_party_category, party_gstin): (String, Option<String>) = conn.query_row(
+        "SELECT category, gstin FROM parties WHERE id = ?1",
+        rusqlite::params![payload.party_id],
+        |row| Ok((row.get(0)?, row.get(1)?))
+    ).unwrap_or_else(|_| ("unregistered".to_string(), None));
+
+    let is_interstate = if let Some(ref shop_st) = payload.shop_state {
+        let clean_shop = shop_st.trim();
+        if let Some(ref gstin) = party_gstin {
+            let clean_gst = gstin.trim();
+            if clean_gst.len() >= 2 {
+                &clean_gst[0..2] != clean_shop
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let mut grand_total_paise = 0i64;
+    let mut processed_lines = Vec::new();
+
+    for mut line in payload.lines {
+        if payload.shop_state.is_some() {
+            let total_tax = line.cgst + line.sgst + line.igst;
+            if total_tax > 0 {
+                if is_interstate {
+                    line.cgst = 0;
+                    line.sgst = 0;
+                    line.igst = total_tax;
+                } else {
+                    let half = total_tax / 2;
+                    line.cgst = half;
+                    line.sgst = total_tax - half;
+                    line.igst = 0;
+                }
+            }
+        }
+        let line_total = line.taxable + line.cgst + line.sgst + line.igst;
+        grand_total_paise += line_total;
+        processed_lines.push(line);
+    }
+
+    // Lower bound check: bill total cannot be less than payments already allocated
+    if grand_total_paise < old_paid_amount {
+        return Err(format!(
+            "New bill total (₹{:.2}) cannot be less than already recorded payment (₹{:.2}) / कुल राशि पहले से प्राप्त भुगतान से कम नहीं हो सकती",
+            grand_total_paise as f64 / 100.0,
+            old_paid_amount as f64 / 100.0
+        ));
+    }
+
+    // Check stock sufficiency:
+    // Available = current_stock + previously_consumed_by_this_sale
+    use std::collections::HashMap;
+    let mut new_needed: HashMap<(i64, i64), i64> = HashMap::new();
+    for line in &processed_lines {
+        let mut factor = 1000i64;
+        let base_unit: String = conn.query_row("SELECT base_unit FROM items WHERE id = ?1", rusqlite::params![line.item_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !base_unit.eq_ignore_ascii_case(&line.unit) {
+            let f: Option<i64> = conn.query_row(
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
+                rusqlite::params![line.item_id, line.unit],
+                |row| row.get(0)
+            ).ok();
+            if let Some(f_val) = f {
+                factor = f_val;
+            }
+        }
+        let qty_base = (line.qty * factor) / 1000;
+        *new_needed.entry((line.item_id, payload.godown_id)).or_insert(0) += qty_base;
+    }
+
+    for (&(item_id, godown_id), &needed_qty) in &new_needed {
+        let old_consumed: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(-qty_base), 0) FROM stock_ledger 
+             WHERE ref_id = ?1 AND item_id = ?2 AND godown_id = ?3 AND (type = 'sale' OR type = 'sale_alteration')
+               AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')",
+            rusqlite::params![&target_inv_no, item_id, godown_id],
+            |r| r.get(0)
+        ).unwrap_or(0);
+
+        let current_stock: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(qty_base), 0) FROM stock_ledger WHERE item_id = ?1 AND godown_id = ?2",
+            rusqlite::params![item_id, godown_id],
+            |r| r.get(0)
+        ).unwrap_or(0);
+
+        let available = current_stock + old_consumed;
+        if available < needed_qty {
+            let item_name: String = conn.query_row("SELECT name FROM items WHERE id = ?1", rusqlite::params![item_id], |r| r.get(0))
+                .unwrap_or_else(|_| format!("Item #{}", item_id));
+            return Err(format!(
+                "Stock kam hai! Item '{}' in godown #{} needs {}, but only {} available after reverting original bill / पर्याप्त स्टॉक नहीं है",
+                item_name, godown_id, needed_qty, available
+            ));
+        }
+    }
+
+    let actual_paid = match payload.payment_mode.as_str() {
+        "cash" | "upi_bank" => grand_total_paise,
+        _ => old_paid_amount.max(payload.paid_amount).min(grand_total_paise),
+    };
+
+    let before_json = serde_json::json!({
+        "invoice_no": clean_current,
+        "date": old_date,
+        "customer_id": old_customer_id,
+        "payment_mode": old_payment_mode,
+        "paid_amount": old_paid_amount,
+        "total_amount": old_total_amount
+    }).to_string();
+
+    let after_json = serde_json::json!({
+        "invoice_no": target_inv_no,
+        "date": payload.date,
+        "customer_id": payload.party_id,
+        "payment_mode": payload.payment_mode,
+        "paid_amount": actual_paid,
+        "total_amount": grand_total_paise
+    }).to_string();
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    // 1. Reverse old stock ledger entries
+    let mut stock_stmt = tx.prepare(
+        "SELECT id FROM stock_ledger 
+         WHERE ref_id = ?1 AND (type = 'sale' OR type = 'sale_alteration')
+           AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')"
+    ).map_err(|e| e.to_string())?;
+
+    let stock_ids: Vec<i64> = stock_stmt.query_map(rusqlite::params![&target_inv_no], |r| r.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stock_stmt);
+
+    for sid in stock_ids {
+        crate::inventory::reverse_stock_ledger_entry(&tx, sid, &payload.date, &target_inv_no)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 2. Reverse old party ledger entries
+    tx.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+         VALUES (?1, ?2, 'reversal', ?3, 0, ?4, 'alter', 'Reversal for sale alteration')",
+        rusqlite::params![payload.date, old_customer_id, &target_inv_no, old_total_amount],
+    ).map_err(|e| e.to_string())?;
+
+    if old_paid_amount > 0 {
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+             VALUES (?1, ?2, 'reversal', ?3, ?4, 0, 'alter', 'Reversal of paid amount for sale alteration')",
+            rusqlite::params![payload.date, old_customer_id, &target_inv_no, old_paid_amount],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 3. Delete old sale lines
+    tx.execute("DELETE FROM sale_lines WHERE invoice_no = ?1", rusqlite::params![&target_inv_no])
+        .map_err(|e| e.to_string())?;
+
+    // 4. Insert new lines & stock entries
+    for line in processed_lines {
+        let mut factor = 1000i64;
+        let base_unit: String = tx.query_row("SELECT base_unit FROM items WHERE id = ?1", rusqlite::params![line.item_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !base_unit.eq_ignore_ascii_case(&line.unit) {
+            let f: Option<i64> = tx.query_row(
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
+                rusqlite::params![line.item_id, line.unit],
+                |row| row.get(0)
+            ).ok();
+            if let Some(f_val) = f {
+                factor = f_val;
+            }
+        }
+        let qty_base = (line.qty * factor) / 1000;
+
+        let (item_hsn, item_gst_rate): (Option<String>, Option<i64>) = tx.query_row(
+            "SELECT hsn, gst_rate FROM items WHERE id = ?1",
+            rusqlite::params![line.item_id],
+            |row| Ok((row.get(0)?, row.get(1)?))
+        ).unwrap_or((None, None));
+
+        let wac = crate::inventory::calculate_weighted_average_cost(&tx, line.item_id).unwrap_or(0);
+        let cost_paise = (qty_base * wac) / 1000;
+
+        tx.execute(
+            "INSERT INTO sale_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, cost_paise, hsn, gst_rate) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![&target_inv_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, cost_paise, item_hsn, item_gst_rate]
+        ).map_err(|e| e.to_string())?;
+
+        crate::inventory::add_stock_ledger_entry(
+            &tx,
+            &payload.date,
+            line.item_id,
+            payload.godown_id,
+            -qty_base,
+            "sale",
+            Some(&target_inv_no),
+            None,
+            Some(payload.party_id),
+            None
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 5. Update sales header
+    tx.execute(
+        "UPDATE sales SET date = ?1, customer_id = ?2, payment_mode = ?3, paid_amount = ?4, total_amount = ?5 WHERE invoice_no = ?6",
+        rusqlite::params![payload.date, payload.party_id, payload.payment_mode, actual_paid, grand_total_paise, &target_inv_no],
+    ).map_err(|e| e.to_string())?;
+
+    // 6. Insert new party ledger entries
+    tx.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+         VALUES (?1, ?2, 'sale', ?3, ?4, 0, ?5, 'Altered sale invoice')",
+        rusqlite::params![payload.date, payload.party_id, &target_inv_no, grand_total_paise, payload.payment_mode],
+    ).map_err(|e| e.to_string())?;
+
+    if actual_paid > 0 {
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+             VALUES (?1, ?2, 'payment', ?3, 0, ?4, ?5, 'Altered invoice payment')",
+            rusqlite::params![payload.date, payload.party_id, &target_inv_no, actual_paid, payload.payment_mode],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 7. Write audit log
+    crate::audit::write_audit(
+        &tx,
+        "sale",
+        &target_inv_no,
+        "alter",
+        Some(&before_json),
+        Some(&after_json),
+        reason,
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(target_inv_no)
+}
+
+#[command]
+pub fn alter_sale_cmd(
+    app: AppHandle,
+    invoice_no: String,
+    payload: crate::invoice::InvoicePayload,
+    reason: Option<String>,
+) -> Result<String, String> {
+    let mut conn = get_conn(&app)?;
+    alter_sale_inner(&mut conn, &invoice_no, payload, reason.as_deref())
+}
+
+pub fn alter_purchase_inner(
+    conn: &mut Connection,
+    current_invoice_no: &str,
+    payload: crate::invoice::InvoicePayload,
+    reason: Option<&str>,
+) -> Result<String, String> {
+    let clean_current = current_invoice_no.trim();
+    if clean_current.is_empty() {
+        return Err("Current invoice number is required".to_string());
+    }
+
+    let (old_date, old_supplier_id, old_payment_mode, old_paid_amount, old_total_amount, old_supp_no, old_supp_date, old_status): (String, i64, String, i64, i64, Option<String>, Option<String>, String) = conn.query_row(
+        "SELECT date, supplier_id, payment_mode, paid_amount, total_amount, supplier_invoice_no, supplier_invoice_date, COALESCE(status, 'active') FROM purchases WHERE invoice_no = ?1",
+        rusqlite::params![clean_current],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+    ).map_err(|_| format!("Purchase invoice '{}' not found / खरीद बिल नहीं मिला", clean_current))?;
+
+    if old_status == "cancelled" {
+        return Err("Cannot alter a cancelled invoice / रद्द किए गए बिल में बदलाव नहीं किया जा सकता".to_string());
+    }
+
+    // Period lock check
+    crate::audit::check_period_lock(conn, &old_date)?;
+    crate::audit::check_period_lock(conn, &payload.date)?;
+
+    // FY boundary check
+    let old_fy = calculate_financial_year(&old_date)?;
+    let new_fy = calculate_financial_year(&payload.date)?;
+    if old_fy != new_fy {
+        return Err(format!("Cannot change invoice date across financial years ({} -> {}) / वित्तीय वर्ष बदलकर बिल की तारीख नहीं बदली जा सकती", old_fy, new_fy));
+    }
+
+    // Check duplicate supplier_invoice_no if supplied
+    if let Some(ref supp_no) = payload.supplier_invoice_no {
+        let clean_supp = supp_no.trim();
+        if !clean_supp.is_empty() {
+            if clean_supp.len() > 30 {
+                return Err("Supplier invoice number cannot exceed 30 characters / सप्लायर बिल नंबर 30 अक्षरों से अधिक नहीं हो सकता".to_string());
+            }
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM purchases WHERE supplier_id = ?1 AND LOWER(supplier_invoice_no) = LOWER(?2) AND invoice_no <> ?3",
+                rusqlite::params![payload.party_id, clean_supp, clean_current],
+                |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if exists > 0 {
+                return Err("This supplier already has this invoice number / इस सप्लायर का यह बिल नंबर पहले से मौजूद है".to_string());
+            }
+        }
+    }
+
+    let (party_category, party_gstin): (String, Option<String>) = conn.query_row(
+        "SELECT category, gstin FROM parties WHERE id = ?1",
+        rusqlite::params![payload.party_id],
+        |row| Ok((row.get(0)?, row.get(1)?))
+    ).unwrap_or_else(|_| ("unregistered".to_string(), None));
+
+    let is_composition_supplier = party_category == "composition";
+    let is_interstate = if let Some(ref shop_st) = payload.shop_state {
+        let clean_shop = shop_st.trim();
+        if let Some(ref gstin) = party_gstin {
+            let clean_gst = gstin.trim();
+            if clean_gst.len() >= 2 {
+                &clean_gst[0..2] != clean_shop
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let mut grand_total_paise = 0i64;
+    let mut processed_lines = Vec::new();
+
+    for mut line in payload.lines {
+        if is_composition_supplier {
+            line.cgst = 0;
+            line.sgst = 0;
+            line.igst = 0;
+        } else if payload.shop_state.is_some() {
+            let total_tax = line.cgst + line.sgst + line.igst;
+            if total_tax > 0 {
+                if is_interstate {
+                    line.cgst = 0;
+                    line.sgst = 0;
+                    line.igst = total_tax;
+                } else {
+                    let half = total_tax / 2;
+                    line.cgst = half;
+                    line.sgst = total_tax - half;
+                    line.igst = 0;
+                }
+            }
+        }
+        let line_total = line.taxable + line.cgst + line.sgst + line.igst;
+        grand_total_paise += line_total;
+        processed_lines.push(line);
+    }
+
+    if grand_total_paise < old_paid_amount {
+        return Err(format!(
+            "New bill total (₹{:.2}) cannot be less than already recorded payment (₹{:.2}) / कुल राशि पहले से किए गए भुगतान से कम नहीं हो सकती",
+            grand_total_paise as f64 / 100.0,
+            old_paid_amount as f64 / 100.0
+        ));
+    }
+
+    // Check stock reduction:
+    // If new purchase qty < old purchase qty, ensure current stock doesn't drop below zero
+    use std::collections::HashMap;
+    let mut new_added: HashMap<(i64, i64), i64> = HashMap::new();
+    for line in &processed_lines {
+        let mut factor = 1000i64;
+        let base_unit: String = conn.query_row("SELECT base_unit FROM items WHERE id = ?1", rusqlite::params![line.item_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !base_unit.eq_ignore_ascii_case(&line.unit) {
+            let f: Option<i64> = conn.query_row(
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
+                rusqlite::params![line.item_id, line.unit],
+                |row| row.get(0)
+            ).ok();
+            if let Some(f_val) = f {
+                factor = f_val;
+            }
+        }
+        let qty_base = (line.qty * factor) / 1000;
+        *new_added.entry((line.item_id, payload.godown_id)).or_insert(0) += qty_base;
+    }
+
+    // Check all items previously added by this purchase
+    let old_items: Vec<(i64, i64, i64)> = {
+        let mut old_stmt = conn.prepare(
+            "SELECT item_id, godown_id, SUM(qty_base) FROM stock_ledger 
+             WHERE ref_id = ?1 AND (type = 'purchase' OR type = 'purchase_alteration')
+               AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')
+             GROUP BY item_id, godown_id"
+        ).map_err(|e| e.to_string())?;
+
+        let rows = old_stmt.query_map(rusqlite::params![clean_current], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+        rows
+    };
+
+    for (item_id, godown_id, old_qty) in old_items {
+        let new_qty = new_added.get(&(item_id, godown_id)).copied().unwrap_or(0);
+        if new_qty < old_qty {
+            let reduction = old_qty - new_qty;
+            let current_stock: i64 = conn.query_row(
+                "SELECT COALESCE(SUM(qty_base), 0) FROM stock_ledger WHERE item_id = ?1 AND godown_id = ?2",
+                rusqlite::params![item_id, godown_id],
+                |r| r.get(0)
+            ).unwrap_or(0);
+
+            if current_stock < reduction {
+                let item_name: String = conn.query_row("SELECT name FROM items WHERE id = ?1", rusqlite::params![item_id], |r| r.get(0))
+                    .unwrap_or_else(|_| format!("Item #{}", item_id));
+                return Err(format!(
+                    "Cannot reduce purchase qty for item '{}': current stock ({}) is less than reduction ({}). Stock is already sold / पर्याप्त स्टॉक नहीं है",
+                    item_name, current_stock, reduction
+                ));
+            }
+        }
+    }
+
+    let actual_paid = match payload.payment_mode.as_str() {
+        "cash" | "upi_bank" => grand_total_paise,
+        _ => old_paid_amount.max(payload.paid_amount).min(grand_total_paise),
+    };
+
+    let before_json = serde_json::json!({
+        "invoice_no": clean_current,
+        "date": old_date,
+        "supplier_id": old_supplier_id,
+        "payment_mode": old_payment_mode,
+        "paid_amount": old_paid_amount,
+        "total_amount": old_total_amount,
+        "supplier_invoice_no": old_supp_no,
+        "supplier_invoice_date": old_supp_date
+    }).to_string();
+
+    let after_json = serde_json::json!({
+        "invoice_no": clean_current,
+        "date": payload.date,
+        "supplier_id": payload.party_id,
+        "payment_mode": payload.payment_mode,
+        "paid_amount": actual_paid,
+        "total_amount": grand_total_paise,
+        "supplier_invoice_no": payload.supplier_invoice_no,
+        "supplier_invoice_date": payload.supplier_invoice_date
+    }).to_string();
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    // 1. Reverse old stock ledger entries
+    let mut stock_stmt = tx.prepare(
+        "SELECT id FROM stock_ledger 
+         WHERE ref_id = ?1 AND (type = 'purchase' OR type = 'purchase_alteration')
+           AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')"
+    ).map_err(|e| e.to_string())?;
+
+    let stock_ids: Vec<i64> = stock_stmt.query_map(rusqlite::params![clean_current], |r| r.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stock_stmt);
+
+    for sid in stock_ids {
+        crate::inventory::reverse_stock_ledger_entry(&tx, sid, &payload.date, clean_current)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 2. Reverse old party ledger entries
+    tx.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+         VALUES (?1, ?2, 'reversal', ?3, ?4, 0, 'alter', 'Reversal for purchase alteration')",
+        rusqlite::params![payload.date, old_supplier_id, clean_current, old_total_amount],
+    ).map_err(|e| e.to_string())?;
+
+    if old_paid_amount > 0 {
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+             VALUES (?1, ?2, 'reversal', ?3, 0, ?4, 'alter', 'Reversal of paid amount for purchase alteration')",
+            rusqlite::params![payload.date, old_supplier_id, clean_current, old_paid_amount],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 3. Delete old purchase lines
+    tx.execute("DELETE FROM purchase_lines WHERE invoice_no = ?1", rusqlite::params![clean_current])
+        .map_err(|e| e.to_string())?;
+
+    // 4. Insert new lines & stock entries
+    for line in processed_lines {
+        let mut factor = 1000i64;
+        let base_unit: String = tx.query_row("SELECT base_unit FROM items WHERE id = ?1", rusqlite::params![line.item_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !base_unit.eq_ignore_ascii_case(&line.unit) {
+            let f: Option<i64> = tx.query_row(
+                "SELECT factor_to_base FROM item_units WHERE item_id = ?1 AND LOWER(unit_name) = LOWER(?2)",
+                rusqlite::params![line.item_id, line.unit],
+                |row| row.get(0)
+            ).ok();
+            if let Some(f_val) = f {
+                factor = f_val;
+            }
+        }
+        let qty_base = (line.qty * factor) / 1000;
+
+        let (item_hsn, item_gst_rate): (Option<String>, Option<i64>) = tx.query_row(
+            "SELECT hsn, gst_rate FROM items WHERE id = ?1",
+            rusqlite::params![line.item_id],
+            |row| Ok((row.get(0)?, row.get(1)?))
+        ).unwrap_or((None, None));
+
+        tx.execute(
+            "INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, hsn, gst_rate) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![clean_current, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, item_hsn, item_gst_rate]
+        ).map_err(|e| e.to_string())?;
+
+        crate::inventory::add_stock_ledger_entry(
+            &tx,
+            &payload.date,
+            line.item_id,
+            payload.godown_id,
+            qty_base,
+            "purchase",
+            Some(clean_current),
+            None,
+            Some(payload.party_id),
+            None
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 5. Update purchases header
+    let supp_no = payload.supplier_invoice_no.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    let supp_date = payload.supplier_invoice_date.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    tx.execute(
+        "UPDATE purchases SET date = ?1, supplier_id = ?2, payment_mode = ?3, paid_amount = ?4, total_amount = ?5, supplier_invoice_no = ?6, supplier_invoice_date = ?7 WHERE invoice_no = ?8",
+        rusqlite::params![payload.date, payload.party_id, payload.payment_mode, actual_paid, grand_total_paise, supp_no, supp_date, clean_current],
+    ).map_err(|e| e.to_string())?;
+
+    // 6. Insert new party ledger entries
+    tx.execute(
+        "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+         VALUES (?1, ?2, 'purchase', ?3, 0, ?4, ?5, 'Altered purchase invoice')",
+        rusqlite::params![payload.date, payload.party_id, clean_current, grand_total_paise, payload.payment_mode],
+    ).map_err(|e| e.to_string())?;
+
+    if actual_paid > 0 {
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) 
+             VALUES (?1, ?2, 'payment', ?3, ?4, 0, ?5, 'Altered invoice payment')",
+            rusqlite::params![payload.date, payload.party_id, clean_current, actual_paid, payload.payment_mode],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 7. Write audit log
+    crate::audit::write_audit(
+        &tx,
+        "purchase",
+        clean_current,
+        "alter",
+        Some(&before_json),
+        Some(&after_json),
+        reason,
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(clean_current.to_string())
+}
+
+#[command]
+pub fn alter_purchase_cmd(
+    app: AppHandle,
+    invoice_no: String,
+    payload: crate::invoice::InvoicePayload,
+    reason: Option<String>,
+) -> Result<String, String> {
+    let mut conn = get_conn(&app)?;
+    alter_purchase_inner(&mut conn, &invoice_no, payload, reason.as_deref())
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AlterPaymentPayload {
+    pub ledger_id: i64,
+    pub date: String,
+    pub amount_paise: i64,
+    pub payment_mode: String,
+    pub remark: Option<String>,
+    pub ref_id: Option<String>,
+    pub reason: Option<String>,
+}
+
+pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) -> Result<(), String> {
+    if payload.amount_paise <= 0 {
+        return Err("Payment amount must be greater than zero".to_string());
+    }
+
+    let (party_id, old_date, old_debit, old_credit, old_ref_id, old_mode, old_remark): (i64, String, i64, i64, String, String, Option<String>) = conn.query_row(
+        "SELECT party_id, date, debit, credit, ref_id, payment_mode, remark FROM party_ledger WHERE id = ?1 AND type = 'payment'",
+        rusqlite::params![payload.ledger_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+    ).map_err(|_| format!("Payment ledger entry #{} not found / भुगतान प्रविष्टि नहीं मिली", payload.ledger_id))?;
+
+    // Period lock check
+    crate::audit::check_period_lock(conn, &old_date)?;
+    crate::audit::check_period_lock(conn, &payload.date)?;
+
+    let is_receipt = old_credit > 0;
+    let old_amount = if is_receipt { old_credit } else { old_debit };
+
+    let before_json = serde_json::json!({
+        "id": payload.ledger_id,
+        "party_id": party_id,
+        "date": old_date,
+        "amount_paise": old_amount,
+        "payment_mode": old_mode,
+        "ref_id": old_ref_id,
+        "remark": old_remark
+    }).to_string();
+
+    let new_mode = if payload.payment_mode.trim().is_empty() { "cash" } else { payload.payment_mode.trim() };
+    let new_ref = payload.ref_id.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(&old_ref_id);
+
+    let after_json = serde_json::json!({
+        "id": payload.ledger_id,
+        "party_id": party_id,
+        "date": payload.date,
+        "amount_paise": payload.amount_paise,
+        "payment_mode": new_mode,
+        "ref_id": new_ref,
+        "remark": payload.remark
+    }).to_string();
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    // Undo old payment amount on matched invoice
+    if is_receipt {
+        tx.execute(
+            "UPDATE sales SET paid_amount = MAX(0, paid_amount - ?1) WHERE invoice_no = ?2 AND customer_id = ?3",
+            rusqlite::params![old_amount, &old_ref_id, party_id],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        tx.execute(
+            "UPDATE purchases SET paid_amount = MAX(0, paid_amount - ?1) WHERE invoice_no = ?2 AND supplier_id = ?3",
+            rusqlite::params![old_amount, &old_ref_id, party_id],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // Update party_ledger row
+    let (new_debit, new_credit) = if is_receipt { (0, payload.amount_paise) } else { (payload.amount_paise, 0) };
+    let final_remark = payload.remark.as_deref().or(old_remark.as_deref()).unwrap_or("");
+
+    tx.execute(
+        "UPDATE party_ledger SET date = ?1, debit = ?2, credit = ?3, payment_mode = ?4, ref_id = ?5, remark = ?6 WHERE id = ?7",
+        rusqlite::params![payload.date, new_debit, new_credit, new_mode, new_ref, final_remark, payload.ledger_id],
+    ).map_err(|e| e.to_string())?;
+
+    // Apply new payment amount on matched invoice if exists
+    if is_receipt {
+        let is_matched: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sales WHERE invoice_no = ?1 AND customer_id = ?2)",
+            rusqlite::params![new_ref, party_id],
+            |row| row.get(0)
+        ).unwrap_or(false);
+
+        if is_matched {
+            tx.execute(
+                "UPDATE sales SET paid_amount = MIN(total_amount, paid_amount + ?1) WHERE invoice_no = ?2 AND customer_id = ?3",
+                rusqlite::params![payload.amount_paise, new_ref, party_id],
+            ).map_err(|e| e.to_string())?;
+        }
+    } else {
+        let is_matched: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM purchases WHERE invoice_no = ?1 AND supplier_id = ?2)",
+            rusqlite::params![new_ref, party_id],
+            |row| row.get(0)
+        ).unwrap_or(false);
+
+        if is_matched {
+            tx.execute(
+                "UPDATE purchases SET paid_amount = MIN(total_amount, paid_amount + ?1) WHERE invoice_no = ?2 AND supplier_id = ?3",
+                rusqlite::params![payload.amount_paise, new_ref, party_id],
+            ).map_err(|e| e.to_string())?;
+        }
+    }
+
+    crate::audit::write_audit(
+        &tx,
+        "party_ledger",
+        &payload.ledger_id.to_string(),
+        "alter",
+        Some(&before_json),
+        Some(&after_json),
+        payload.reason.as_deref(),
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn alter_payment_cmd(
+    app: AppHandle,
+    payload: AlterPaymentPayload,
+) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    alter_payment_inner(&mut conn, payload)
 }
 
 

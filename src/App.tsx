@@ -132,6 +132,7 @@ export default function App() {
   const [paymentInitialType, setPaymentInitialType] = useState<"receipt" | "payment">("receipt");
 
   const [itemsInitialOpenForm, setItemsInitialOpenForm] = useState(false);
+  const [alteringInvoice, setAlteringInvoice] = useState<{ invoiceNo: string; type: "sale" | "purchase" } | null>(null);
 
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [integrityReport, setIntegrityReport] = useState<IntegrityCheckReport | null>(null);
@@ -263,6 +264,9 @@ export default function App() {
       <Sidebar
         currentView={currentView}
         onNavigate={(v) => {
+          if (v !== "Sale" && v !== "Purchase") {
+            setAlteringInvoice(null);
+          }
           setCurrentView(v);
           triggerGlobalRefresh();
         }}
@@ -298,6 +302,7 @@ export default function App() {
                   refreshTrigger={refreshTrigger}
                   onNavigate={(v) => {
                     setItemsInitialOpenForm(false);
+                    if (v !== "Sale" && v !== "Purchase") setAlteringInvoice(null);
                     setCurrentView(v);
                     triggerGlobalRefresh();
                   }}
@@ -326,6 +331,8 @@ export default function App() {
                   refreshTrigger={refreshTrigger}
                   onRefresh={triggerGlobalRefresh}
                   onPrintInvoice={openPrintModal}
+                  alteringInvoiceNo={alteringInvoice?.type === "sale" ? alteringInvoice.invoiceNo : null}
+                  onCancelAlteration={() => setAlteringInvoice(null)}
                   t={t}
                   lang={lang}
                 />
@@ -338,6 +345,8 @@ export default function App() {
                   refreshTrigger={refreshTrigger}
                   onRefresh={triggerGlobalRefresh}
                   onPrintInvoice={openPrintModal}
+                  alteringInvoiceNo={alteringInvoice?.type === "purchase" ? alteringInvoice.invoiceNo : null}
+                  onCancelAlteration={() => setAlteringInvoice(null)}
                   t={t}
                   lang={lang}
                 />
@@ -427,6 +436,11 @@ export default function App() {
               settings={settings}
               refreshTrigger={refreshTrigger}
               onPrintInvoice={openPrintModal}
+              onAlterInvoice={(invNo, type) => {
+                setAlteringInvoice({ invoiceNo: invNo, type });
+                setCurrentView(type === "sale" ? "Sale" : "Purchase");
+                triggerGlobalRefresh();
+              }}
               t={t}
               lang={lang}
             />

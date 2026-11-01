@@ -3620,4 +3620,413 @@ fn test_stage3_sales_invoice_no_validation_and_cascade_rename() {
     assert!(rename_locked_err.contains("बंद अवधि") || rename_locked_err.contains("Books locked"));
 }
 
+#[test]
+fn test_stage4_transaction_alteration_and_cancellation() {
+    use crate::commands::{
+        alter_sale_inner, alter_purchase_inner, cancel_invoice_inner, alter_payment_inner,
+        AlterPaymentPayload, record_payment_inner, PaymentPayload,
+        get_sales_register_inner, get_purchase_register_inner, get_dashboard_stats_inner,
+    };
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Setup Master Data
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone, village, gstin) 
+         VALUES (2, 'Farmer Ram', 'customer', 'unregistered', '9876543210', 'Rampur', NULL)",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone, village, gstin) 
+         VALUES (3, 'Fertilizer Corp', 'supplier', 'regular', '9123456789', 'Bhopal', '23AAACF1234F1Z1')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone, village, gstin) 
+         VALUES (4, 'Farmer Shyam', 'customer', 'unregistered', '9988776655', 'Kisanpur', NULL)",
+        [],
+    ).unwrap();
+
+    conn.execute(
+        "INSERT INTO items (id, name, base_unit, hsn, gst_rate, is_active) 
+         VALUES (1, 'DAP Fertilizer', 'BAG', '3105', 5000, 1)",
+        [],
+    ).unwrap();
+
+    // Opening stock: 100 bags DAP (100000 milli-units)
+    crate::inventory::add_stock_ledger_entry(
+        &conn,
+        "2026-10-01",
+        1,
+        1,
+        100000,
+        "adjust",
+        Some("OPENING"),
+        None,
+        None,
+        None,
+    ).unwrap();
+
+    // 2. Create Sale: SALE-ST4-01
+    // Ram buys 10 bags @ Rs 1,000 (100000 paise).
+    // Taxable = 1000000 paise (Rs 10,000). 5% GST = 50000 paise (CGST 25000 + SGST 25000).
+    // Total = 1050000 paise. Payment = Credit, paid_amount = 500000 paise (Rs 5,000).
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-ST4-01".to_string(),
+        date: "2026-10-15".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 500000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 10000, // 10 bags
+                unit: "BAG".to_string(),
+                rate: 100000,
+                taxable: 1000000,
+                cgst: 25000,
+                sgst: 25000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    // Check pre-alteration stock and balance
+    let stock_pre: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE item_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(stock_pre, 90000); // 100 - 10 = 90 bags
+
+    let ram_bal_pre: i64 = conn.query_row("SELECT SUM(debit - credit) FROM party_ledger WHERE party_id = 2", [], |r| r.get(0)).unwrap();
+    assert_eq!(ram_bal_pre, 550000); // 1050000 - 500000 = 550000 paise
+
+    // 3. Alter Sale (reduce quantity to 6 bags @ Rs 1,200)
+    // 6 bags @ Rs 1,200 = Taxable 720000 paise. 5% GST = 36000 paise. Total = 756000 paise.
+    // Paid amount = 500000 paise. Net balance should become 756000 - 500000 = 256000 paise.
+    alter_sale_inner(&mut conn, "SALE-ST4-01", InvoicePayload {
+        invoice_no: "SALE-ST4-01".to_string(),
+        date: "2026-10-15".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 500000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 6000, // 6 bags
+                unit: "BAG".to_string(),
+                rate: 120000,
+                taxable: 720000,
+                cgst: 18000,
+                sgst: 18000,
+                igst: 0,
+            }
+        ],
+    }, Some("Customer took only 6 bags")).unwrap();
+
+    let stock_post_alter: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE item_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(stock_post_alter, 94000); // 100 - 6 = 94 bags
+
+    let ram_bal_post: i64 = conn.query_row("SELECT SUM(debit - credit) FROM party_ledger WHERE party_id = 2", [], |r| r.get(0)).unwrap();
+    assert_eq!(ram_bal_post, 256000); // 756000 - 500000 = 256000 paise
+
+    // Verify audit log has 'alter' entry
+    let audit_alter: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE entity_type = 'sale' AND entity_id = 'SALE-ST4-01' AND action = 'alter'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(audit_alter, 1);
+
+    // 4. Test Alter Sale Lower Bound Check (< already paid amount)
+    // 3 bags @ Rs 1,000 = 315000 paise < 500000 paid_amount
+    let lower_bound_err = alter_sale_inner(&mut conn, "SALE-ST4-01", InvoicePayload {
+        invoice_no: "SALE-ST4-01".to_string(),
+        date: "2026-10-15".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 500000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 3000,
+                unit: "BAG".to_string(),
+                rate: 100000,
+                taxable: 300000,
+                cgst: 7500,
+                sgst: 7500,
+                igst: 0,
+            }
+        ],
+    }, Some("Attempt lower than payment")).unwrap_err();
+    assert!(lower_bound_err.contains("कम नहीं हो सकती") || lower_bound_err.contains("cannot be less than"));
+
+    // 5. Test Alter Sale Oversell Check (needs 200 bags, only 100 available)
+    let oversell_err = alter_sale_inner(&mut conn, "SALE-ST4-01", InvoicePayload {
+        invoice_no: "SALE-ST4-01".to_string(),
+        date: "2026-10-15".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 500000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 200000, // 200 bags
+                unit: "BAG".to_string(),
+                rate: 100000,
+                taxable: 20000000,
+                cgst: 500000,
+                sgst: 500000,
+                igst: 0,
+            }
+        ],
+    }, Some("Oversell test")).unwrap_err();
+    assert!(oversell_err.contains("Stock kam hai"));
+
+    // 6. Test Alter Sale Change Customer (Party 2 -> Party 4 Shyam)
+    alter_sale_inner(&mut conn, "SALE-ST4-01", InvoicePayload {
+        invoice_no: "SALE-ST4-01".to_string(),
+        date: "2026-10-15".to_string(),
+        party_id: 4, // Changed to Shyam
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 500000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 6000,
+                unit: "BAG".to_string(),
+                rate: 120000,
+                taxable: 720000,
+                cgst: 18000,
+                sgst: 18000,
+                igst: 0,
+            }
+        ],
+    }, Some("Transferred bill to Shyam")).unwrap();
+
+    let ram_bal_after_cust_change: i64 = conn.query_row("SELECT COALESCE(SUM(debit - credit), 0) FROM party_ledger WHERE party_id = 2", [], |r| r.get(0)).unwrap();
+    let shyam_bal_after_cust_change: i64 = conn.query_row("SELECT COALESCE(SUM(debit - credit), 0) FROM party_ledger WHERE party_id = 4", [], |r| r.get(0)).unwrap();
+    assert_eq!(ram_bal_after_cust_change, 0); // Ram completely cleared
+    assert_eq!(shyam_bal_after_cust_change, 256000); // Shyam charged
+
+    // 7. Test Alter Sale FY Boundary Check
+    let fy_err = alter_sale_inner(&mut conn, "SALE-ST4-01", InvoicePayload {
+        invoice_no: "SALE-ST4-01".to_string(),
+        date: "2025-10-15".to_string(), // Previous FY
+        party_id: 4,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 500000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 6000,
+                unit: "BAG".to_string(),
+                rate: 120000,
+                taxable: 720000,
+                cgst: 18000,
+                sgst: 18000,
+                igst: 0,
+            }
+        ],
+    }, Some("FY test")).unwrap_err();
+    assert!(fy_err.contains("financial years") || fy_err.contains("वित्तीय वर्ष"));
+
+    // 8. Test Soft-Cancellation of Sale
+    cancel_invoice_inner(&mut conn, "SALE-ST4-01", Some("Customer cancelled full order")).unwrap();
+
+    let sale_status: String = conn.query_row("SELECT status FROM sales WHERE invoice_no = 'SALE-ST4-01'", [], |r| r.get(0)).unwrap();
+    assert_eq!(sale_status, "cancelled");
+
+    // Stock must be restored to full 100 bags
+    let stock_after_cancel: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE item_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(stock_after_cancel, 100000);
+
+    // Shyam balance must be back to 0
+    let shyam_bal_after_cancel: i64 = conn.query_row("SELECT COALESCE(SUM(debit - credit), 0) FROM party_ledger WHERE party_id = 4", [], |r| r.get(0)).unwrap();
+    assert_eq!(shyam_bal_after_cancel, 0);
+
+    // Check registers exclude cancelled invoice from totals
+    let sreg = get_sales_register_inner(&conn, "2026-10-01", "2026-10-31", Some("23")).unwrap();
+    assert_eq!(sreg.grand_total, 0); // Excluded from total!
+    assert_eq!(sreg.entries.len(), 1);
+    assert_eq!(sreg.entries[0].status.as_deref(), Some("cancelled"));
+
+    let dstats = get_dashboard_stats_inner(&conn, "2026-10-15").unwrap();
+    assert_eq!(dstats.today_sales, 0); // Excluded from dashboard!
+
+    // 9. Test Purchase Alteration & Cancellation
+    // Create purchase PUR-ST4-01: 20 bags DAP @ Rs 800.
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-ST4-01".to_string(),
+        date: "2026-10-16".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-123".to_string()),
+        supplier_invoice_date: Some("2026-10-16".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 20000, // 20 bags
+                unit: "BAG".to_string(),
+                rate: 80000,
+                taxable: 1600000,
+                cgst: 40000,
+                sgst: 40000,
+                igst: 0,
+            }
+        ],
+    }).unwrap();
+
+    let stock_after_pur: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE item_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(stock_after_pur, 120000); // 100 + 20 = 120 bags
+
+    // Alter purchase: reduce to 15 bags
+    alter_purchase_inner(&mut conn, "PUR-ST4-01", InvoicePayload {
+        invoice_no: "PUR-ST4-01".to_string(),
+        date: "2026-10-16".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-123-REV".to_string()),
+        supplier_invoice_date: Some("2026-10-16".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 15000, // 15 bags
+                unit: "BAG".to_string(),
+                rate: 80000,
+                taxable: 1200000,
+                cgst: 30000,
+                sgst: 30000,
+                igst: 0,
+            }
+        ],
+    }, Some("Corrected received quantity to 15 bags")).unwrap();
+
+    let stock_after_pur_alter: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger WHERE item_id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(stock_after_pur_alter, 115000); // 100 + 15 = 115 bags
+
+    // Sell 112 bags -> remaining stock = 3 bags
+    crate::inventory::add_stock_ledger_entry(
+        &conn,
+        "2026-10-17",
+        1,
+        1,
+        -112000,
+        "sale",
+        Some("TEST-SALE"),
+        None,
+        None,
+        None,
+    ).unwrap();
+
+    // Now try to alter purchase to 5 bags (a reduction of 10 bags, but current stock is only 3 bags!)
+    let pur_stock_err = alter_purchase_inner(&mut conn, "PUR-ST4-01", InvoicePayload {
+        invoice_no: "PUR-ST4-01".to_string(),
+        date: "2026-10-16".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-123-REV".to_string()),
+        supplier_invoice_date: Some("2026-10-16".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 5000,
+                unit: "BAG".to_string(),
+                rate: 80000,
+                taxable: 400000,
+                cgst: 10000,
+                sgst: 10000,
+                igst: 0,
+            }
+        ],
+    }, Some("Attempt oversell reduction")).unwrap_err();
+    assert!(pur_stock_err.contains("Stock is already sold") || pur_stock_err.contains("पर्याप्त स्टॉक नहीं है"));
+
+    // Also verify cancelling this purchase fails because 15 bags cannot be removed when only 3 remain
+    let pur_cancel_err = cancel_invoice_inner(&mut conn, "PUR-ST4-01", Some("Attempt cancel with sold stock")).unwrap_err();
+    assert!(pur_cancel_err.contains("negative stock") || pur_cancel_err.contains("पर्याप्त स्टॉक नहीं है"));
+
+    let preg = get_purchase_register_inner(&conn, "2026-10-01", "2026-10-31", Some("23")).unwrap();
+    assert_eq!(preg.entries.len(), 1);
+    assert_eq!(preg.entries[0].status.as_deref(), Some("active"));
+
+    // 10. Test Alter Payment Voucher
+    let pay_ref = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 200000, // Rs 2,000
+        payment_mode: "cash".to_string(),
+        date: "2026-10-18".to_string(),
+        remark: Some("Initial payment".to_string()),
+        ref_id: None,
+    }).unwrap();
+
+    let pay_ledger_id: i64 = conn.query_row("SELECT id FROM party_ledger WHERE ref_id = ?1", rusqlite::params![&pay_ref], |r| r.get(0)).unwrap();
+    let ram_bal_after_pay: i64 = conn.query_row("SELECT SUM(debit - credit) FROM party_ledger WHERE party_id = 2", [], |r| r.get(0)).unwrap();
+    assert_eq!(ram_bal_after_pay, -200000); // Advance of Rs 2,000
+
+    // Alter payment voucher: change amount to 350000 paise (Rs 3,500)
+    alter_payment_inner(&mut conn, AlterPaymentPayload {
+        ledger_id: pay_ledger_id,
+        date: "2026-10-18".to_string(),
+        amount_paise: 350000,
+        payment_mode: "upi_bank".to_string(),
+        remark: Some("Updated receipt".to_string()),
+        ref_id: Some(pay_ref.clone()),
+        reason: Some("Corrected amount from cash receipt slip".to_string()),
+    }).unwrap();
+
+    let ram_bal_after_pay_alter: i64 = conn.query_row("SELECT SUM(debit - credit) FROM party_ledger WHERE party_id = 2", [], |r| r.get(0)).unwrap();
+    assert_eq!(ram_bal_after_pay_alter, -350000); // Advance of Rs 3,500
+
+    // Verify audit log for payment alteration
+    let audit_pay_alter: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE entity_type = 'party_ledger' AND entity_id = ?1 AND action = 'alter'",
+        rusqlite::params![&pay_ledger_id.to_string()],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(audit_pay_alter, 1);
+}
+
 

@@ -55,6 +55,7 @@ interface ReportsViewProps {
   settings: AppSettings;
   refreshTrigger: number;
   onPrintInvoice?: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
+  onAlterInvoice?: (invNo: string, type: "sale" | "purchase") => void;
   t: Translations;
   lang: Language;
 }
@@ -83,6 +84,7 @@ export function ReportsView({
   settings,
   refreshTrigger,
   onPrintInvoice,
+  onAlterInvoice,
   t,
   lang,
 }: ReportsViewProps) {
@@ -145,6 +147,46 @@ export function ReportsView({
   const [selectedInvoiceForEdit, setSelectedInvoiceForEdit] = useState<{ no: string; type: "sale" | "purchase"; suppDate?: string } | null>(null);
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
   const [auditEntity, setAuditEntity] = useState<{ type: string; id: string } | null>(null);
+
+  // Cancellation modal state
+  const [cancelInvoiceModalOpen, setCancelInvoiceModalOpen] = useState(false);
+  const [selectedInvoiceForCancel, setSelectedInvoiceForCancel] = useState<{ no: string; type: "sale" | "purchase" } | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [isCancelling, setIsCancelling] = useState(false);
+
+  const handleConfirmCancel = async () => {
+    if (!selectedInvoiceForCancel || !cancelReason.trim()) return;
+    setIsCancelling(true);
+    try {
+      await invoke("cancel_invoice_cmd", {
+        invoiceNo: selectedInvoiceForCancel.no,
+        reason: cancelReason.trim(),
+      });
+      setFeedback({
+        message:
+          lang === "hi"
+            ? `बिल ${selectedInvoiceForCancel.no} सफलतापूर्वक रद्द (Cancelled) किया गया।`
+            : `Invoice ${selectedInvoiceForCancel.no} cancelled successfully.`,
+        isError: false,
+      });
+      setCancelInvoiceModalOpen(false);
+      setSelectedInvoiceForCancel(null);
+      setCancelReason("");
+      fetchReportData();
+    } catch (err: any) {
+      console.error("cancel_invoice_cmd error:", err);
+      const raw = typeof err === "string" ? err : err?.message || String(err || "");
+      setFeedback({
+        message:
+          lang === "hi"
+            ? `बिल रद्द करने में त्रुटि: ${raw}`
+            : `Error cancelling invoice: ${raw}`,
+        isError: true,
+      });
+    } finally {
+      setIsCancelling(false);
+    }
+  };
 
   // Load items and parties once
   useEffect(() => {
@@ -1825,33 +1867,71 @@ export function ReportsView({
                             row.gross_sale ??
                             rowTaxable + rowTax;
 
+                          const isCancelled = row.status === "cancelled";
                           return (
-                            <tr key={idx} className="hover:bg-paper/40 transition-colors">
+                            <tr
+                              key={idx}
+                              className={`transition-colors ${
+                                isCancelled ? "bg-rose-50/40 opacity-70" : "hover:bg-paper/40"
+                              }`}
+                            >
                               <td className="py-1.5 px-2.5 font-mono text-muted whitespace-nowrap">
-                                <span className="font-bold text-ink block">
-                                  {row.invoice_no || rowDate}
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span
+                                    className={`font-bold block ${
+                                      isCancelled ? "line-through text-slate-500" : "text-ink"
+                                    }`}
+                                  >
+                                    {row.invoice_no || rowDate}
+                                  </span>
+                                  {isCancelled && (
+                                    <span
+                                      data-testid={`badge-cancelled-${row.invoice_no}`}
+                                      className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-100 text-rose-800 border border-rose-300 uppercase tracking-wider"
+                                    >
+                                      {lang === "hi" ? "रद्द" : "CANCELLED"}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="text-[10px]">{rowDate}</span>
                               </td>
-                              <td className="py-1.5 px-2 font-bold text-ink truncate max-w-[140px]">
+                              <td
+                                className={`py-1.5 px-2 font-bold truncate max-w-[140px] ${
+                                  isCancelled ? "text-slate-500" : "text-ink"
+                                }`}
+                              >
                                 {rowName}
                               </td>
-                              <td className="py-1.5 px-2 text-right font-mono text-ink">
+                              <td
+                                className={`py-1.5 px-2 text-right font-mono ${
+                                  isCancelled ? "line-through text-slate-400" : "text-ink"
+                                }`}
+                              >
                                 {formatCurrency(rowTaxable)}
                               </td>
                               {withGst && (
-                                <td className="py-1.5 px-2 text-right font-mono text-emerald-700">
+                                <td
+                                  className={`py-1.5 px-2 text-right font-mono ${
+                                    isCancelled ? "line-through text-slate-400" : "text-emerald-700"
+                                  }`}
+                                >
                                   {formatCurrency(rowTax)}
                                 </td>
                               )}
-                              <td className="py-1.5 px-2.5 text-right font-mono font-bold text-ink">
+                              <td
+                                className={`py-1.5 px-2.5 text-right font-mono font-bold ${
+                                  isCancelled ? "line-through text-slate-500" : "text-ink"
+                                }`}
+                              >
                                 {formatCurrency(rowTotal)}
                               </td>
                               <td className="py-1.5 px-2 text-center whitespace-nowrap">
                                 <div className="flex items-center justify-center gap-1.5">
                                   <span
                                     className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                      row.payment_mode === "credit"
+                                      isCancelled
+                                        ? "bg-slate-100 text-slate-500 border border-slate-300"
+                                        : row.payment_mode === "credit"
                                         ? "bg-amber-100 text-amber-800 border border-amber-300"
                                         : "bg-emerald-100 text-emerald-800 border border-emerald-300"
                                     }`}
@@ -1860,8 +1940,40 @@ export function ReportsView({
                                   </span>
                                   {row.invoice_no && (
                                     <div className="inline-flex items-center gap-1">
-                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && (
+                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && !isCancelled && (
                                         <>
+                                          {onAlterInvoice && (
+                                            <button
+                                              type="button"
+                                              data-testid={`alter-invoice-btn-${row.invoice_no}`}
+                                              onClick={() =>
+                                                onAlterInvoice(
+                                                  row.invoice_no,
+                                                  activeTab === "sales_reg" ? "sale" : "purchase"
+                                                )
+                                              }
+                                              title={lang === "hi" ? "बिल में संशोधन करें (Alter Invoice)" : "Alter Invoice"}
+                                              className="px-1.5 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded text-[10px] font-bold border border-amber-300 shadow-2xs transition-transform active:scale-95"
+                                            >
+                                              ✏️ ऑल्टर
+                                            </button>
+                                          )}
+                                          <button
+                                            type="button"
+                                            data-testid={`cancel-invoice-btn-${row.invoice_no}`}
+                                            onClick={() => {
+                                              setSelectedInvoiceForCancel({
+                                                no: row.invoice_no,
+                                                type: activeTab === "sales_reg" ? "sale" : "purchase",
+                                              });
+                                              setCancelReason("");
+                                              setCancelInvoiceModalOpen(true);
+                                            }}
+                                            title={lang === "hi" ? "बिल रद्द करें (Cancel Invoice)" : "Cancel Invoice"}
+                                            className="px-1.5 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-800 rounded text-[10px] font-bold border border-rose-300 shadow-2xs transition-transform active:scale-95"
+                                          >
+                                            🚫 रद्द
+                                          </button>
                                           <button
                                             type="button"
                                             onClick={() => {
@@ -1871,26 +1983,32 @@ export function ReportsView({
                                               });
                                               setEditInvoiceNoModalOpen(true);
                                             }}
-                                            title={activeTab === "sales_reg" ? "बिल नंबर बदलें (Change invoice no)" : "सप्लायर बिल नंबर संपादित करें (Edit supplier invoice no)"}
+                                            title={
+                                              activeTab === "sales_reg"
+                                                ? "बिल नंबर बदलें (Change invoice no)"
+                                                : "सप्लायर बिल नंबर संपादित करें (Edit supplier invoice no)"
+                                            }
                                             className="px-1.5 py-0.5 bg-forest/10 hover:bg-forest/20 text-forest rounded text-[10px] font-bold border border-forest/30 shadow-2xs transition-transform active:scale-95"
                                           >
                                             ✏️ नं
                                           </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setAuditEntity({
-                                                type: activeTab === "sales_reg" ? "sale" : "purchase",
-                                                id: row.invoice_no,
-                                              });
-                                              setIsAuditModalOpen(true);
-                                            }}
-                                            title="ऑडिट इतिहास (Alteration History)"
-                                            className="px-1.5 py-0.5 bg-paper hover:bg-border text-muted rounded text-[10px] font-bold border border-border shadow-2xs transition-transform active:scale-95"
-                                          >
-                                            🕒
-                                          </button>
                                         </>
+                                      )}
+                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setAuditEntity({
+                                              type: activeTab === "sales_reg" ? "sale" : "purchase",
+                                              id: row.invoice_no,
+                                            });
+                                            setIsAuditModalOpen(true);
+                                          }}
+                                          title="ऑडिट इतिहास (Alteration History)"
+                                          className="px-1.5 py-0.5 bg-paper hover:bg-border text-muted rounded text-[10px] font-bold border border-border shadow-2xs transition-transform active:scale-95"
+                                        >
+                                          🕒
+                                        </button>
                                       )}
                                       {onPrintInvoice && (
                                         <>
@@ -1976,6 +2094,94 @@ export function ReportsView({
           entityId={auditEntity.id}
           lang={lang}
         />
+      )}
+
+      {/* Cancel Invoice Confirmation Modal */}
+      {cancelInvoiceModalOpen && selectedInvoiceForCancel && (
+        <div className="fixed inset-0 z-50 bg-ink/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-panel shadow-2xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <h3 className="font-serif text-base font-bold text-rose-800 flex items-center gap-2">
+                <span>🚫</span>
+                <span>{lang === "hi" ? "बिल रद्द करें (Cancel Invoice)" : "Cancel Invoice"}</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setCancelInvoiceModalOpen(false);
+                  setSelectedInvoiceForCancel(null);
+                }}
+                className="p-1 text-muted hover:text-ink rounded"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="text-xs text-ink/80 space-y-2">
+              <p>
+                {lang === "hi"
+                  ? `क्या आप वाकई बिल ${selectedInvoiceForCancel.no} को रद्द करना चाहते हैं?`
+                  : `Are you sure you want to cancel invoice ${selectedInvoiceForCancel.no}?`}
+              </p>
+              <div className="bg-rose-50 border border-rose-200 text-rose-900 p-2.5 rounded-lg text-[11px] leading-snug">
+                {selectedInvoiceForCancel.type === "sale"
+                  ? lang === "hi"
+                    ? "चेतावनी: बिक्री बिल रद्द करने पर बेचा गया स्टॉक वापस गोदाम में जमा हो जाएगा और ग्राहक का खाता उलट (Reverse) दिया जाएगा।"
+                    : "Warning: Cancelling a sale invoice returns stock to godown and reverses party ledger entries."
+                  : lang === "hi"
+                  ? "चेतावनी: खरीद बिल रद्द करने पर खरीद का स्टॉक कम हो जाएगा (यदि स्टॉक पहले ही बिक चुका है तो रद्दीकरण अस्वीकार होगा)।"
+                  : "Warning: Cancelling a purchase reduces stock. If stock was already sold, cancellation will be rejected."}
+              </div>
+
+              <div>
+                <label className="block font-bold text-ink mb-1">
+                  {lang === "hi" ? "रद्द करने का कारण (Reason) *" : "Reason for Cancellation *"}
+                </label>
+                <input
+                  type="text"
+                  required
+                  data-testid="cancel-invoice-reason-input"
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder={
+                    lang === "hi"
+                      ? "उदा. गलत प्रविष्टि, ग्राहक ने सौदा रद्द किया..."
+                      : "e.g. Duplicate entry, customer cancelled..."
+                  }
+                  className="w-full text-xs px-2.5 py-1.5 bg-paper border border-border rounded-lg text-ink focus:outline-none focus:ring-1 focus:ring-rose-500 font-medium"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <button
+                type="button"
+                onClick={() => {
+                  setCancelInvoiceModalOpen(false);
+                  setSelectedInvoiceForCancel(null);
+                }}
+                className="px-3 py-1.5 rounded-lg border border-border bg-paper hover:bg-forest/10 text-xs font-bold text-muted hover:text-ink"
+              >
+                {lang === "hi" ? "रद्द न करें (Back)" : "Close"}
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-cancel-invoice-btn"
+                disabled={!cancelReason.trim() || isCancelling}
+                onClick={handleConfirmCancel}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all"
+              >
+                {isCancelling
+                  ? lang === "hi"
+                    ? "रद्द हो रहा है..."
+                    : "Cancelling..."
+                  : lang === "hi"
+                  ? "हाँ, बिल रद्द करें"
+                  : "Confirm Cancel"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
