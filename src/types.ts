@@ -125,6 +125,10 @@ export interface BackupInfo {
   path?: string;
   created_at_formatted?: string;
   size_formatted?: string;
+  verified?: boolean;
+  size_bytes?: number;
+  created_at?: string;
+  is_pre_restore?: boolean;
 }
 
 export interface BackupResult {
@@ -140,19 +144,42 @@ export interface BackupResult {
   message: string;
 }
 
+export interface DbSafetyInfo {
+  dbPath?: string;
+  journalMode?: string;
+  synchronous?: string;
+  foreignKeys?: boolean;
+  busyTimeout?: number;
+  isSyncedFolder?: boolean;
+  isRemovable?: boolean;
+  syncWarning?: string | null;
+  // Rust snake_case compatibility
+  db_path?: string;
+  journal_mode?: string;
+  foreign_keys?: number;
+  busy_timeout?: number;
+  is_synced_folder?: boolean;
+  is_removable?: boolean;
+  sync_warning?: string | null;
+  is_synced_or_removable?: boolean;
+}
+
 export interface IntegrityCheckReport {
   isOk: boolean;
   message: string;
   details?: string[];
   suggestedBackup?: BackupInfo | null;
+  availableBackups?: BackupInfo[];
   // Compatibility aliases
   is_ok?: boolean;
   suggested_backup?: BackupInfo | null;
+  available_backups?: BackupInfo[];
 }
 
 export interface BackupStatusInfo {
   lastBackupTime?: string | null;
   isBackupRecent: boolean;
+  isOlderThan3Days?: boolean;
   formattedChipText: string;
   primaryFolder: string;
   secondaryFolder?: string | null;
@@ -162,6 +189,7 @@ export interface BackupStatusInfo {
   // Compatibility aliases
   last_backup_time?: string | null;
   is_recent?: boolean;
+  is_older_than_3_days?: boolean;
   formatted_chip_hi?: string;
   formatted_chip_en?: string;
   primary_free_space?: string | null;

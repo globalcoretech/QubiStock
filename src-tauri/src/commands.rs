@@ -480,7 +480,9 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
 
     let is_active_val = payload.is_active.unwrap_or(1);
 
-    conn.execute(
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
         "UPDATE items SET name = ?1, category = ?2, hsn = ?3, gst_rate = ?4, base_unit = ?5, gst_status = ?6, is_active = ?7 WHERE id = ?8",
         rusqlite::params![
             name_trimmed,
@@ -497,7 +499,7 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
     // Update or insert new units if provided
     if let Some(ref new_units) = payload.units {
         for u in new_units {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO item_units (item_id, unit_name, factor_to_base) VALUES (?1, ?2, ?3)
                  ON CONFLICT(item_id, unit_name) DO UPDATE SET factor_to_base = ?3",
                 rusqlite::params![payload.id, u.unit_name.trim(), u.factor_to_base],
@@ -516,7 +518,7 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
     });
 
     crate::audit::write_audit(
-        conn,
+        &tx,
         "item",
         &payload.id.to_string(),
         "update",
@@ -524,6 +526,8 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
         Some(&after_obj.to_string()),
         payload.reason.as_deref(),
     )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -873,7 +877,9 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
         "state_code": old_state_code,
     });
 
-    conn.execute(
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
         "UPDATE parties SET name = ?1, type = ?2, category = ?3, village = ?4, address = ?5, phone = ?6, gstin = ?7, state_code = ?8 WHERE id = ?9",
         rusqlite::params![
             name_trimmed,
@@ -900,7 +906,7 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
     });
 
     crate::audit::write_audit(
-        conn,
+        &tx,
         "party",
         &payload.id.to_string(),
         "update",
@@ -908,6 +914,8 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
         Some(&after_obj.to_string()),
         payload.reason.as_deref(),
     )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -3822,20 +3830,22 @@ pub fn get_backup_status_cmd(app: AppHandle) -> Result<crate::backup::BackupStat
         .query_row("SELECT last_backup_time FROM settings WHERE id = 1", [], |r| r.get(0))
         .unwrap_or(None);
 
-    let is_recent = if let Some(ref t) = last_time {
+    let (is_recent, is_older_than_3_days) = if let Some(ref t) = last_time {
         if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t) {
             let now = chrono::Local::now();
             let duration = now.signed_duration_since(parsed.with_timezone(&chrono::Local));
-            duration.num_hours() <= 24
+            (duration.num_hours() <= 24, duration.num_hours() > 72)
         } else {
-            false
+            (false, true)
         }
     } else {
-        false
+        (false, true)
     };
 
     let chip_text = if is_recent {
         "सुरक्षित ✓".to_string()
+    } else if is_older_than_3_days {
+        "3 दिन से पुराना!".to_string()
     } else if last_time.is_some() {
         "बैकअप पुराना!".to_string()
     } else {
@@ -3862,6 +3872,7 @@ pub fn get_backup_status_cmd(app: AppHandle) -> Result<crate::backup::BackupStat
     Ok(crate::backup::BackupStatusInfo {
         last_backup_time: last_time,
         is_backup_recent: is_recent,
+        is_older_than_3_days,
         formatted_chip_text: chip_text,
         primary_folder: primary_dir.to_string_lossy().to_string(),
         secondary_folder: secondary_dir.map(|p| p.to_string_lossy().to_string()),
@@ -5224,6 +5235,153 @@ pub fn cancel_payment_cmd(
     let mut conn = get_conn(&app)?;
     cancel_payment_inner(&mut conn, ledger_id, reason.as_deref())
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DbSafetyInfo {
+    pub db_path: String,
+    pub journal_mode: String,
+    pub synchronous: String,
+    pub foreign_keys: bool,
+    pub busy_timeout: i64,
+    pub is_synced_folder: bool,
+    pub is_removable: bool,
+    pub sync_warning: Option<String>,
+}
+
+#[cfg(windows)]
+fn check_is_removable_drive(path_str: &str) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    extern "system" {
+        fn GetDriveTypeW(lpRootPathName: *const u16) -> u32;
+    }
+    if path_str.len() >= 2 && path_str.chars().nth(1) == Some(':') {
+        let root = format!("{}\\", &path_str[0..2]);
+        let wide: Vec<u16> = OsStr::new(&root).encode_wide().chain(Some(0)).collect();
+        unsafe {
+            let dt = GetDriveTypeW(wide.as_ptr());
+            // DRIVE_REMOVABLE = 2, DRIVE_REMOTE = 4
+            dt == 2 || dt == 4
+        }
+    } else {
+        false
+    }
+}
+
+#[cfg(not(windows))]
+fn check_is_removable_drive(_path_str: &str) -> bool {
+    false
+}
+
+fn path_has_cloud_keywords(path_str: &str) -> bool {
+    let lower = path_str.to_lowercase();
+    let cloud_sync_keywords = [
+        "onedrive",
+        "dropbox",
+        "google drive",
+        "googledrive",
+        "icloud",
+        "nextcloud",
+        "box sync",
+        "\\box\\",
+        "/box/",
+    ];
+    cloud_sync_keywords.iter().any(|k| lower.contains(k))
+}
+
+pub fn get_db_safety_info_inner(
+    conn: &Connection,
+    db_path_str: &str,
+    primary_backup_str: Option<&str>,
+) -> Result<DbSafetyInfo, String> {
+    let j_mode: String = conn.query_row("PRAGMA journal_mode;", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let sync_mode: String = conn.query_row("PRAGMA synchronous;", [], |r| {
+        let val: i64 = r.get(0)?;
+        let name = match val {
+            0 => "OFF",
+            1 => "NORMAL",
+            2 => "FULL",
+            3 => "EXTRA",
+            _ => "UNKNOWN",
+        };
+        Ok(name.to_string())
+    }).map_err(|e| e.to_string())?;
+
+    let fk_val: i64 = conn.query_row("PRAGMA foreign_keys;", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let foreign_keys = fk_val == 1;
+
+    let busy_timeout: i64 = conn.query_row("PRAGMA busy_timeout;", [], |r| r.get(0))
+        .unwrap_or(0);
+
+    let is_db_synced = path_has_cloud_keywords(db_path_str);
+    let is_bak_synced = primary_backup_str.map(path_has_cloud_keywords).unwrap_or(false);
+    let is_synced_folder = is_db_synced || is_bak_synced;
+
+    let is_db_removable = check_is_removable_drive(db_path_str);
+    let is_bak_removable = primary_backup_str.map(check_is_removable_drive).unwrap_or(false);
+    let is_removable = is_db_removable || is_bak_removable;
+
+    let sync_warning = if is_synced_folder {
+        Some("डेटाबेस या बैकअप फ़ोल्डर क्लाउड-सिंक (OneDrive/Dropbox/Drive) फ़ोल्डर में स्थित है। इससे फ़ाइल लॉकिंग व डेटा करप्शन का जोखिम रहता है। / Database or backup folder is inside a cloud-synced folder, risking SQLite file locking and corruption.".to_string())
+    } else if is_removable {
+        Some("डेटाबेस या प्राथमिक बैकअप पेनड्राइव या रिमूवेबल ड्राइव पर स्थित है। ड्राइव अचानक निकलने पर डेटा हानि का जोखिम रहता है। / Database or primary backup is on a removable drive, which risks corruption if disconnected.".to_string())
+    } else {
+        None
+    };
+
+    Ok(DbSafetyInfo {
+        db_path: db_path_str.to_string(),
+        journal_mode: j_mode,
+        synchronous: sync_mode,
+        foreign_keys,
+        busy_timeout,
+        is_synced_folder,
+        is_removable,
+        sync_warning,
+    })
+}
+
+#[command]
+pub fn get_db_safety_info_cmd(app: AppHandle) -> Result<DbSafetyInfo, String> {
+    let conn = get_conn(&app)?;
+    let path = get_db_path(&app)?;
+    let primary_dir = crate::backup::get_primary_backup_dir(&conn);
+    get_db_safety_info_inner(&conn, &path.to_string_lossy(), Some(&primary_dir.to_string_lossy()))
+}
+
+pub fn run_wal_checkpoint_truncate(conn: &Connection) -> Result<String, String> {
+    let mut stmt = conn.prepare("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|e| e.to_string())?;
+    let res: Result<(i64, i64, i64), _> = stmt.query_row([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)));
+    match res {
+        Ok((busy, log_frames, checkpointed_frames)) => {
+            Ok(format!("Checkpoint TRUNCATE complete (busy={}, log={}, checkpointed={})", busy, log_frames, checkpointed_frames))
+        }
+        Err(e) => Err(format!("wal_checkpoint failed: {}", e)),
+    }
+}
+
+#[command]
+pub fn graceful_exit_cmd(app: AppHandle) -> Result<(), String> {
+    eprintln!("[Krishi Kendra] Initiating graceful exit...");
+
+    // 1. Flush WAL to main database file
+    if let Ok(conn) = get_conn(&app) {
+        if let Err(e) = run_wal_checkpoint_truncate(&conn) {
+            eprintln!("[Krishi Kendra] WAL checkpoint on exit warning: {}", e);
+        }
+    }
+
+    // 2. Trigger auto backup with 5-second hard limit (never blocks exit)
+    let _ = crate::backup::auto_backup_with_timeout(&app, "graceful exit", std::time::Duration::from_secs(5));
+
+    // 3. Exit process cleanly
+    app.exit(0);
+    Ok(())
+}
+
 
 
 

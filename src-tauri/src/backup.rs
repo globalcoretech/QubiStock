@@ -46,6 +46,8 @@ pub struct IntegrityCheckReport {
     pub message: String,
     pub details: Vec<String>,
     pub suggested_backup: Option<BackupInfo>,
+    #[serde(default)]
+    pub available_backups: Vec<BackupInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -62,6 +64,8 @@ pub struct RestoreResult {
 pub struct BackupStatusInfo {
     pub last_backup_time: Option<String>,
     pub is_backup_recent: bool, // <= 24 hours
+    #[serde(default)]
+    pub is_older_than_3_days: bool,
     pub formatted_chip_text: String,
     pub primary_folder: String,
     pub secondary_folder: Option<String>,
@@ -577,7 +581,9 @@ pub fn check_and_apply_pending_restore(db_path: &str) -> Result<bool, std::io::E
 }
 
 /// Runs PRAGMA integrity_check on active database at startup.
-/// If check fails, finds the latest verified backup from primary and secondary folders.
+/// Startup check: Runs PRAGMA quick_check at launch.
+/// If quick_check fails, runs full integrity_check, collects error details,
+/// and finds all verified backups in primary and secondary folders for recovery.
 pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckReport {
     if !Path::new(db_path).exists() {
         return IntegrityCheckReport {
@@ -585,15 +591,26 @@ pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckRe
             message: "Fresh database".to_string(),
             details: vec!["Fresh database".to_string()],
             suggested_backup: None,
+            available_backups: Vec::new(),
         };
     }
 
-    let is_ok = match Connection::open(db_path) {
+    let (is_ok, check_details) = match Connection::open(db_path) {
         Ok(conn) => {
-            let res: Result<String, _> = conn.query_row("PRAGMA integrity_check;", [], |r| r.get(0));
-            res.map(|s| s == "ok").unwrap_or(false)
+            let _ = crate::db::configure_connection(&conn);
+            // 1. Run PRAGMA quick_check first
+            let qc: Result<String, _> = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0));
+            match qc {
+                Ok(s) if s == "ok" => (true, vec!["quick_check: ok".to_string()]),
+                Ok(err_msg) => {
+                    // Also run full integrity_check to gather more details
+                    let ic: Result<String, _> = conn.query_row("PRAGMA integrity_check;", [], |r| r.get(0));
+                    (false, vec![format!("quick_check: {}", err_msg), format!("integrity_check: {}", ic.unwrap_or_else(|e| e.to_string()))])
+                }
+                Err(e) => (false, vec![format!("quick_check error: {}", e)]),
+            }
         }
-        Err(_) => false,
+        Err(e) => (false, vec![format!("Database file open error: {}", e)]),
     };
 
     if is_ok {
@@ -602,10 +619,12 @@ pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckRe
             message: "Database integrity OK".to_string(),
             details: vec!["ok".to_string()],
             suggested_backup: None,
+            available_backups: Vec::new(),
         };
     }
 
-    // Integrity failed! Find newest valid backup to suggest
+    // Integrity failed! Find all valid backups to suggest for one-click restore
+    let mut available_backups = Vec::new();
     let mut candidate = None;
     if primary_dir.exists() {
         if let Ok(entries) = fs::read_dir(primary_dir) {
@@ -627,11 +646,11 @@ pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckRe
 
             for p in files {
                 if let Ok(c) = Connection::open(&p) {
-                    let st: Result<String, _> = c.query_row("PRAGMA integrity_check;", [], |r| r.get(0));
+                    let st: Result<String, _> = c.query_row("PRAGMA quick_check;", [], |r| r.get(0));
                     if st.map(|s| s == "ok").unwrap_or(false) {
                         let name = p.file_name().unwrap().to_string_lossy().to_string();
                         let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-                        candidate = Some(BackupInfo {
+                        let info = BackupInfo {
                             file_name: name.clone(),
                             file_path: p.to_string_lossy().to_string(),
                             timestamp: parse_timestamp_from_filename(&name),
@@ -639,8 +658,11 @@ pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckRe
                             formatted_size: format_size(size),
                             is_verified: true,
                             is_safety_backup: name.starts_with("pre_restore_"),
-                        });
-                        break;
+                        };
+                        if candidate.is_none() {
+                            candidate = Some(info.clone());
+                        }
+                        available_backups.push(info);
                     }
                 }
             }
@@ -649,9 +671,10 @@ pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckRe
 
     IntegrityCheckReport {
         is_ok: false,
-        message: "डेटा में गड़बड़ी मिली (Database integrity check failed)".to_string(),
-        details: vec!["डेटाबेस फ़ाइल में खराबी या अनपेक्षित बदलाव पाया गया है (PRAGMA integrity_check != ok)".to_string()],
+        message: "डेटा में गड़बड़ी मिली (Database integrity quick_check failed)".to_string(),
+        details: check_details,
         suggested_backup: candidate,
+        available_backups,
     }
 }
 
@@ -662,6 +685,7 @@ pub fn auto_backup(app: &tauri::AppHandle, reason: &str) -> Result<BackupResult,
     let db_path = data_dir.join("inventory.db");
     if db_path.exists() {
         if let Ok(conn) = Connection::open(&db_path) {
+            let _ = crate::db::configure_connection(&conn);
             let primary = get_primary_backup_dir(&conn);
             let secondary = get_secondary_backup_dir(&conn);
             eprintln!("[Krishi Kendra] Triggering auto backup (reason: {})...", reason);
@@ -669,5 +693,26 @@ pub fn auto_backup(app: &tauri::AppHandle, reason: &str) -> Result<BackupResult,
         }
     }
     Err("Database file not accessible for auto backup".to_string())
+}
+
+/// Runs auto_backup in a separate thread with a maximum timeout (e.g. 5 seconds for exit),
+/// guaranteeing that an exit sequence is never blocked indefinitely if backup stalls.
+pub fn auto_backup_with_timeout(app: &tauri::AppHandle, reason: &str, timeout: std::time::Duration) -> Result<BackupResult, String> {
+    let handle = app.clone();
+    let reason_string = reason.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let res = auto_backup(&handle, &reason_string);
+        let _ = tx.send(res);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(res) => res,
+        Err(_) => {
+            eprintln!("[Krishi Kendra] Auto backup timed out after {:?}", timeout);
+            Err(format!("Auto backup timed out after {:?}", timeout))
+        }
+    }
 }
 

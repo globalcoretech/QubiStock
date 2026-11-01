@@ -39,6 +39,8 @@ export interface PaymentViewProps {
   initialPendingBills?: PendingBill[];
   initialAmount?: string;
   initialMatchedInvoiceNo?: string;
+  onDirtyChange?: (isDirty: boolean) => void;
+  onSavingChange?: (isSaving: boolean) => void;
 }
 
 export function PaymentView({
@@ -53,6 +55,8 @@ export function PaymentView({
   initialPendingBills,
   initialAmount,
   initialMatchedInvoiceNo,
+  onDirtyChange,
+  onSavingChange,
 }: PaymentViewProps) {
   const [paymentType, setPaymentType] = useState<"receipt" | "payment">(initialType);
   const [partyId, setPartyId] = useState<string>(() => {
@@ -75,6 +79,22 @@ export function PaymentView({
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
+
+  // Dirty flag when user has entered data not yet saved
+  const isDirty = Boolean(
+    partyId !== "" ||
+    amountRupees.trim() !== "" ||
+    remark.trim() !== "" ||
+    matchedInvoiceNo !== ""
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    onSavingChange?.(saving);
+  }, [saving, onSavingChange]);
 
   // Load parties and party balances with partyType filter based on tab
   const loadPartiesAndBalances = async (targetType?: "customer" | "supplier") => {

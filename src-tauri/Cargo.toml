@@ -22,3 +22,4 @@ encoding_rs = "0.8"
 roxmltree = "0.20.0"
 base64 = "0.22"
 rfd = { version = "0.16", default-features = false }
+tauri-plugin-single-instance = "2.5.5"

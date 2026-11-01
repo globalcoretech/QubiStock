@@ -17,12 +17,45 @@ mod tests;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
             let data_dir = app.path().app_data_dir().unwrap_or_default();
             let db_path = data_dir.join("inventory.db");
             let _ = backup::check_and_apply_pending_restore(&db_path.to_string_lossy());
+
+            // Daily first-launch backup check
+            let handle_launch = app.handle().clone();
+            let db_path_clone = db_path.clone();
+            std::thread::spawn(move || {
+                if let Ok(conn) = rusqlite::Connection::open(&db_path_clone) {
+                    let _ = db::configure_connection(&conn);
+                    let last_time: Option<String> = conn
+                        .query_row("SELECT last_backup_time FROM settings WHERE id = 1", [], |r| r.get(0))
+                        .unwrap_or(None);
+                    let should_daily_backup = match last_time {
+                        None => true,
+                        Some(t) => {
+                            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&t) {
+                                let today = chrono::Local::now().date_naive();
+                                parsed.with_timezone(&chrono::Local).date_naive() < today
+                            } else {
+                                true
+                            }
+                        }
+                    };
+                    if should_daily_backup {
+                        let _ = backup::auto_backup(&handle_launch, "daily first launch");
+                    }
+                }
+            });
 
             // 30-minute background auto-backup timer
             let handle = app.handle().clone();
@@ -36,8 +69,10 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let _ = backup::auto_backup(window.app_handle(), "app close");
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use tauri::Emitter;
+                api.prevent_close();
+                let _ = window.emit("request-app-exit", ());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -107,7 +142,9 @@ fn main() {
             commands::alter_sale_cmd,
             commands::alter_purchase_cmd,
             commands::alter_payment_cmd,
-            commands::cancel_payment_cmd
+            commands::cancel_payment_cmd,
+            commands::get_db_safety_info_cmd,
+            commands::graceful_exit_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

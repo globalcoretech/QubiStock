@@ -31,6 +31,8 @@ interface TransactionViewProps {
   lang: Language;
   alteringInvoiceNo?: string | null;
   onCancelAlteration?: () => void;
+  onDirtyChange?: (isDirty: boolean) => void;
+  onSavingChange?: (isSaving: boolean) => void;
 }
 
 export function TransactionView({
@@ -43,10 +45,13 @@ export function TransactionView({
   lang,
   alteringInvoiceNo,
   onCancelAlteration,
+  onDirtyChange,
+  onSavingChange,
 }: TransactionViewProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [godowns, setGodowns] = useState<Godown[]>([]);
   const [parties, setParties] = useState<Party[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [date, setDate] = useState(localTodayIso);
   const [invoiceNo, setInvoiceNo] = useState(() => {
@@ -112,6 +117,22 @@ export function TransactionView({
       lastRates: null,
     },
   ]);
+
+  // Dirty flag tracking unsaved work
+  const isDirty = Boolean(
+    alteringInvoiceNo ||
+    lines.some((l) => (l.itemId && l.itemId !== "") || (l.qty && String(l.qty).trim() !== "") || (l.rate && String(l.rate).trim() !== "")) ||
+    (type === "purchase" && (partyId !== "" || supplierInvoiceNo.trim() !== "")) ||
+    (type === "sale" && partyId !== "" && partyId !== "1")
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    onSavingChange?.(isSaving);
+  }, [isSaving, onSavingChange]);
 
   // Quick item search filter state
   const [quickItemSearch, setQuickItemSearch] = useState("");
@@ -543,6 +564,7 @@ export function TransactionView({
       lines: formattedLines,
     };
 
+    setIsSaving(true);
     try {
       if (alteringInvoiceNo) {
         const finalInvNo = isSale
@@ -638,6 +660,8 @@ export function TransactionView({
         details: raw !== hindiMessage ? raw : undefined,
         isError: true,
       });
+    } finally {
+      setIsSaving(false);
     }
   };
 

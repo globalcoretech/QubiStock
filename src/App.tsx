@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./index.css";
-import { View, AppSettings, DEFAULT_SETTINGS, IntegrityCheckReport, RestoreResult } from "./types";
+import { View, AppSettings, DEFAULT_SETTINGS, IntegrityCheckReport, RestoreResult, DbSafetyInfo, BackupInfo } from "./types";
 import { Language, translations, getInitialLanguage, saveLanguagePreference } from "./i18n";
 import { Sidebar } from "./components/Sidebar";
-import { AlertCircle } from "./components/icons";
+import { AlertCircle, LogOut } from "./components/icons";
 import { DashboardView } from "./views/DashboardView";
 import { TransactionView } from "./views/TransactionView";
 import { StockView } from "./views/StockView";
@@ -38,6 +38,7 @@ export interface DbCorruptionScreenProps {
   isRestoringFromCorruption?: boolean;
   corruptionFeedback?: string | null;
   onRestore?: () => Promise<void> | void;
+  onRestoreBackup?: (backupPath: string) => Promise<void> | void;
 }
 
 export function DbCorruptionScreen({
@@ -45,29 +46,42 @@ export function DbCorruptionScreen({
   isRestoringFromCorruption = false,
   corruptionFeedback = null,
   onRestore,
+  onRestoreBackup,
 }: DbCorruptionScreenProps) {
   const detailsList = integrityReport.details ?? (integrityReport.message ? [integrityReport.message] : []);
   const suggested = integrityReport.suggestedBackup ?? integrityReport.suggested_backup;
-  const backupFileName = suggested?.fileName ?? suggested?.filename ?? "";
-  const backupTimestamp = suggested?.timestamp ?? suggested?.created_at_formatted ?? "";
-  const backupSize = suggested?.formattedSize ?? suggested?.size_formatted ?? "";
+  const availableBackups: BackupInfo[] =
+    integrityReport.available_backups ||
+    integrityReport.availableBackups ||
+    (suggested ? [suggested as unknown as BackupInfo] : []);
+
+  const handleRestorePath = (path: string) => {
+    if (onRestoreBackup) {
+      onRestoreBackup(path);
+    } else if (onRestore) {
+      onRestore();
+    }
+  };
 
   return (
     <div
       data-testid="db-corruption-screen"
       className="min-h-screen w-screen bg-rose-50 flex items-center justify-center p-6 text-slate-900 font-body select-none"
     >
-      <div className="max-w-xl w-full bg-white rounded-2xl shadow-xl border-2 border-rose-300 p-8 space-y-6">
+      <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl border-2 border-rose-300 p-8 space-y-6">
         <div className="flex items-center gap-4 text-rose-600">
           <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center flex-shrink-0">
             <AlertCircle size={32} />
           </div>
           <div>
             <h1 className="text-2xl font-bold font-serif text-rose-900">
-              डेटा में गड़बड़ी मिली
+              डेटा में गड़बड़ी मिली / Database Integrity Failure
             </h1>
             <p className="text-sm text-rose-700 font-medium mt-1">
-              डेटाबेस फ़ाइल में खराबी या अनपेक्षित बदलाव पाया गया है।
+              डेटाबेस फ़ाइल में खराबी या अनपेक्षित बदलाव पाया गया है। कृपया नीचे दिए गए सत्यापित बैकअप से रीस्टोर करें।
+            </p>
+            <p className="text-xs text-rose-600 mt-0.5">
+              Database integrity check failed. Never operating silently on damaged data. Please restore from a verified backup.
             </p>
           </div>
         </div>
@@ -78,42 +92,81 @@ export function DbCorruptionScreen({
           ))}
         </div>
 
-        {suggested ? (
-          <div className="bg-emerald-50 rounded-xl p-5 border border-emerald-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-emerald-800 uppercase tracking-wide">
-                सुझाया गया सुरक्षित बैकअप
-              </span>
-              <span className="text-xs bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
-                जाँचा हुआ ✓
-              </span>
+        {corruptionFeedback ? (
+          <div className="p-4 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-950 font-bold text-sm text-center space-y-2">
+            <div>{corruptionFeedback}</div>
+            <div className="text-xs font-normal text-emerald-800">
+              रीस्टोर फ़ाइल तैयार है। कृपया ऐप बंद करके फिर से खोलें (Restart the application).
             </div>
-            <div className="text-sm font-semibold text-slate-800 space-y-1">
-              <div>फ़ाइल: {backupFileName}</div>
-              <div className="text-xs text-slate-600">
-                तारीख: {backupTimestamp} • आकार: {backupSize}
-              </div>
-            </div>
-
-            {corruptionFeedback ? (
-              <div className="p-3 bg-emerald-100 border border-emerald-300 rounded-lg text-emerald-950 font-bold text-sm">
-                {corruptionFeedback}
-              </div>
-            ) : (
-              <button
-                type="button"
-                data-testid="restore-corrupted-btn"
-                disabled={isRestoringFromCorruption}
-                onClick={onRestore}
-                className="w-full min-h-[48px] py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {isRestoringFromCorruption ? "तैयारी चल रही है..." : "इस बैकअप से वापस लाओ"}
-              </button>
-            )}
           </div>
         ) : (
-          <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-sm">
-            कोई वैध बैकअप नहीं मिला। कृपया अपने बैकअप फ़ोल्डर (Documents\KrishiBackup) की जांच करें या तकनीकी सहायता लें।
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                सुझाया गया सुरक्षित बैकअप / उपलब्ध सत्यापित बैकअप (Available Verified Backups)
+              </span>
+              <span className="text-xs bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full">
+                जाँचा हुआ ✓ / Safe Recovery
+              </span>
+            </div>
+
+            {availableBackups.length > 0 ? (
+              <div className="max-h-64 overflow-y-auto space-y-2.5 pr-1">
+                {availableBackups.map((b, idx) => {
+                  const bName = b.fileName || b.filename || "";
+                  const bDate = b.timestamp || b.created_at_formatted || "";
+                  const bSize = b.formattedSize || b.size_formatted || "";
+                  const bPath = b.filePath || b.path || "";
+                  const isSuggested = suggested && (suggested.fileName === bName || suggested.filename === bName);
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 ${
+                        isSuggested
+                          ? "bg-emerald-50/80 border-emerald-300 shadow-2xs"
+                          : "bg-slate-50 border-slate-200 hover:bg-slate-100/70"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900 truncate">{bName}</span>
+                          {isSuggested && (
+                            <span className="text-[10px] bg-emerald-200 text-emerald-900 font-extrabold px-1.5 py-0.5 rounded">
+                              सुझाया गया / Latest
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          तारीख: {bDate} • आकार: {bSize}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid={isSuggested ? "restore-corrupted-btn" : `restore-backup-btn-${idx}`}
+                        disabled={isRestoringFromCorruption}
+                        onClick={() => handleRestorePath(bPath)}
+                        className={`py-2 px-3.5 rounded-lg font-bold text-xs shadow-xs transition-all flex items-center justify-center flex-shrink-0 cursor-pointer ${
+                          isSuggested
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                            : "bg-slate-800 hover:bg-slate-900 text-white"
+                        }`}
+                      >
+                        {isRestoringFromCorruption
+                          ? "तैयारी चल रही है..."
+                          : isSuggested
+                          ? "इस बैकअप से वापस लाओ"
+                          : "रीस्टोर करें (Restore)"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-sm">
+                कोई वैध बैकअप नहीं मिला। कृपया अपने बैकअप फ़ोल्डर (Documents\KrishiBackup) की जांच करें या तकनीकी सहायता लें।
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -139,6 +192,28 @@ export default function App() {
   const [isRestoringFromCorruption, setIsRestoringFromCorruption] = useState(false);
   const [corruptionFeedback, setCorruptionFeedback] = useState<string | null>(null);
 
+  // Safety & Graceful Exit states
+  const [safetyInfo, setSafetyInfo] = useState<DbSafetyInfo | null>(null);
+  const [dismissedLocationWarning, setDismissedLocationWarning] = useState(false);
+  const [exitModalState, setExitModalState] = useState<"none" | "busy" | "dirty" | "clean" | "exiting">("none");
+
+  // Dirty and Busy tracking
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const isBackingUp = false;
+
+  const appStateRef = useRef({
+    isDirty: false,
+    isBusy: false,
+  });
+
+  appStateRef.current = {
+    isDirty,
+    isBusy: isSaving || isPrinting || isBackingUp || isRestoring,
+  };
+
   const [lang, setLang] = useState<Language>(() => getInitialLanguage());
   const t = translations[lang];
 
@@ -155,6 +230,12 @@ export default function App() {
     setActivePrintInvoiceNo(invNo);
     setActivePrintTaxMode(taxMode);
     setIsPrintModalOpen(true);
+    setIsPrinting(true);
+  };
+
+  const closePrintModal = () => {
+    setIsPrintModalOpen(false);
+    setIsPrinting(false);
   };
 
   const triggerGlobalRefresh = () => {
@@ -172,13 +253,67 @@ export default function App() {
     }
   };
 
+  const handleRequestExit = () => {
+    const { isDirty: currentDirty, isBusy: currentBusy } = appStateRef.current;
+    if (currentBusy) {
+      setExitModalState("busy");
+    } else if (currentDirty) {
+      setExitModalState("dirty");
+    } else {
+      setExitModalState("clean");
+    }
+  };
+
+  const handleConfirmExit = async () => {
+    setExitModalState("exiting");
+    try {
+      await invoke("graceful_exit_cmd");
+    } catch (e) {
+      console.error("graceful_exit_cmd error:", e);
+      setExitModalState("none");
+    }
+  };
+
+  const handleRestoreFromPath = async (backupPath: string) => {
+    if (!backupPath) return;
+    setIsRestoringFromCorruption(true);
+    setIsRestoring(true);
+    try {
+      await invoke<RestoreResult>("prepare_restore_cmd", {
+        backupPath: backupPath,
+      });
+      setCorruptionFeedback(
+        "बैकअप सुरक्षित सेट हो गया है। कृपया ऐप को बंद करके दोबारा चालू (Restart) करें।"
+      );
+    } catch (err: any) {
+      setCorruptionFeedback(`रीस्टोर विफल: ${err?.message || String(err)}`);
+    } finally {
+      setIsRestoringFromCorruption(false);
+      setIsRestoring(false);
+    }
+  };
+
   useEffect(() => {
     (window as any).__openPrintInvoice = openPrintModal;
-    (window as any).__closePrintInvoice = () => setIsPrintModalOpen(false);
+    (window as any).__closePrintInvoice = closePrintModal;
+
+    // Listen for CloseRequested interception event from Rust Tauri window
+    let unlistenExit: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => {
+        listen("request-app-exit", () => {
+          handleRequestExit();
+        }).then((unsub) => {
+          unlistenExit = unsub;
+        });
+      })
+      .catch(() => {
+        // Ignored in non-Tauri / mock test environment
+      });
 
     invoke<string>("init_db_cmd")
       .then(async () => {
-        // Startup integrity check
+        // Startup integrity check (PRAGMA quick_check)
         try {
           const report = await invoke<IntegrityCheckReport>("check_db_integrity_cmd");
           if (report && (report.isOk === false || report.is_ok === false)) {
@@ -187,6 +322,16 @@ export default function App() {
           }
         } catch (e) {
           console.error("check_db_integrity_cmd startup error:", e);
+        }
+
+        // Check DB safety info (location warning for cloud-synced / removable drive)
+        try {
+          const sInfo = await invoke<DbSafetyInfo>("get_db_safety_info_cmd");
+          if (sInfo) {
+            setSafetyInfo(sInfo);
+          }
+        } catch (e) {
+          console.error("get_db_safety_info_cmd startup error:", e);
         }
 
         // One-time migration: If old settings exist in localStorage, save to SQLite & remove from localStorage
@@ -210,9 +355,13 @@ export default function App() {
         }
       })
       .catch((err) => console.error("init_db_cmd error:", err));
+
+    return () => {
+      if (unlistenExit) unlistenExit();
+    };
   }, []);
 
-  // 4. Startup par PRAGMA integrity_check. Fail ho to poori screen Hindi me "डेटा में गड़बड़ी मिली"
+  // 4. Startup check: PRAGMA quick_check at launch. If fails, show recovery screen in Hindi + English
   const isCorrupted = integrityReport && (integrityReport.isOk === false || integrityReport.is_ok === false);
   if (isCorrupted && integrityReport) {
     return (
@@ -220,23 +369,11 @@ export default function App() {
         integrityReport={integrityReport}
         isRestoringFromCorruption={isRestoringFromCorruption}
         corruptionFeedback={corruptionFeedback}
-        onRestore={async () => {
+        onRestoreBackup={handleRestoreFromPath}
+        onRestore={() => {
           const suggested = integrityReport.suggestedBackup ?? integrityReport.suggested_backup;
-          const backupPath = suggested?.filePath ?? suggested?.path;
-          if (!backupPath) return;
-          setIsRestoringFromCorruption(true);
-          try {
-            await invoke<RestoreResult>("prepare_restore_cmd", {
-              backupPath: backupPath,
-            });
-            setCorruptionFeedback(
-              "बैकअप सुरक्षित सेट हो गया है। कृपया ऐप को बंद करके दोबारा चालू (Restart) करें।"
-            );
-          } catch (err: any) {
-            setCorruptionFeedback(`रीस्टोर विफल: ${err?.message || String(err)}`);
-          } finally {
-            setIsRestoringFromCorruption(false);
-          }
+          const backupPath = suggested?.filePath ?? suggested?.path ?? "";
+          return handleRestoreFromPath(backupPath);
         }}
       />
     );
@@ -249,249 +386,361 @@ export default function App() {
         initialSettings={settings}
         onSave={async (newSettings) => {
           await updateSettings(newSettings);
-          setCurrentView("Dashboard");
         }}
-        lang={lang}
-        onSelectLanguage={handleLanguageChange}
         t={t}
+        lang={lang}
       />
     );
   }
 
   return (
-    <div className="flex h-screen max-h-screen w-screen max-w-full overflow-hidden bg-paper font-body text-ink select-none">
-      {/* Sidebar with dark forest green and marigold bahi-khata theme */}
+    <div className="flex h-screen w-screen overflow-hidden bg-paper text-ink font-body">
+      {/* Sidebar with Navigation + Exit Button */}
       <Sidebar
         currentView={currentView}
         onNavigate={(v) => {
-          if (v !== "Sale" && v !== "Purchase") {
-            setAlteringInvoice(null);
-          }
           setCurrentView(v);
-          triggerGlobalRefresh();
+          setAlteringInvoice(null);
         }}
         settings={settings}
         lang={lang}
         onSelectLanguage={handleLanguageChange}
         t={t}
+        onExitClick={handleRequestExit}
       />
 
-      {/* Main Content Area in paper tone: Fixed layout, zero page-level scroll */}
-      <main className="flex-1 h-screen max-h-screen overflow-hidden bg-paper flex flex-col p-2 sm:p-2.5 min-w-0">
-        {/* Inner View Container */}
-        {(() => {
-          const isFrameless =
-            currentView === "Dashboard" ||
-            currentView === "Sale" ||
-            currentView === "Purchase" ||
-            currentView === "Reports" ||
-            currentView === "Settings" ||
-            currentView === "PrinterSetup" ||
-            currentView === "Backup";
-          return (
-            <div
-              className={`flex-1 h-full max-h-full overflow-hidden flex flex-col min-w-0 ${
-                isFrameless
-                  ? ""
-                  : "bg-surface rounded-panel border border-border p-3 sm:p-4 shadow-[0_1px_2px_rgba(28,43,36,0.04)]"
-              }`}
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        {/* Storage Location Warning Banner (OneDrive / Dropbox / Removable drive) */}
+        {(safetyInfo?.sync_warning || safetyInfo?.syncWarning) && !dismissedLocationWarning && (
+          <div
+            data-testid="db-location-warning-banner"
+            className="bg-amber-100 border-b border-amber-300 px-4 py-2 text-amber-950 text-xs font-semibold flex items-center justify-between shadow-2xs z-30"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertCircle size={16} className="text-amber-700 flex-shrink-0" />
+              <span className="truncate">{safetyInfo.sync_warning || safetyInfo.syncWarning}</span>
+            </div>
+            <button
+              type="button"
+              data-testid="dismiss-location-warning-btn"
+              onClick={() => setDismissedLocationWarning(true)}
+              className="ml-3 px-2 py-0.5 rounded bg-amber-200 hover:bg-amber-300 text-amber-900 text-xs font-bold cursor-pointer flex-shrink-0"
             >
-              {currentView === "Dashboard" && (
-                <DashboardView
-                  settings={settings}
-                  refreshTrigger={refreshTrigger}
-                  onNavigate={(v) => {
-                    setItemsInitialOpenForm(false);
-                    if (v !== "Sale" && v !== "Purchase") setAlteringInvoice(null);
-                    setCurrentView(v);
-                    triggerGlobalRefresh();
-                  }}
-                  onOpenPayment={(partyId, type) => {
-                    setItemsInitialOpenForm(false);
-                    setPaymentInitialPartyId(partyId);
-                    setPaymentInitialType(type);
-                    setCurrentView("Payment");
-                    triggerGlobalRefresh();
-                  }}
-                  onOpenAddItem={() => {
-                    setItemsInitialOpenForm(true);
-                    setCurrentView("Items");
-                    triggerGlobalRefresh();
-                  }}
-                  onPrintInvoice={openPrintModal}
-                  t={t}
-                  lang={lang}
-                />
-              )}
+              {lang === "hi" ? "समझ गया / बंद करें" : "Dismiss"}
+            </button>
+          </div>
+        )}
 
-              {currentView === "Sale" && (
-                <TransactionView
-                  type="sale"
-                  settings={settings}
-                  refreshTrigger={refreshTrigger}
-                  onRefresh={triggerGlobalRefresh}
-                  onPrintInvoice={openPrintModal}
-                  alteringInvoiceNo={alteringInvoice?.type === "sale" ? alteringInvoice.invoiceNo : null}
-                  onCancelAlteration={() => setAlteringInvoice(null)}
-                  t={t}
-                  lang={lang}
-                />
-              )}
+        <div className="flex-1 overflow-auto min-w-0">
+          {(() => {
+            return (
+              <div className="h-full">
+                {currentView === "Dashboard" && (
+                  <DashboardView
+                    settings={settings}
+                    refreshTrigger={refreshTrigger}
+                    onNavigate={(v) => {
+                      setCurrentView(v);
+                      setAlteringInvoice(null);
+                    }}
+                    onOpenPayment={(partyId, type) => {
+                      setPaymentInitialPartyId(partyId || null);
+                      setPaymentInitialType(type || "receipt");
+                      setCurrentView("Payment");
+                    }}
+                    onOpenAddItem={() => {
+                      setItemsInitialOpenForm(true);
+                      setCurrentView("Items");
+                      triggerGlobalRefresh();
+                    }}
+                    onPrintInvoice={openPrintModal}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-              {currentView === "Purchase" && (
-                <TransactionView
-                  type="purchase"
-                  settings={settings}
-                  refreshTrigger={refreshTrigger}
-                  onRefresh={triggerGlobalRefresh}
-                  onPrintInvoice={openPrintModal}
-                  alteringInvoiceNo={alteringInvoice?.type === "purchase" ? alteringInvoice.invoiceNo : null}
-                  onCancelAlteration={() => setAlteringInvoice(null)}
-                  t={t}
-                  lang={lang}
-                />
-              )}
+                {currentView === "Sale" && (
+                  <TransactionView
+                    type="sale"
+                    settings={settings}
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    onPrintInvoice={openPrintModal}
+                    alteringInvoiceNo={alteringInvoice?.type === "sale" ? alteringInvoice.invoiceNo : null}
+                    onCancelAlteration={() => setAlteringInvoice(null)}
+                    onDirtyChange={setIsDirty}
+                    onSavingChange={setIsSaving}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Stock" && (
-            <StockView
-              settings={settings}
-              refreshTrigger={refreshTrigger}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Purchase" && (
+                  <TransactionView
+                    type="purchase"
+                    settings={settings}
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    onPrintInvoice={openPrintModal}
+                    alteringInvoiceNo={alteringInvoice?.type === "purchase" ? alteringInvoice.invoiceNo : null}
+                    onCancelAlteration={() => setAlteringInvoice(null)}
+                    onDirtyChange={setIsDirty}
+                    onSavingChange={setIsSaving}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Opening Stock" && (
-            <OpeningStockView
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Stock" && (
+                  <StockView
+                    settings={settings}
+                    refreshTrigger={refreshTrigger}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Stock Adjustment" && (
-            <StockAdjustmentView
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Opening Stock" && (
+                  <OpeningStockView
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Payment" && (
-            <PaymentView
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              t={t}
-              lang={lang}
-              initialPartyId={paymentInitialPartyId}
-              initialType={paymentInitialType}
-            />
-          )}
+                {currentView === "Stock Adjustment" && (
+                  <StockAdjustmentView
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Len-Den" && (
-            <LenDenView
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              booksLockedUntil={settings.booksLockedUntil}
-              t={t}
-              lang={lang}
-              shopName={settings.shopName}
-              onOpenPayment={(partyId, type) => {
-                setPaymentInitialPartyId(partyId || null);
-                setPaymentInitialType(type || "receipt");
-                setCurrentView("Payment");
-              }}
-            />
-          )}
+                {currentView === "Payment" && (
+                  <PaymentView
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    onDirtyChange={setIsDirty}
+                    onSavingChange={setIsSaving}
+                    t={t}
+                    lang={lang}
+                    initialPartyId={paymentInitialPartyId}
+                    initialType={paymentInitialType}
+                  />
+                )}
 
-          {currentView === "Parties" && (
-            <PartiesView
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Len-Den" && (
+                  <LenDenView
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    booksLockedUntil={settings.booksLockedUntil}
+                    t={t}
+                    lang={lang}
+                    shopName={settings.shopName}
+                    onOpenPayment={(partyId, type) => {
+                      setPaymentInitialPartyId(partyId || null);
+                      setPaymentInitialType(type || "receipt");
+                      setCurrentView("Payment");
+                    }}
+                  />
+                )}
 
-          {currentView === "Items" && (
-            <ItemsView
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              t={t}
-              lang={lang}
-              initialOpenForm={itemsInitialOpenForm}
-            />
-          )}
+                {currentView === "Parties" && (
+                  <PartiesView
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Tally Import" && (
-            <TallyImportView
-              onImportSuccess={triggerGlobalRefresh}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Items" && (
+                  <ItemsView
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    t={t}
+                    lang={lang}
+                    initialOpenForm={itemsInitialOpenForm}
+                  />
+                )}
 
-          {currentView === "Reports" && (
-            <ReportsView
-              settings={settings}
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              onPrintInvoice={openPrintModal}
-              onAlterInvoice={(invNo, type) => {
-                setAlteringInvoice({ invoiceNo: invNo, type });
-                setCurrentView(type === "sale" ? "Sale" : "Purchase");
-                triggerGlobalRefresh();
-              }}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Tally Import" && (
+                  <TallyImportView
+                    onImportSuccess={triggerGlobalRefresh}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Settings" && (
-            <SettingsView
-              settings={settings}
-              onSave={updateSettings}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Reports" && (
+                  <ReportsView
+                    settings={settings}
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    onPrintInvoice={openPrintModal}
+                    onAlterInvoice={(invNo, type) => {
+                      setAlteringInvoice({ invoiceNo: invNo, type });
+                      setCurrentView(type === "sale" ? "Sale" : "Purchase");
+                      triggerGlobalRefresh();
+                    }}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "PrinterSetup" && (
-            <PrinterSetupView
-              settings={settings}
-              onSave={updateSettings}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "Settings" && (
+                  <SettingsView
+                    settings={settings}
+                    onSave={updateSettings}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
 
-          {currentView === "Backup" && (
-            <BackupView
-              settings={settings}
-              refreshTrigger={refreshTrigger}
-              onRefresh={triggerGlobalRefresh}
-              onUpdateSettings={updateSettings}
-              t={t}
-              lang={lang}
-            />
-          )}
+                {currentView === "PrinterSetup" && (
+                  <PrinterSetupView
+                    settings={settings}
+                    onSave={updateSettings}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
+
+                {currentView === "Backup" && (
+                  <BackupView
+                    settings={settings}
+                    refreshTrigger={refreshTrigger}
+                    onRefresh={triggerGlobalRefresh}
+                    onUpdateSettings={updateSettings}
+                    t={t}
+                    lang={lang}
+                  />
+                )}
+              </div>
+            );
+          })()}
         </div>
-      );
-    })()}
-  </main>
+      </main>
 
       {/* Global Print Modal */}
       <PrintInvoiceModal
         isOpen={isPrintModalOpen}
-        onClose={() => setIsPrintModalOpen(false)}
+        onClose={closePrintModal}
         invoiceNo={activePrintInvoiceNo}
         settings={settings}
         lang={lang}
         t={t}
         initialTaxMode={activePrintTaxMode}
       />
+
+      {/* Graceful Exit Modals */}
+      {exitModalState === "busy" && (
+        <div data-testid="exit-busy-modal" className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3 text-amber-600">
+              <AlertCircle size={24} />
+              <h3 className="text-lg font-bold text-slate-900">काम चल रहा है / Operation in Progress</h3>
+            </div>
+            <p className="text-sm text-slate-700">
+              {lang === "hi"
+                ? "डेटा सुरक्षित किया जा रहा है (सहेजना, प्रिंट या बैकअप चल रहा है)। कृपया प्रक्रिया पूरी होने तक प्रतीक्षा करें।"
+                : "An operation is currently in progress (saving, printing, or backup). Please wait until it completes."}
+            </p>
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                data-testid="exit-busy-ok-btn"
+                onClick={() => setExitModalState("none")}
+                className="px-5 py-2 rounded-xl bg-forest text-white font-bold text-sm hover:bg-forest-dark cursor-pointer shadow-xs"
+              >
+                {lang === "hi" ? "ठीक है" : "OK"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {exitModalState === "dirty" && (
+        <div data-testid="exit-dirty-modal" className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-200 space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <AlertCircle size={24} />
+              <h3 className="text-lg font-bold text-rose-900">बिल सेव नहीं हुआ / Unsaved Bill</h3>
+            </div>
+            <p className="text-sm text-slate-800 font-semibold">
+              Bill saved nahi hua. Bahar nikle?
+            </p>
+            <p className="text-xs text-slate-500">
+              {lang === "hi"
+                ? "यदि आप अभी बाहर निकलते हैं, तो बिना सहेजा गया डेटा मिट जाएगा।"
+                : "You have unsaved changes in the current bill or payment that will be lost."}
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                data-testid="exit-cancel-btn"
+                onClick={() => setExitModalState("none")}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm cursor-pointer"
+              >
+                {lang === "hi" ? "रद्द करें (Cancel)" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                data-testid="exit-confirm-btn"
+                onClick={handleConfirmExit}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm cursor-pointer shadow-xs"
+              >
+                {lang === "hi" ? "हाँ, बाहर निकलें (Exit anyway)" : "Exit anyway"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {exitModalState === "clean" && (
+        <div data-testid="exit-clean-modal" className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3 text-slate-700">
+              <LogOut size={24} className="text-slate-600" />
+              <h3 className="text-lg font-bold text-slate-900">बाहर निकलें / Exit Application</h3>
+            </div>
+            <p className="text-sm text-slate-700">
+              {lang === "hi"
+                ? "क्या आप वाकई कृषि केंद्र ऐप से बाहर निकलना चाहते हैं?"
+                : "Are you sure you want to exit the application?"}
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                data-testid="exit-cancel-btn"
+                onClick={() => setExitModalState("none")}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm cursor-pointer"
+              >
+                {lang === "hi" ? "रद्द करें (Cancel)" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                data-testid="exit-confirm-btn"
+                onClick={handleConfirmExit}
+                className="px-4 py-2 rounded-xl bg-forest hover:bg-forest-dark text-white font-bold text-sm cursor-pointer shadow-xs"
+              >
+                {lang === "hi" ? "बाहर निकलें (Exit)" : "Exit"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {exitModalState === "exiting" && (
+        <div data-testid="exit-overlay" className="fixed inset-0 bg-forest-dark/95 z-50 flex flex-col items-center justify-center p-6 text-white text-center">
+          <div className="w-12 h-12 border-4 border-marigold border-t-transparent rounded-full animate-spin mb-4" />
+          <h2 className="text-xl font-bold font-serif mb-2">सुरक्षित रूप से बंद हो रहा है...</h2>
+          <p className="text-sm text-surface/80">WAL चेकपॉइंट और बैकअप लिया जा रहा है। कृपया प्रतीक्षा करें।</p>
+        </div>
+      )}
     </div>
   );
 }

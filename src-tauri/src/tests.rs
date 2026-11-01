@@ -5745,3 +5745,224 @@ fn test_payment_matched_to_cancelled_invoice_behaves_sanely() {
     assert_eq!(st, "cancelled", "Invoice status remains cancelled");
 }
 
+#[test]
+fn test_transaction_rollback_on_drop_preserves_db_integrity() {
+    let temp_dir = std::env::temp_dir().join(format!("test_rollback_{}", chrono::Local::now().timestamp_nanos_opt().unwrap_or(0)));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let db_path = temp_dir.join("rollback_test.db");
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    {
+        let mut conn = init_db(&db_path_str).expect("Failed to init DB");
+        conn.execute(
+            "INSERT OR IGNORE INTO parties (id, name, type) VALUES (1, 'Cash Customer', 'both')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO items (id, name, base_unit, hsn, gst_rate, is_active) 
+             VALUES (1, 'Urea Fertilizer', 'bag', '3102', 0, 1)",
+            [],
+        ).unwrap();
+
+        // 1. Begin transaction, insert partial rows, then drop WITHOUT commit
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO sales (invoice_no, date, customer_id, total_amount, paid_amount, payment_mode, status)
+             VALUES ('SALE-ROLLBACK-01', '2026-11-01', 1, 500000, 500000, 'cash', 'active')",
+            [],
+        ).unwrap();
+        tx.execute(
+            "INSERT INTO sale_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst)
+             VALUES ('SALE-ROLLBACK-01', 1, 10000, 'bag', 50000, 500000, 0, 0, 0)",
+            [],
+        ).unwrap();
+        // Drop tx without calling .commit()
+        drop(tx);
+        drop(conn);
+    }
+
+    // 2. Reopen DB connection from disk
+    let conn2 = init_db(&db_path_str).expect("Failed to reopen DB");
+
+    // 3. Assert no partial rows exist in either sales or sale_lines
+    let sales_count: i64 = conn2.query_row(
+        "SELECT COUNT(*) FROM sales WHERE invoice_no = 'SALE-ROLLBACK-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(sales_count, 0, "Uncommitted sale must not exist after rollback on drop");
+
+    let lines_count: i64 = conn2.query_row(
+        "SELECT COUNT(*) FROM sale_lines WHERE invoice_no = 'SALE-ROLLBACK-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(lines_count, 0, "Uncommitted sale line must not exist after rollback on drop");
+
+    // 4. Assert PRAGMA integrity_check = ok
+    let integrity_status: String = conn2.query_row("PRAGMA integrity_check;", [], |r| r.get(0)).unwrap();
+    assert_eq!(integrity_status, "ok", "Database integrity check must be ok after uncommitted drop");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_alter_sale_transaction_rollback_on_error_preserves_stock_and_ledger() {
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::alter_sale_inner;
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category) VALUES (2, 'Ramesh Patidar', 'both', 'unregistered')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO items (id, name, base_unit, hsn, gst_rate, is_active) 
+         VALUES (1, 'DAP Fertilizer', 'bag', '3105', 0, 1)",
+        [],
+    ).unwrap();
+
+    // Stock for 20 bags (20000 milli-units) via purchase invoice so sale has sufficient inventory
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR-INIT-01".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 20000,
+            unit: "bag".to_string(),
+            rate: 120000,
+            taxable: 2400000,
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // 1. Save original sale invoice for 10 bags (Rs 13,500 = 1,350,000 paise)
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SALE-FAIL-01".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 10000,
+            unit: "bag".to_string(),
+            rate: 135000,
+            taxable: 1350000,
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // Initial state: total = 1,350,000; party ledger debit = 1,350,000; stock ledger has 1 sale entry
+    let orig_total: i64 = conn.query_row(
+        "SELECT total_amount FROM sales WHERE invoice_no = 'SALE-FAIL-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(orig_total, 1350000);
+
+    let orig_ledger_debit: i64 = conn.query_row(
+        "SELECT debit FROM party_ledger WHERE ref_id = 'SALE-FAIL-01' AND type = 'sale'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(orig_ledger_debit, 1350000);
+
+    let orig_stock_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM stock_ledger WHERE ref_id = 'SALE-FAIL-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(orig_stock_count, 1);
+
+    // 2. Attempt alteration with a non-existent item ID 99999 (causes foreign key error during line processing)
+    let alter_res = alter_sale_inner(
+        &mut conn,
+        "SALE-FAIL-01",
+        InvoicePayload {
+            invoice_no: "SALE-FAIL-01".to_string(),
+            date: "2026-11-01".to_string(),
+            party_id: 2,
+            godown_id: 1,
+            type_: "sale".to_string(),
+            payment_mode: "credit".to_string(),
+            paid_amount: 0,
+            shop_state: Some("23".to_string()),
+            supplier_invoice_no: None,
+            supplier_invoice_date: None,
+            lines: vec![InvoiceLine {
+                item_id: 99999, // INVALID item id!
+                qty: 5000,
+                unit: "bag".to_string(),
+                rate: 135000,
+                taxable: 675000,
+                cgst: 0,
+                sgst: 0,
+                igst: 0,
+            }],
+        },
+        Some("Failing alteration attempt"),
+    );
+
+    assert!(alter_res.is_err(), "Alteration with invalid item must fail");
+
+    // 3. Assert database remains completely unchanged (full transaction rollback)
+    let post_total: i64 = conn.query_row(
+        "SELECT total_amount FROM sales WHERE invoice_no = 'SALE-FAIL-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(post_total, 1350000, "Sale total_amount must remain unchanged after failed alteration");
+
+    let post_ledger_debit: i64 = conn.query_row(
+        "SELECT debit FROM party_ledger WHERE ref_id = 'SALE-FAIL-01' AND type = 'sale'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(post_ledger_debit, 1350000, "Party ledger debit must remain unchanged after failed alteration");
+
+    let post_stock_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM stock_ledger WHERE ref_id = 'SALE-FAIL-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(post_stock_count, 1, "Stock ledger must have no orphaned or partial entries after rollback");
+}
+
+#[test]
+fn test_wal_checkpoint_truncate_and_safety_info() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    use crate::commands::{get_db_safety_info_inner, run_wal_checkpoint_truncate};
+
+    // Assert safety info reports all four required PRAGMAs
+    let info = get_db_safety_info_inner(&conn, "C:\\AppData\\inventory.db", Some("D:\\KrishiBackup")).unwrap();
+    // In-memory SQLite reports "memory" for journal_mode; on disk it is "wal"
+    assert!(info.journal_mode == "memory" || info.journal_mode == "wal");
+    assert_eq!(info.synchronous, "FULL", "synchronous must be FULL");
+    assert!(info.foreign_keys, "foreign_keys must be ON");
+    assert_eq!(info.busy_timeout, 5000, "busy_timeout must be 5000 ms");
+
+    // Assert WAL checkpoint helper succeeds
+    let checkpoint_res = run_wal_checkpoint_truncate(&conn);
+    assert!(checkpoint_res.is_ok(), "run_wal_checkpoint_truncate must succeed");
+}
+
+

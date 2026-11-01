@@ -612,7 +612,23 @@ export function setupDemoMocks() {
           is_recent: true,
           formatted_chip_hi: "आखिरी बैकअप: आज 11:30 ✓",
           formatted_chip_en: "Last Backup: Today 11:30 ✓",
+          is_older_than_3_days: false,
+          isOlderThan3Days: false,
         };
+
+      case "get_db_safety_info_cmd":
+        return {
+          db_path: "C:\\Users\\user\\AppData\\Roaming\\KrishiKendra\\inventory.db",
+          journal_mode: "wal",
+          synchronous: "2",
+          foreign_keys: 1,
+          busy_timeout: 5000,
+          sync_warning: null,
+          is_synced_or_removable: false,
+        };
+
+      case "graceful_exit_cmd":
+        return "exited";
 
       case "prepare_restore_cmd":
         return {
@@ -630,6 +646,8 @@ export function setupDemoMocks() {
           suggestedBackup: null,
           is_ok: true,
           suggested_backup: null,
+          available_backups: [],
+          availableBackups: [],
         };
 
       case "open_backup_folder_cmd":

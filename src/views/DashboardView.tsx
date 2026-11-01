@@ -251,6 +251,38 @@ export function DashboardView({
         </div>
       </div>
 
+      {/* Red Warning Banner if last backup is older than 3 days */}
+      {(backupStatus?.isOlderThan3Days || backupStatus?.is_older_than_3_days) && (
+        <div
+          data-testid="backup-overdue-banner"
+          className="p-3 bg-rose-600 text-white rounded-xl shadow-sm flex items-center justify-between text-xs font-semibold flex-shrink-0"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertCircle size={20} className="text-white flex-shrink-0 animate-pulse" />
+            <div>
+              <span className="font-bold text-sm block">
+                {lang === "hi"
+                  ? "चेतावनी: आख़िरी बैकअप 3 दिन से पुराना है!"
+                  : "Warning: Last backup is older than 3 days!"}
+              </span>
+              <span className="text-white/90 text-xs">
+                {lang === "hi"
+                  ? "डेटा सुरक्षित रखने और किसी भी नुकसान से बचने के लिए तुरंत नया बैकअप लें।"
+                  : "Please take a backup immediately to prevent data loss."}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="backup-now-btn"
+            onClick={() => onNavigate("Backup")}
+            className="px-3.5 py-1.5 bg-white text-rose-700 hover:bg-rose-50 rounded-lg font-bold text-xs shadow-xs transition-colors cursor-pointer flex-shrink-0 ml-3"
+          >
+            {lang === "hi" ? "अभी बैकअप लें" : "Backup Now"}
+          </button>
+        </div>
+      )}
+
       {/* Visible Error Banner if any dashboard invoke failed */}
       {loadError && (
         <div

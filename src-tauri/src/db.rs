@@ -1,15 +1,21 @@
 use rusqlite::{Connection, Result};
 
+pub fn configure_connection(conn: &Connection) -> Result<()> {
+    // 1. Enable WAL mode for concurrency and atomic checkpointing
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    // 2. synchronous=FULL ensures power-loss integrity on disk
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    // 3. Enforce relational foreign keys
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    // 4. busy_timeout = 5000 ms to avoid immediate lock errors during concurrent reads/writes
+    conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+    Ok(())
+}
+
 pub fn init_db(db_path: &str) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
-    
-    // Enable WAL mode for better concurrency and safety (as per TRD 4.1)
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    // Enforce foreign keys
-    conn.pragma_update(None, "foreign_keys", "ON")?;
-    
+    configure_connection(&conn)?;
     run_migrations(&conn)?;
-    
     Ok(conn)
 }
 

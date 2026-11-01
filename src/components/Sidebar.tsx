@@ -20,6 +20,7 @@ import {
   Settings,
   Printer,
   Database,
+  LogOut,
 } from "./icons";
 
 interface SidebarProps {
@@ -29,6 +30,7 @@ interface SidebarProps {
   lang: Language;
   onSelectLanguage: (lang: Language) => void;
   t: Translations;
+  onExitClick?: () => void;
 }
 
 interface NavItemDef {
@@ -49,6 +51,7 @@ export function Sidebar({
   lang,
   onSelectLanguage,
   t: _t,
+  onExitClick,
 }: SidebarProps) {
   const [isFlyoutOpen, setIsFlyoutOpen] = useState(false);
   const [flyoutPos, setFlyoutPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -361,6 +364,22 @@ export function Sidebar({
                       </button>
                     );
                   })}
+
+                  {/* Flyout Exit Button */}
+                  <div className="pt-1.5 mt-1.5 border-t border-forest-2/20">
+                    <button
+                      type="button"
+                      data-testid="flyout-exit-btn"
+                      onClick={() => {
+                        setIsFlyoutOpen(false);
+                        onExitClick?.();
+                      }}
+                      className="w-full text-left px-2.5 py-2 rounded-lg text-sm flex items-center gap-2.5 text-rose-700 hover:bg-rose-50 hover:text-rose-900 font-semibold transition-colors cursor-pointer"
+                    >
+                      <LogOut size={17} className="text-rose-600" />
+                      <span className="truncate">{lang === "hi" ? "बाहर निकलें (Exit)" : "Exit / बाहर निकलें"}</span>
+                    </button>
+                  </div>
                 </div>
               </div>,
               document.body
@@ -368,8 +387,20 @@ export function Sidebar({
         </div>
       </nav>
 
-      {/* 3. Bottom Area: Language Toggle ("हिं | EN" pill) + State info */}
-      <div className="p-2 border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30 space-y-1.5">
+      {/* 3. Bottom Area: Exit Button + Language Toggle ("हिं | EN" pill) + State info */}
+      <div className="p-2 border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30 space-y-2">
+        {/* Exit Application Button */}
+        <button
+          type="button"
+          data-testid="sidebar-exit-btn"
+          onClick={() => onExitClick?.()}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 hover:text-white transition-all text-xs font-semibold cursor-pointer shadow-2xs"
+          title={lang === "hi" ? "ऐप से बाहर निकलें (Exit)" : "Exit Application"}
+        >
+          <LogOut size={14} className="text-rose-400" />
+          <span>{lang === "hi" ? "बाहर निकलें (Exit)" : "Exit / बाहर निकलें"}</span>
+        </button>
+
         {/* Language Toggle Pill - "हिं | EN" */}
         <div className="flex items-center justify-center p-0.5 bg-forest-dark/90 border border-forest-2/80 rounded-full w-full max-w-[120px] mx-auto text-xs">
           <button
