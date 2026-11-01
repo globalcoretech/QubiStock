@@ -340,43 +340,6 @@ export function StatementModal({
                 </div>
               </div>
 
-              {/* 3 Summary KPI Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* Total Debit */}
-                <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-                    <span>{lang === "hi" ? "कुल नामे (डेबिट)" : "Total Debit"}</span>
-                    <span className="p-1 rounded bg-emerald-50 text-emerald-600">
-                      <ArrowDownLeft size={16} strokeWidth={2} />
-                    </span>
-                  </div>
-                  <div className="text-xl font-bold font-mono text-emerald-700 mt-1">
-                    {formatCurrency(statement.total_debit)}
-                  </div>
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    {lang === "hi" ? "बिक्री / भुगतान दिया" : "Sales / Paid to party"}
-                  </div>
-                </div>
-
-                {/* Total Credit */}
-                <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-                    <span>{lang === "hi" ? "कुल जमा (क्रेडिट)" : "Total Credit"}</span>
-                    <span className="p-1 rounded bg-rose-50 text-rose-600">
-                      <ArrowUpRight size={16} strokeWidth={2} />
-                    </span>
-                  </div>
-                  <div className="text-xl font-bold font-mono text-rose-700 mt-1">
-                    {formatCurrency(statement.total_credit)}
-                  </div>
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    {lang === "hi" ? "खरीदी / पैसा मिला" : "Purchases / Received"}
-                  </div>
-                </div>
-
-                {/* Net Closing Balance */}
-                <div className="p-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50">
-                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               {/* Action feedback message */}
               {actionFeedback && (
                 <div
