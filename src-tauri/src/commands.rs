@@ -1015,9 +1015,7 @@ pub struct Movement {
     pub ref_id: Option<String>,
 }
 
-#[command]
-pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64>) -> Result<Vec<Movement>, String> {
-    let conn = get_conn(&app)?;
+pub fn get_item_movement_inner(conn: &Connection, item_id: i64, godown_id: Option<i64>) -> Result<Vec<Movement>, String> {
     let mut items = Vec::new();
 
     if let Some(gid) = godown_id {
@@ -1063,6 +1061,12 @@ pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64
     }
 
     Ok(items)
+}
+
+#[command]
+pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64>) -> Result<Vec<Movement>, String> {
+    let conn = get_conn(&app)?;
+    get_item_movement_inner(&conn, item_id, godown_id)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -4182,9 +4186,20 @@ pub fn cancel_invoice_inner(conn: &mut Connection, invoice_no: &str, reason: Opt
                         |r| r.get(0)
                     ).unwrap_or_else(|_| format!("Item #{}", item_id));
 
+                    let conflicting_sale: Option<String> = conn.query_row(
+                        "SELECT sl.ref_id FROM stock_ledger sl WHERE sl.item_id = ?1 AND sl.type = 'sale' ORDER BY sl.id DESC LIMIT 1",
+                        rusqlite::params![item_id],
+                        |r| r.get(0)
+                    ).ok();
+                    let sale_info = if let Some(ref s) = conflicting_sale {
+                        format!(" due to later sale '{}'", s)
+                    } else {
+                        String::new()
+                    };
+
                     return Err(format!(
-                        "Cannot cancel purchase: item '{}' in godown #{} would have negative stock (Current: {}, Required to cancel: {}). Stock is already sold / पर्याप्त स्टॉक नहीं है",
-                        item_name, godown_id, current_stock, qty_to_remove
+                        "Cannot cancel purchase: item '{}' in godown #{} would have negative stock (Current: {}, Required to cancel: {}){}. Stock is already sold / पर्याप्त स्टॉक नहीं है",
+                        item_name, godown_id, current_stock, qty_to_remove, sale_info
                     ));
                 }
             }
@@ -4752,9 +4767,19 @@ pub fn alter_purchase_inner(
             if current_stock < reduction {
                 let item_name: String = conn.query_row("SELECT name FROM items WHERE id = ?1", rusqlite::params![item_id], |r| r.get(0))
                     .unwrap_or_else(|_| format!("Item #{}", item_id));
+                let conflicting_sale: Option<String> = conn.query_row(
+                    "SELECT sl.ref_id FROM stock_ledger sl WHERE sl.item_id = ?1 AND sl.type = 'sale' ORDER BY sl.id DESC LIMIT 1",
+                    rusqlite::params![item_id],
+                    |r| r.get(0)
+                ).ok();
+                let sale_info = if let Some(ref s) = conflicting_sale {
+                    format!(" due to later sale '{}'", s)
+                } else {
+                    String::new()
+                };
                 return Err(format!(
-                    "Cannot reduce purchase qty for item '{}': current stock ({}) is less than reduction ({}). Stock is already sold / पर्याप्त स्टॉक नहीं है",
-                    item_name, current_stock, reduction
+                    "Cannot reduce purchase qty for item '{}': current stock ({}) is less than reduction ({}){}. Stock is already sold / पर्याप्त स्टॉक नहीं है",
+                    item_name, current_stock, reduction, sale_info
                 ));
             }
         }
