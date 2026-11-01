@@ -38,6 +38,8 @@ import {
   prepareItemPartiesCsv,
   preparePartyItemsCsv,
 } from "../utils/reportsHelper";
+import { EditInvoiceNoModal } from "../components/EditInvoiceNoModal";
+import { AlterationHistoryModal } from "../components/AlterationHistoryModal";
 
 type ReportTab =
   | "sales_reg"
@@ -137,6 +139,12 @@ export function ReportsView({
   // Sorting state for Reports 2 & 3
   const [sortField, setSortField] = useState<string>("total_amount");
   const [sortAsc, setSortAsc] = useState<boolean>(false);
+
+  // Alteration / Invoice No modal states
+  const [editInvoiceNoModalOpen, setEditInvoiceNoModalOpen] = useState(false);
+  const [selectedInvoiceForEdit, setSelectedInvoiceForEdit] = useState<{ no: string; type: "sale" | "purchase"; suppDate?: string } | null>(null);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [auditEntity, setAuditEntity] = useState<{ type: string; id: string } | null>(null);
 
   // Load items and parties once
   useEffect(() => {
@@ -1850,24 +1858,60 @@ export function ReportsView({
                                   >
                                     {row.payment_mode === "credit" ? "उधार" : "नकद"}
                                   </span>
-                                  {row.invoice_no && onPrintInvoice && (
+                                  {row.invoice_no && (
                                     <div className="inline-flex items-center gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => onPrintInvoice(row.invoice_no, "with_tax")}
-                                        title="टैक्स सहित प्रिंट (GST Invoice)"
-                                        className="px-1.5 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-[10px] font-bold shadow-2xs transition-transform active:scale-95"
-                                      >
-                                        🧾 GST
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => onPrintInvoice(row.invoice_no, "without_tax")}
-                                        title="बिना टैक्स प्रिंट (सरल बिल)"
-                                        className="px-1.5 py-0.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-[10px] font-bold shadow-2xs transition-transform active:scale-95"
-                                      >
-                                        📄 सरल
-                                      </button>
+                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedInvoiceForEdit({
+                                                no: row.invoice_no,
+                                                type: activeTab === "sales_reg" ? "sale" : "purchase",
+                                              });
+                                              setEditInvoiceNoModalOpen(true);
+                                            }}
+                                            title={activeTab === "sales_reg" ? "बिल नंबर बदलें (Change invoice no)" : "सप्लायर बिल नंबर संपादित करें (Edit supplier invoice no)"}
+                                            className="px-1.5 py-0.5 bg-forest/10 hover:bg-forest/20 text-forest rounded text-[10px] font-bold border border-forest/30 shadow-2xs transition-transform active:scale-95"
+                                          >
+                                            ✏️ नं
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setAuditEntity({
+                                                type: activeTab === "sales_reg" ? "sale" : "purchase",
+                                                id: row.invoice_no,
+                                              });
+                                              setIsAuditModalOpen(true);
+                                            }}
+                                            title="ऑडिट इतिहास (Alteration History)"
+                                            className="px-1.5 py-0.5 bg-paper hover:bg-border text-muted rounded text-[10px] font-bold border border-border shadow-2xs transition-transform active:scale-95"
+                                          >
+                                            🕒
+                                          </button>
+                                        </>
+                                      )}
+                                      {onPrintInvoice && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => onPrintInvoice(row.invoice_no, "with_tax")}
+                                            title="टैक्स सहित प्रिंट (GST Invoice)"
+                                            className="px-1.5 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-[10px] font-bold shadow-2xs transition-transform active:scale-95"
+                                          >
+                                            🧾 GST
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => onPrintInvoice(row.invoice_no, "without_tax")}
+                                            title="बिना टैक्स प्रिंट (सरल बिल)"
+                                            className="px-1.5 py-0.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-[10px] font-bold shadow-2xs transition-transform active:scale-95"
+                                          >
+                                            📄 सरल
+                                          </button>
+                                        </>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -1901,6 +1945,38 @@ export function ReportsView({
             </div>
           </>
         )}
+
+      {/* Edit Invoice No Modal */}
+      {selectedInvoiceForEdit && (
+        <EditInvoiceNoModal
+          isOpen={editInvoiceNoModalOpen}
+          onClose={() => {
+            setEditInvoiceNoModalOpen(false);
+            setSelectedInvoiceForEdit(null);
+          }}
+          onSuccess={() => {
+            fetchReportData();
+          }}
+          billType={selectedInvoiceForEdit.type}
+          currentInvoiceNo={selectedInvoiceForEdit.no}
+          supplierInvoiceDate={selectedInvoiceForEdit.suppDate}
+          lang={lang}
+        />
+      )}
+
+      {/* Alteration History Modal */}
+      {auditEntity && (
+        <AlterationHistoryModal
+          isOpen={isAuditModalOpen}
+          onClose={() => {
+            setIsAuditModalOpen(false);
+            setAuditEntity(null);
+          }}
+          entityType={auditEntity.type}
+          entityId={auditEntity.id}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }

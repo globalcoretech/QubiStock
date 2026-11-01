@@ -32,7 +32,29 @@ pub struct InvoicePayload {
     pub paid_amount: i64, // paise
     #[serde(alias = "shopState", default)]
     pub shop_state: Option<String>,
+    #[serde(alias = "supplierInvoiceNo", default)]
+    pub supplier_invoice_no: Option<String>,
+    #[serde(alias = "supplierInvoiceDate", default)]
+    pub supplier_invoice_date: Option<String>,
     pub lines: Vec<InvoiceLine>,
+}
+
+impl Default for InvoicePayload {
+    fn default() -> Self {
+        Self {
+            invoice_no: String::new(),
+            date: String::new(),
+            party_id: 0,
+            godown_id: 0,
+            type_: "sale".to_string(),
+            payment_mode: "cash".to_string(),
+            paid_amount: 0,
+            shop_state: None,
+            supplier_invoice_no: None,
+            supplier_invoice_date: None,
+            lines: Vec::new(),
+        }
+    }
 }
 
 fn default_payment_mode() -> String {
@@ -40,9 +62,50 @@ fn default_payment_mode() -> String {
 }
 
 pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()> {
-    let tx = conn.transaction()?;
+    // 0. Check period lock
+    crate::audit::check_period_lock(conn, &payload.date)
+        .map_err(|e| rusqlite::Error::InvalidParameterName(e))?;
 
     let is_sale = payload.type_ == "sale";
+
+    // 0b. Validate Sales invoice_no or Purchase supplier_invoice_no
+    if is_sale {
+        let clean_no = payload.invoice_no.trim();
+        if clean_no.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName("Invoice number is required / बिल नंबर आवश्यक है".to_string()));
+        }
+        if clean_no.len() > 16 {
+            return Err(rusqlite::Error::InvalidParameterName("Invoice number cannot exceed 16 characters / बिल नंबर 16 अक्षरों से अधिक नहीं हो सकता".to_string()));
+        }
+        if !clean_no.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '-') {
+            return Err(rusqlite::Error::InvalidParameterName("Invoice number can only contain letters, numbers, '/' and '-' / बिल नंबर में केवल अक्षर, अंक, '/' और '-' हो सकते हैं".to_string()));
+        }
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sales WHERE LOWER(invoice_no) = LOWER(?1)",
+            params![clean_no],
+            |row| row.get(0),
+        )?;
+        if exists > 0 {
+            return Err(rusqlite::Error::InvalidParameterName(format!("Invoice number '{}' already exists / बिल नंबर '{}' पहले से मौजूद है", clean_no, clean_no)));
+        }
+    } else if let Some(ref supp_no) = payload.supplier_invoice_no {
+        let clean_supp = supp_no.trim();
+        if !clean_supp.is_empty() {
+            if clean_supp.len() > 30 {
+                return Err(rusqlite::Error::InvalidParameterName("Supplier invoice number cannot exceed 30 characters / सप्लायर बिल नंबर 30 अक्षरों से अधिक नहीं हो सकता".to_string()));
+            }
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM purchases WHERE supplier_id = ?1 AND LOWER(supplier_invoice_no) = LOWER(?2)",
+                params![payload.party_id, clean_supp],
+                |row| row.get(0),
+            )?;
+            if exists > 0 {
+                return Err(rusqlite::Error::InvalidParameterName("This supplier already has this invoice number / इस सप्लायर का यह बिल नंबर पहले से मौजूद है".to_string()));
+            }
+        }
+    }
+
+    let tx = conn.transaction()?;
 
     // 1. Check Party details (category, gstin)
     let (party_category, party_gstin): (String, Option<String>) = tx.query_row(
@@ -113,12 +176,14 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
     if is_sale {
         tx.execute(
             "INSERT INTO sales (invoice_no, date, customer_id, payment_mode, paid_amount, total_amount) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![payload.invoice_no, payload.date, payload.party_id, payload.payment_mode, actual_paid_paise, grand_total_paise],
+            params![payload.invoice_no.trim(), payload.date, payload.party_id, payload.payment_mode, actual_paid_paise, grand_total_paise],
         )?;
     } else {
+        let supp_no = payload.supplier_invoice_no.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+        let supp_date = payload.supplier_invoice_date.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
         tx.execute(
-            "INSERT INTO purchases (invoice_no, date, supplier_id, payment_mode, paid_amount, total_amount) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![payload.invoice_no, payload.date, payload.party_id, payload.payment_mode, actual_paid_paise, grand_total_paise],
+            "INSERT INTO purchases (invoice_no, date, supplier_id, payment_mode, paid_amount, total_amount, supplier_invoice_no, supplier_invoice_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![payload.invoice_no.trim(), payload.date, payload.party_id, payload.payment_mode, actual_paid_paise, grand_total_paise, supp_no, supp_date],
         )?;
     }
 
@@ -159,12 +224,12 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
 
             tx.execute(
                 "INSERT INTO sale_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, cost_paise, hsn, gst_rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![payload.invoice_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, cost_paise, item_hsn, item_gst_rate]
+                params![payload.invoice_no.trim(), line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, cost_paise, item_hsn, item_gst_rate]
             )?;
         } else {
             tx.execute(
                 "INSERT INTO purchase_lines (invoice_no, item_id, qty, unit, rate, taxable, cgst, sgst, igst, hsn, gst_rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![payload.invoice_no, line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, item_hsn, item_gst_rate]
+                params![payload.invoice_no.trim(), line.item_id, line.qty, line.unit, line.rate, line.taxable, line.cgst, line.sgst, line.igst, item_hsn, item_gst_rate]
             )?;
         }
 
@@ -178,38 +243,38 @@ pub fn save_invoice(conn: &mut Connection, payload: InvoicePayload) -> Result<()
             payload.godown_id,
             signed_qty,
             entry_type,
-            Some(&payload.invoice_no),
+            Some(payload.invoice_no.trim()),
             None,
             Some(payload.party_id),
             None
         )?;
     }
 
-    // 5. Insert Party Financial Ledger Entry
+    // 6. Insert Party Financial Ledger Entry
     if is_sale {
         // Sale invoice -> Customer Debit (Receivable)
         tx.execute(
             "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) VALUES (?1, ?2, 'sale', ?3, ?4, 0, ?5, 'Sale invoice')",
-            params![payload.date, payload.party_id, payload.invoice_no, grand_total_paise, payload.payment_mode],
+            params![payload.date, payload.party_id, payload.invoice_no.trim(), grand_total_paise, payload.payment_mode],
         )?;
         // If paid amount > 0 -> Customer Credit (Payment Received)
         if actual_paid_paise > 0 {
             tx.execute(
                 "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) VALUES (?1, ?2, 'payment', ?3, 0, ?4, ?5, 'Invoice payment')",
-                params![payload.date, payload.party_id, payload.invoice_no, actual_paid_paise, payload.payment_mode],
+                params![payload.date, payload.party_id, payload.invoice_no.trim(), actual_paid_paise, payload.payment_mode],
             )?;
         }
     } else {
         // Purchase invoice -> Supplier Credit (Payable)
         tx.execute(
             "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) VALUES (?1, ?2, 'purchase', ?3, 0, ?4, ?5, 'Purchase invoice')",
-            params![payload.date, payload.party_id, payload.invoice_no, grand_total_paise, payload.payment_mode],
+            params![payload.date, payload.party_id, payload.invoice_no.trim(), grand_total_paise, payload.payment_mode],
         )?;
         // If paid amount > 0 -> Supplier Debit (Payment Paid)
         if actual_paid_paise > 0 {
             tx.execute(
                 "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark) VALUES (?1, ?2, 'payment', ?3, ?4, 0, ?5, 'Invoice payment')",
-                params![payload.date, payload.party_id, payload.invoice_no, actual_paid_paise, payload.payment_mode],
+                params![payload.date, payload.party_id, payload.invoice_no.trim(), actual_paid_paise, payload.payment_mode],
             )?;
         }
     }

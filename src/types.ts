@@ -395,9 +395,13 @@ export interface InvoicePrintDetails {
   party_phone: string | null;
   party_gstin: string | null;
   party_village: string | null;
+  party_address?: string | null;
+  party_state_code?: string | null;
   payment_mode: string;
   paid_amount: number;
   total_amount: number;
+  supplier_invoice_no?: string | null;
+  supplier_invoice_date?: string | null;
   bill_mode?: "WITH_GST" | "WITHOUT_GST" | string | null;
   lines: InvoicePrintLine[];
 }
@@ -415,6 +419,7 @@ export interface RegisterEntry {
   total: number;
   payment_mode: string;
   paid_amount: number;
+  supplier_invoice_no?: string | null;
 }
 
 export interface RegisterReport {

@@ -49,6 +49,37 @@ export function TransactionView({
     return formatBillNumber(1, prefix, new Date());
   });
 
+  const [supplierInvoiceNo, setSupplierInvoiceNo] = useState("");
+  const [supplierInvoiceDate, setSupplierInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
+  const [invoiceNoWarning, setInvoiceNoWarning] = useState("");
+  const [invoiceNoError, setInvoiceNoError] = useState("");
+
+  const validateSalesInvoiceNo = (val: string) => {
+    const trimmed = val.trim();
+    if (!trimmed) {
+      setInvoiceNoError(lang === "hi" ? "बिल नंबर आवश्यक है" : "Invoice number required");
+      setInvoiceNoWarning("");
+      return;
+    }
+    if (trimmed.length > 16) {
+      setInvoiceNoError(lang === "hi" ? "अधिकतम 16 अक्षर (Max 16 chars)" : "Max 16 characters");
+      setInvoiceNoWarning("");
+      return;
+    }
+    if (!/^[A-Za-z0-9\/\-]+$/.test(trimmed)) {
+      setInvoiceNoError(lang === "hi" ? "केवल A-Z, 0-9, '/', '-' मान्य हैं" : "Only A-Z, 0-9, '/', '-' allowed");
+      setInvoiceNoWarning("");
+      return;
+    }
+    setInvoiceNoError("");
+    const prefix = settings?.fyPrefix || "KK";
+    const pattern = new RegExp(`^${prefix}/\\d{2}-\\d{2}/\\d{4,}$`, "i");
+    if (!pattern.test(trimmed)) {
+      setInvoiceNoWarning(lang === "hi" ? "मानक प्रारूप से अलग है" : "Non-standard format");
+    } else {
+      setInvoiceNoWarning("");
+    }
+  };
 
   const isSale = type === "sale";
   const isBillBlocked =
@@ -325,6 +356,25 @@ export function TransactionView({
       return;
     }
 
+    if (!isSale && !supplierInvoiceNo.trim()) {
+      setFeedback({
+        message: lang === "hi" ? "सप्लायर का बिल नंबर आवश्यक है (Supplier invoice number required)!" : "Supplier invoice number is required!",
+        isError: true,
+      });
+      return;
+    }
+
+    if (isSale) {
+      const trimmed = invoiceNo.trim();
+      if (!trimmed || trimmed.length > 16 || !/^[A-Za-z0-9\/\-]+$/.test(trimmed)) {
+        setFeedback({
+          message: invoiceNoError || (lang === "hi" ? "अमान्य बिल नंबर (अधिकतम 16 अक्षर, A-Z, 0-9, /, -)!" : "Invalid invoice number!"),
+          isError: true,
+        });
+        return;
+      }
+    }
+
     if (!invoiceNo.trim() || !partyId || !godownId || lines.length === 0) {
       setFeedback({ message: t.salePurchase.validationError, isError: true });
       return;
@@ -403,6 +453,8 @@ export function TransactionView({
       payment_mode: paymentMode,
       paid_amount: paidPaise,
       shop_state: shopState || null,
+      supplier_invoice_no: type === "purchase" ? supplierInvoiceNo.trim() : null,
+      supplier_invoice_date: type === "purchase" ? supplierInvoiceDate : null,
       lines: formattedLines,
     };
 
@@ -429,11 +481,13 @@ export function TransactionView({
       ]);
       setPaidAmountRupees("");
       setPaymentMode("cash");
+      setSupplierInvoiceNo("");
       if (type === "purchase") {
         setPartyId("");
       }
       const today = new Date().toISOString().split("T")[0];
       setDate(today);
+      setSupplierInvoiceDate(today);
       await refreshNextInvoicePreview(today);
       if (onRefresh) onRefresh();
 
@@ -529,13 +583,48 @@ export function TransactionView({
           >
             {isSale ? <DuotoneReceipt size={20} /> : <DuotoneTruck size={20} />}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex items-center gap-2">
             <h2 className="font-serif text-base sm:text-lg font-bold tracking-tight text-ink flex items-center gap-2 truncate">
               <span>{isSale ? "बिल बनाओ (बिक्री)" : "माल आया (खरीदी)"}</span>
-              <span className="text-[11px] font-sans font-semibold bg-paper px-2 py-0.5 rounded text-muted border border-border">
+            </h2>
+            {isSale ? (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <span className="text-[11px] text-muted font-bold">बिल नं:</span>
+                <input
+                  type="text"
+                  maxLength={16}
+                  value={invoiceNo}
+                  onChange={(e) => {
+                    const val = e.target.value.toUpperCase();
+                    setInvoiceNo(val);
+                    validateSalesInvoiceNo(val);
+                  }}
+                  placeholder="KK/26-27/0001"
+                  className={`w-36 px-2 py-0.5 text-xs font-mono font-bold bg-paper border rounded focus:outline-none ${
+                    invoiceNoError
+                      ? "border-red-500 bg-red-50 text-red-900"
+                      : invoiceNoWarning
+                      ? "border-amber-400 bg-amber-50/60 text-amber-900"
+                      : "border-border text-ink"
+                  }`}
+                  title={invoiceNoError || invoiceNoWarning || "संपादन योग्य बिल नंबर (Editable invoice number)"}
+                />
+                {invoiceNoWarning && !invoiceNoError && (
+                  <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-semibold" title={invoiceNoWarning}>
+                    ⚠️ {invoiceNoWarning}
+                  </span>
+                )}
+                {invoiceNoError && (
+                  <span className="text-[10px] text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 font-semibold" title={invoiceNoError}>
+                    ❌ {invoiceNoError}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="text-[11px] font-sans font-semibold bg-paper px-2 py-0.5 rounded text-muted border border-border" title="आंतरिक खरीद नंबर (Internal Purchase ID)">
                 {invoiceNo}
               </span>
-            </h2>
+            )}
           </div>
         </div>
 
@@ -631,7 +720,7 @@ export function TransactionView({
           {/* Top Row: Party Selection + Item Quick Search */}
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pb-2.5 border-b border-border/80 flex-shrink-0">
             {/* Party Select */}
-            <div className="sm:col-span-6">
+            <div className={isSale ? "sm:col-span-6" : "sm:col-span-5"}>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
                   {isSale ? "ग्राहक (Customer)" : "सप्लायर (Supplier)"} *
@@ -654,8 +743,42 @@ export function TransactionView({
               </div>
             </div>
 
+            {!isSale && (
+              <>
+                <div className="sm:col-span-4">
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
+                      सप्लायर बिल नंबर *
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    maxLength={30}
+                    value={supplierInvoiceNo}
+                    onChange={(e) => setSupplierInvoiceNo(e.target.value)}
+                    placeholder="उदा. SUPP-101"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono font-bold bg-paper border border-border rounded-lg focus:outline-none focus:border-forest"
+                  />
+                </div>
+                <div className="sm:col-span-3">
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
+                      सप्लायर बिल तारीख
+                    </label>
+                  </div>
+                  <input
+                    type="date"
+                    value={supplierInvoiceDate}
+                    onChange={(e) => setSupplierInvoiceDate(e.target.value)}
+                    className="w-full px-2 py-1 text-xs font-mono font-bold bg-paper border border-border rounded-lg focus:outline-none focus:border-forest"
+                  />
+                </div>
+              </>
+            )}
+
             {/* Quick Item Search Bar */}
-            <div className="sm:col-span-6 relative">
+            <div className={isSale ? "sm:col-span-6 relative" : "sm:col-span-12 relative"}>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
                   {lang === "hi" ? "सामान खोजें / जोड़ें" : "Search & Add Item"}

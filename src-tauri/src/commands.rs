@@ -997,6 +997,12 @@ pub fn get_party_balances_cmd(app: AppHandle) -> Result<Vec<PartyBalance>, Strin
 
 #[command]
 pub fn save_invoice_cmd(app: AppHandle, payload: InvoicePayload) -> Result<(), String> {
+    if payload.type_ == "purchase" {
+        let s_no = payload.supplier_invoice_no.as_deref().unwrap_or("").trim();
+        if s_no.is_empty() {
+            return Err("Supplier's invoice number is required / सप्लायर का बिल नंबर आवश्यक है".to_string());
+        }
+    }
     let mut conn = get_conn(&app)?;
     save_invoice(&mut conn, payload).map_err(|e| e.to_string())
 }
@@ -1015,7 +1021,14 @@ pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64
     let mut items = Vec::new();
 
     if let Some(gid) = godown_id {
-        let mut stmt = conn.prepare("SELECT date, qty_base, type, ref_id FROM stock_ledger WHERE item_id = ?1 AND godown_id = ?2 ORDER BY id DESC").map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT sl.date, sl.qty_base, sl.type,
+                    CASE WHEN sl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, sl.ref_id) ELSE sl.ref_id END as ref_id
+             FROM stock_ledger sl
+             LEFT JOIN purchases p ON sl.ref_id = p.invoice_no AND sl.type = 'purchase'
+             WHERE sl.item_id = ?1 AND sl.godown_id = ?2
+             ORDER BY sl.id DESC"
+        ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map(rusqlite::params![item_id, gid], |row| {
             Ok(Movement {
                 date: row.get(0)?,
@@ -1028,7 +1041,14 @@ pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64
             if let Ok(m) = row { items.push(m); }
         }
     } else {
-        let mut stmt = conn.prepare("SELECT date, qty_base, type, ref_id FROM stock_ledger WHERE item_id = ?1 ORDER BY id DESC").map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT sl.date, sl.qty_base, sl.type,
+                    CASE WHEN sl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, sl.ref_id) ELSE sl.ref_id END as ref_id
+             FROM stock_ledger sl
+             LEFT JOIN purchases p ON sl.ref_id = p.invoice_no AND sl.type = 'purchase'
+             WHERE sl.item_id = ?1
+             ORDER BY sl.id DESC"
+        ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map(rusqlite::params![item_id], |row| {
             Ok(Movement {
                 date: row.get(0)?,
@@ -1170,6 +1190,10 @@ pub struct InvoicePrintDetails {
     pub payment_mode: String,
     pub paid_amount: i64,
     pub total_amount: i64,
+    #[serde(default)]
+    pub supplier_invoice_no: Option<String>,
+    #[serde(default)]
+    pub supplier_invoice_date: Option<String>,
     pub lines: Vec<InvoicePrintLine>,
 }
 
@@ -1244,12 +1268,14 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             payment_mode,
             paid_amount,
             total_amount,
+            supplier_invoice_no: None,
+            supplier_invoice_date: None,
             lines,
         });
     }
 
     let pur_res = conn.query_row(
-        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code
+        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code, p.supplier_invoice_no, p.supplier_invoice_date
          FROM purchases p
          JOIN parties pr ON p.supplier_id = pr.id
          WHERE p.invoice_no = ?1",
@@ -1266,10 +1292,12 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             row.get::<_, i64>(8)?,
             row.get::<_, Option<String>>(9)?,
             row.get::<_, Option<String>>(10)?,
+            row.get::<_, Option<String>>(11)?,
+            row.get::<_, Option<String>>(12)?,
         ))
     );
 
-    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code)) = pur_res {
+    if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code, supp_inv_no, supp_inv_date)) = pur_res {
         let mut stmt = conn.prepare(
             "SELECT i.name, pl.qty, pl.unit, pl.rate, pl.taxable, (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as gst_amt,
                     COALESCE(pl.hsn, i.hsn) as line_hsn,
@@ -1318,6 +1346,8 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
             payment_mode,
             paid_amount,
             total_amount,
+            supplier_invoice_no: supp_inv_no,
+            supplier_invoice_date: supp_inv_date,
             lines,
         });
     }
@@ -1361,6 +1391,8 @@ pub struct RegisterEntry {
     pub total: i64,         // paise
     pub payment_mode: String,
     pub paid_amount: i64,   // paise
+    #[serde(default)]
+    pub supplier_invoice_no: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1385,7 +1417,8 @@ pub fn get_purchase_register_inner(
                 COALESCE(SUM(pl.cgst), 0) as cgst,
                 COALESCE(SUM(pl.sgst), 0) as sgst,
                 COALESCE(SUM(pl.igst), 0) as igst,
-                p.total_amount
+                p.total_amount,
+                p.supplier_invoice_no
          FROM purchases p
          JOIN parties pt ON p.supplier_id = pt.id
          LEFT JOIN purchase_lines pl ON p.invoice_no = pl.invoice_no
@@ -1407,6 +1440,7 @@ pub fn get_purchase_register_inner(
             row.get::<_, i64>(8)?,
             row.get::<_, i64>(9)?,
             row.get::<_, i64>(10)?,
+            row.get::<_, Option<String>>(11)?,
         ))
     }).map_err(|e| e.to_string())?;
 
@@ -1418,7 +1452,7 @@ pub fn get_purchase_register_inner(
     let mut grand_total = 0i64;
 
     for r in rows {
-        let (inv_no, date, party_name, party_gstin, payment_mode, paid_amount, taxable, raw_cgst, raw_sgst, raw_igst, total_amt) = r.map_err(|e| e.to_string())?;
+        let (inv_no, date, party_name, party_gstin, payment_mode, paid_amount, taxable, raw_cgst, raw_sgst, raw_igst, total_amt, supplier_inv) = r.map_err(|e| e.to_string())?;
         
         let total_tax = raw_cgst + raw_sgst + raw_igst;
         let is_inter = is_interstate_party(party_gstin.as_deref(), shop_state);
@@ -1435,8 +1469,10 @@ pub fn get_purchase_register_inner(
         total_igst += igst;
         grand_total += total_amt;
 
+        let display_no = supplier_inv.clone().filter(|s| !s.trim().is_empty()).unwrap_or(inv_no);
+
         entries.push(RegisterEntry {
-            invoice_no: inv_no,
+            invoice_no: display_no,
             date,
             party_name,
             party_gstin,
@@ -1448,6 +1484,7 @@ pub fn get_purchase_register_inner(
             total: total_amt,
             payment_mode,
             paid_amount,
+            supplier_invoice_no: supplier_inv,
         });
     }
 
@@ -1547,6 +1584,7 @@ pub fn get_sales_register_inner(
             total: total_amt,
             payment_mode,
             paid_amount,
+            supplier_invoice_no: None,
         });
     }
 
@@ -2351,7 +2389,7 @@ pub fn get_item_parties_report_inner(
     let is_purchase = direction != "sold_to";
 
     let sql = if is_purchase {
-        "SELECT p.invoice_no, p.date, pt.id as party_id, pt.name as party_name,
+        "SELECT COALESCE(p.supplier_invoice_no, p.invoice_no) as invoice_no, p.date, pt.id as party_id, pt.name as party_name,
                 pl.qty, pl.unit, pl.rate, pl.taxable,
                 (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as line_tax
          FROM purchases p
@@ -2587,7 +2625,7 @@ pub fn get_party_items_report_inner(
     let is_purchase = direction != "sold_to";
 
     let sql = if is_purchase {
-        "SELECT p.invoice_no, p.date, i.id as item_id, i.name as item_name, i.base_unit,
+        "SELECT COALESCE(p.supplier_invoice_no, p.invoice_no) as invoice_no, p.date, i.id as item_id, i.name as item_name, i.base_unit,
                 pl.qty, pl.unit, pl.rate, pl.taxable,
                 (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as line_tax
          FROM purchases p
@@ -3015,10 +3053,13 @@ pub fn get_party_statement_inner(conn: &Connection, party_id: i64) -> Result<Par
     ).map_err(|_| format!("Party with id {} not found", party_id))?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, date, type, ref_id, debit, credit, COALESCE(payment_mode, 'cash'), remark 
-         FROM party_ledger 
-         WHERE party_id = ?1 
-         ORDER BY date ASC, id ASC"
+        "SELECT pl.id, pl.date, pl.type, 
+                CASE WHEN pl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, pl.ref_id) ELSE pl.ref_id END as display_ref_id,
+                pl.debit, pl.credit, COALESCE(pl.payment_mode, 'cash'), pl.remark 
+         FROM party_ledger pl 
+         LEFT JOIN purchases p ON pl.ref_id = p.invoice_no AND pl.type = 'purchase'
+         WHERE pl.party_id = ?1 
+         ORDER BY pl.date ASC, pl.id ASC"
     ).map_err(|e| e.to_string())?;
 
     let rows = stmt.query_map(rusqlite::params![party_id], |row| {
@@ -3814,4 +3855,193 @@ pub fn copy_backups_cmd(from_folder: String, to_folder: String) -> Result<usize,
     let to_dir = std::path::PathBuf::from(to_folder);
     crate::backup::copy_backups_with_verification(&from_dir, &to_dir)
 }
+
+pub fn change_sales_invoice_no_inner(
+    conn: &mut Connection,
+    old_no: &str,
+    new_no: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let clean_old = old_no.trim();
+    let clean_new = new_no.trim();
+    let clean_reason = reason.trim();
+
+    if clean_reason.is_empty() {
+        return Err("Reason is required to change invoice number / बिल नंबर बदलने के लिए कारण आवश्यक है".to_string());
+    }
+
+    if clean_new.is_empty() {
+        return Err("New invoice number is required / नया बिल नंबर आवश्यक है".to_string());
+    }
+    if clean_new.len() > 16 {
+        return Err("Invoice number cannot exceed 16 characters / बिल नंबर 16 अक्षरों से अधिक नहीं हो सकता".to_string());
+    }
+    if !clean_new.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '-') {
+        return Err("Invoice number can only contain letters, numbers, '/' and '-' / बिल नंबर में केवल अक्षर, अंक, '/' और '-' हो सकते हैं".to_string());
+    }
+
+    // Check if sale exists and get date
+    let sale_date: String = conn.query_row(
+        "SELECT date FROM sales WHERE invoice_no = ?1",
+        rusqlite::params![clean_old],
+        |row| row.get(0)
+    ).map_err(|_| format!("Sale invoice '{}' not found / बिक्री बिल नहीं मिला", clean_old))?;
+
+    // Check period lock
+    crate::audit::check_period_lock(conn, &sale_date)?;
+
+    // If unchanged, nothing to do
+    if clean_old.eq_ignore_ascii_case(clean_new) {
+        return Ok(());
+    }
+
+    // Case-insensitive uniqueness check across sales
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sales WHERE LOWER(invoice_no) = LOWER(?1)",
+        rusqlite::params![clean_new],
+        |row| row.get(0)
+    ).map_err(|e| e.to_string())?;
+
+    if exists > 0 {
+        return Err(format!("Invoice number '{}' already exists / बिल नंबर '{}' पहले से मौजूद है", clean_new, clean_new));
+    }
+
+    // Execute rename inside one DB transaction with PRAGMA defer_foreign_keys = ON
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;").map_err(|e| e.to_string())?;
+
+    tx.execute("UPDATE sales SET invoice_no = ?1 WHERE invoice_no = ?2", rusqlite::params![clean_new, clean_old]).map_err(|e| e.to_string())?;
+    tx.execute("UPDATE sale_lines SET invoice_no = ?1 WHERE invoice_no = ?2", rusqlite::params![clean_new, clean_old]).map_err(|e| e.to_string())?;
+    
+    // Temporarily disable stock_ledger update trigger to update ref_id, then restore it
+    tx.execute("DROP TRIGGER IF EXISTS prevent_stock_ledger_update", []).map_err(|e| e.to_string())?;
+    tx.execute("UPDATE stock_ledger SET ref_id = ?1 WHERE ref_id = ?2", rusqlite::params![clean_new, clean_old]).map_err(|e| e.to_string())?;
+    tx.execute(
+        "CREATE TRIGGER IF NOT EXISTS prevent_stock_ledger_update
+         BEFORE UPDATE ON stock_ledger
+         BEGIN
+             SELECT RAISE(ABORT, 'stock_ledger is append-only. Updates are not allowed.');
+         END",
+        [],
+    ).map_err(|e| e.to_string())?;
+
+    tx.execute("UPDATE party_ledger SET ref_id = ?1 WHERE ref_id = ?2", rusqlite::params![clean_new, clean_old]).map_err(|e| e.to_string())?;
+    
+    let has_payments: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'payments'",
+        [],
+        |row| row.get(0)
+    ).unwrap_or(0);
+    if has_payments > 0 {
+        tx.execute("UPDATE payments SET invoice_no = ?1 WHERE invoice_no = ?2", rusqlite::params![clean_new, clean_old]).map_err(|e| e.to_string())?;
+    }
+
+    tx.execute("UPDATE invoice_print_log SET invoice_no = ?1 WHERE invoice_no = ?2", rusqlite::params![clean_new, clean_old]).map_err(|e| e.to_string())?;
+
+    let before_json = serde_json::json!({ "invoice_no": clean_old }).to_string();
+    let after_json = serde_json::json!({ "invoice_no": clean_new }).to_string();
+
+    crate::audit::write_audit(
+        &tx,
+        "sale",
+        clean_new,
+        "rename_invoice",
+        Some(&before_json),
+        Some(&after_json),
+        Some(clean_reason),
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn change_sales_invoice_no_cmd(
+    app: AppHandle,
+    old_no: String,
+    new_no: String,
+    reason: String,
+) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    change_sales_invoice_no_inner(&mut conn, &old_no, &new_no, &reason)
+}
+
+pub fn update_purchase_supplier_invoice_inner(
+    conn: &mut Connection,
+    internal_invoice_no: &str,
+    supplier_invoice_no: &str,
+    supplier_invoice_date: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    let clean_internal = internal_invoice_no.trim();
+    let clean_supp_no = supplier_invoice_no.trim();
+
+    if clean_supp_no.is_empty() {
+        return Err("Supplier invoice number is required / सप्लायर का बिल नंबर आवश्यक है".to_string());
+    }
+    if clean_supp_no.len() > 30 {
+        return Err("Supplier invoice number cannot exceed 30 characters / सप्लायर बिल नंबर 30 अक्षरों से अधिक नहीं हो सकता".to_string());
+    }
+
+    let (supplier_id, purchase_date, old_supp_no, old_supp_date): (i64, String, Option<String>, Option<String>) = conn.query_row(
+        "SELECT supplier_id, date, supplier_invoice_no, supplier_invoice_date FROM purchases WHERE invoice_no = ?1",
+        rusqlite::params![clean_internal],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    ).map_err(|_| format!("Purchase invoice '{}' not found / खरीद बिल नहीं मिला", clean_internal))?;
+
+    // Period lock check
+    crate::audit::check_period_lock(conn, &purchase_date)?;
+
+    // Check duplicate supplier_invoice_no for same supplier
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM purchases WHERE supplier_id = ?1 AND LOWER(supplier_invoice_no) = LOWER(?2) AND invoice_no <> ?3",
+        rusqlite::params![supplier_id, clean_supp_no, clean_internal],
+        |row| row.get(0)
+    ).map_err(|e| e.to_string())?;
+
+    if exists > 0 {
+        return Err("This supplier already has this invoice number / इस सप्लायर का यह बिल नंबर पहले से मौजूद है".to_string());
+    }
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE purchases SET supplier_invoice_no = ?1, supplier_invoice_date = ?2 WHERE invoice_no = ?3",
+        rusqlite::params![clean_supp_no, supplier_invoice_date, clean_internal],
+    ).map_err(|e| e.to_string())?;
+
+    let before_json = serde_json::json!({
+        "supplier_invoice_no": old_supp_no,
+        "supplier_invoice_date": old_supp_date
+    }).to_string();
+    let after_json = serde_json::json!({
+        "supplier_invoice_no": clean_supp_no,
+        "supplier_invoice_date": supplier_invoice_date
+    }).to_string();
+
+    crate::audit::write_audit(
+        &tx,
+        "purchase",
+        clean_internal,
+        "update_supplier_invoice",
+        Some(&before_json),
+        Some(&after_json),
+        reason,
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn update_purchase_supplier_invoice_cmd(
+    app: AppHandle,
+    internal_invoice_no: String,
+    supplier_invoice_no: String,
+    supplier_invoice_date: Option<String>,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    update_purchase_supplier_invoice_inner(&mut conn, &internal_invoice_no, &supplier_invoice_no, supplier_invoice_date.as_deref(), reason.as_deref())
+}
+
 

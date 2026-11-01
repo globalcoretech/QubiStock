@@ -62,6 +62,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             payment_mode TEXT NOT NULL DEFAULT 'cash', -- 'cash', 'credit', 'upi_bank'
             paid_amount INTEGER NOT NULL DEFAULT 0, -- paise
             total_amount INTEGER NOT NULL DEFAULT 0, -- paise
+            supplier_invoice_no TEXT,
+            supplier_invoice_date TEXT,
             FOREIGN KEY(supplier_id) REFERENCES parties(id)
         );
 
@@ -251,6 +253,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE purchases ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'cash'", []);
     let _ = conn.execute("ALTER TABLE purchases ADD COLUMN paid_amount INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE purchases ADD COLUMN total_amount INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE purchases ADD COLUMN supplier_invoice_no TEXT", []);
+    let _ = conn.execute("ALTER TABLE purchases ADD COLUMN supplier_invoice_date TEXT", []);
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_supplier_inv ON purchases(supplier_id, supplier_invoice_no) WHERE supplier_invoice_no IS NOT NULL AND supplier_invoice_no <> ''",
+        []
+    );
     let _ = conn.execute("ALTER TABLE sales ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'cash'", []);
     let _ = conn.execute("ALTER TABLE sales ADD COLUMN paid_amount INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE sales ADD COLUMN total_amount INTEGER NOT NULL DEFAULT 0", []);

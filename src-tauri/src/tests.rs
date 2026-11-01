@@ -353,6 +353,8 @@ fn test_purchase_save_creates_stock_ledger() {
         payment_mode: "cash".to_string(),
         paid_amount: 157500,
         shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -401,6 +403,8 @@ fn test_credit_sale_and_composition_supplier() {
         payment_mode: "credit".to_string(),
         paid_amount: 100000, // ₹1000 paid of ₹5000 invoice
         shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -435,6 +439,8 @@ fn test_credit_sale_and_composition_supplier() {
         payment_mode: "credit".to_string(),
         paid_amount: 100000, // ₹1000 paid
         shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -539,6 +545,8 @@ fn test_oversell_block() {
         payment_mode: "cash".to_string(),
         paid_amount: 400000,
         shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -638,6 +646,8 @@ fn test_dashboard_stats_and_recent_entries() {
         payment_mode: "credit".to_string(),
         paid_amount: 100000, // ₹1000 paid
         shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -663,6 +673,8 @@ fn test_dashboard_stats_and_recent_entries() {
         payment_mode: "credit".to_string(),
         paid_amount: 50000, // ₹500 paid
         shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -772,6 +784,8 @@ fn test_reports_comprehensive_hand_calculated() {
         payment_mode: "credit".to_string(),
         paid_amount: 400000,
         shop_state: Some(shop_state.to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -796,6 +810,8 @@ fn test_reports_comprehensive_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 200000,
         shop_state: Some(shop_state.to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 2,
@@ -820,6 +836,8 @@ fn test_reports_comprehensive_hand_calculated() {
         payment_mode: "upi_bank".to_string(),
         paid_amount: 295000,
         shop_state: Some(shop_state.to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 2,
@@ -853,6 +871,8 @@ fn test_reports_comprehensive_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 945000,
         shop_state: Some(shop_state.to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -877,6 +897,8 @@ fn test_reports_comprehensive_hand_calculated() {
         payment_mode: "credit".to_string(),
         paid_amount: 100000,
         shop_state: Some(shop_state.to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 2,
@@ -1054,6 +1076,8 @@ fn test_reports_comprehensive_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 2000000,
         shop_state: Some(shop_state.to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -2316,6 +2340,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 1050000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -2341,6 +2367,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 150000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 2,
@@ -2366,6 +2394,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 630000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -2398,6 +2428,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 294000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -2426,6 +2458,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 315000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -2455,6 +2489,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 147000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 1,
@@ -2481,6 +2517,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 40000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 2,
@@ -2512,6 +2550,8 @@ fn test_new_reports_hand_calculated() {
         payment_mode: "cash".to_string(),
         paid_amount: 90000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 2,
@@ -2668,6 +2708,8 @@ fn test_reports_multi_unit_rate_normalization_and_qty_total() {
         payment_mode: "cash".to_string(),
         paid_amount: 120000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 10,
@@ -2695,6 +2737,8 @@ fn test_reports_multi_unit_rate_normalization_and_qty_total() {
         payment_mode: "cash".to_string(),
         paid_amount: 26000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![
             InvoiceLine {
                 item_id: 10,
@@ -2940,6 +2984,8 @@ fn test_stage2_item_alteration_rules() {
         payment_mode: "cash".to_string(),
         paid_amount: 12500,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![InvoiceLine {
             item_id: id1,
             qty: 5000, // 5 kg
@@ -3062,6 +3108,8 @@ fn test_stage2_party_alteration_rules() {
         payment_mode: "credit".to_string(),
         paid_amount: 0,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![InvoiceLine {
             item_id,
             qty: 1000,
@@ -3101,6 +3149,8 @@ fn test_stage2_party_alteration_rules() {
         payment_mode: "credit".to_string(),
         paid_amount: 0,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![InvoiceLine {
             item_id,
             qty: 10000,
@@ -3186,7 +3236,7 @@ fn test_stage2_snapshot_preserves_old_bills() {
 
     // 2. Save a sale bill
     let payload = InvoicePayload {
-        invoice_no: "SALE-SNAPSHOT-001".to_string(),
+        invoice_no: "SALE-SNAP-001".to_string(),
         date: "2026-11-01".to_string(),
         party_id: 1,
         godown_id: 1,
@@ -3194,6 +3244,8 @@ fn test_stage2_snapshot_preserves_old_bills() {
         payment_mode: "cash".to_string(),
         paid_amount: 100000,
         shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
         lines: vec![InvoiceLine {
             item_id,
             qty: 2000, // 2 bags
@@ -3208,7 +3260,7 @@ fn test_stage2_snapshot_preserves_old_bills() {
     save_invoice(&mut conn, payload).expect("Sale invoice save failed");
 
     // Check saved bill details before item alteration
-    let inv_before = get_invoice_details_inner(&conn, "SALE-SNAPSHOT-001").unwrap();
+    let inv_before = get_invoice_details_inner(&conn, "SALE-SNAP-001").unwrap();
     assert_eq!(inv_before.lines.len(), 1);
     assert_eq!(inv_before.lines[0].hsn.as_deref(), Some("3102"));
     assert_eq!(inv_before.lines[0].gst_rate, Some(5000));
@@ -3237,7 +3289,7 @@ fn test_stage2_snapshot_preserves_old_bills() {
     assert_eq!(current_gst, Some(18000));
 
     // 4. CRITICAL: Query the OLD bill details again - it MUST STILL report HSN 3102 and GST 5000!
-    let inv_after = get_invoice_details_inner(&conn, "SALE-SNAPSHOT-001").unwrap();
+    let inv_after = get_invoice_details_inner(&conn, "SALE-SNAP-001").unwrap();
     assert_eq!(inv_after.lines[0].hsn.as_deref(), Some("3102"), "Old bill HSN must remain snapshotted 3102!");
     assert_eq!(inv_after.lines[0].gst_rate, Some(5000), "Old bill GST rate must remain snapshotted 5000!");
 
@@ -3247,3 +3299,325 @@ fn test_stage2_snapshot_preserves_old_bills() {
     assert_eq!(hsn_summary.items[0].hsn, "3102", "HSN summary must group by snapshotted HSN 3102!");
     assert_eq!(hsn_summary.items[0].taxable_value, 95238);
 }
+
+#[test]
+fn test_stage3_supplier_invoice_no_uniqueness() {
+    use crate::commands::{update_purchase_supplier_invoice_inner, get_purchase_register_inner};
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'DAP Fertilizer', 'fertilizer', '3105', 5000, 'bag')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category, phone) VALUES (2, 'Supplier Alpha', 'supplier', 'regular', '9800000001')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category, phone) VALUES (3, 'Supplier Beta', 'supplier', 'regular', '9800000002')", []).unwrap();
+
+    // 1. Save purchase PUR-01 from Supplier Alpha with supplier_invoice_no = "SUPP-INV-100"
+    let pur1 = InvoicePayload {
+        invoice_no: "PUR-01".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-INV-100".to_string()),
+        supplier_invoice_date: Some("2026-10-30".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 10000,
+            unit: "bag".to_string(),
+            rate: 100000,
+            taxable: 952380,
+            cgst: 23810,
+            sgst: 23810,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, pur1).expect("PUR-01 save failed");
+
+    // 2. Duplicate supplier invoice number for the SAME supplier MUST be rejected
+    let pur_dup = InvoicePayload {
+        invoice_no: "PUR-02".to_string(),
+        date: "2026-11-02".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("supp-inv-100".to_string()), // case-insensitive check
+        supplier_invoice_date: Some("2026-11-01".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 5000,
+            unit: "bag".to_string(),
+            rate: 100000,
+            taxable: 476190,
+            cgst: 11905,
+            sgst: 11905,
+            igst: 0,
+        }],
+    };
+    let err = save_invoice(&mut conn, pur_dup).unwrap_err().to_string();
+    assert!(err.contains("इस सप्लायर का यह बिल नंबर पहले से मौजूद है") || err.contains("already has this invoice number"));
+
+    // 3. Same supplier invoice number for DIFFERENT supplier MUST be ALLOWED
+    let pur_diff_supplier = InvoicePayload {
+        invoice_no: "PUR-03".to_string(),
+        date: "2026-11-02".to_string(),
+        party_id: 3, // Supplier Beta
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-INV-100".to_string()),
+        supplier_invoice_date: Some("2026-10-31".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 5000,
+            unit: "bag".to_string(),
+            rate: 100000,
+            taxable: 476190,
+            cgst: 11905,
+            sgst: 11905,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, pur_diff_supplier).expect("PUR-03 for different supplier must succeed");
+
+    // 4. Update supplier invoice number after save with update_purchase_supplier_invoice_inner
+    update_purchase_supplier_invoice_inner(
+        &mut conn,
+        "PUR-01",
+        "SUPP-INV-100-REV1",
+        Some("2026-10-31"),
+        Some("Corrected supplier invoice number per hardcopy"),
+    ).expect("Supplier invoice update failed");
+
+    // Check purchase record updated
+    let updated_no: String = conn.query_row(
+        "SELECT supplier_invoice_no FROM purchases WHERE invoice_no = 'PUR-01'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(updated_no, "SUPP-INV-100-REV1");
+
+    // Verify audit log has entry
+    let audit_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE entity_type = 'purchase' AND entity_id = 'PUR-01' AND action = 'update_supplier_invoice'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(audit_count, 1);
+
+    // Verify purchase register returns supplier_invoice_no and uses it as display invoice_no
+    let reg = get_purchase_register_inner(&conn, "2026-11-01", "2026-11-02", None).unwrap();
+    assert_eq!(reg.entries.len(), 2);
+    let pur1_entry = reg.entries.iter().find(|e| e.supplier_invoice_no.as_deref() == Some("SUPP-INV-100-REV1")).unwrap();
+    assert_eq!(pur1_entry.invoice_no, "SUPP-INV-100-REV1");
+}
+
+#[test]
+fn test_stage3_sales_invoice_no_validation_and_cascade_rename() {
+    use crate::commands::{change_sales_invoice_no_inner, get_next_bill_number_inner, record_payment_inner, PaymentPayload};
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'Urea Gold', 'fertilizer', '3102', 5000, 'bag')", []).unwrap();
+    add_stock_ledger_entry(&conn, "2026-10-01", 1, 1, 100_000, "purchase", Some("PUR-INIT"), None, None, None).unwrap();
+
+    // 1. Test 17-char sales invoice number rejected
+    let payload_17 = InvoicePayload {
+        invoice_no: "12345678901234567".to_string(), // 17 chars
+        date: "2026-11-01".to_string(),
+        party_id: 1,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 10000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 1000,
+            unit: "bag".to_string(),
+            rate: 30000,
+            taxable: 28571,
+            cgst: 714,
+            sgst: 715,
+            igst: 0,
+        }],
+    };
+    let err_17 = save_invoice(&mut conn, payload_17).unwrap_err().to_string();
+    assert!(err_17.contains("16 अक्षरों से अधिक नहीं हो सकता") || err_17.contains("cannot exceed 16"));
+
+    // 2. Test invalid characters rejected (e.g. '@' or '#')
+    let mut payload_inv_chars = InvoicePayload {
+        invoice_no: "INV@2026-001".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 1,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 10000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 1000,
+            unit: "bag".to_string(),
+            rate: 30000,
+            taxable: 28571,
+            cgst: 714,
+            sgst: 715,
+            igst: 0,
+        }],
+    };
+    let err_char = save_invoice(&mut conn, payload_inv_chars.clone()).unwrap_err().to_string();
+    assert!(err_char.contains("केवल अक्षर, अंक, '/' और '-'") || err_char.contains("only contain"));
+
+    // 3. Save valid sale invoice INV-2026-001
+    payload_inv_chars.invoice_no = "INV-2026-001".to_string();
+    save_invoice(&mut conn, payload_inv_chars).expect("Valid sale save failed");
+
+    // 4. Duplicate sales invoice number (case-insensitive) rejected
+    let payload_dup = InvoicePayload {
+        invoice_no: "inv-2026-001".to_string(),
+        date: "2026-11-02".to_string(),
+        party_id: 1,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 10000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 1000,
+            unit: "bag".to_string(),
+            rate: 30000,
+            taxable: 28571,
+            cgst: 714,
+            sgst: 715,
+            igst: 0,
+        }],
+    };
+    let err_dup = save_invoice(&mut conn, payload_dup).unwrap_err().to_string();
+    assert!(err_dup.contains("पहले से मौजूद है") || err_dup.contains("already exists"));
+
+    // 5. Sequence unaffected by non-matching manual invoice numbers
+    let next_suggested = get_next_bill_number_inner(&conn, "sale", "2026-11-02", None).unwrap();
+    // Save manual non-matching invoice number
+    let payload_manual = InvoicePayload {
+        invoice_no: "CUSTOM-999".to_string(),
+        date: "2026-11-02".to_string(),
+        party_id: 1,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "cash".to_string(),
+        paid_amount: 10000,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 1000,
+            unit: "bag".to_string(),
+            rate: 30000,
+            taxable: 28571,
+            cgst: 714,
+            sgst: 715,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, payload_manual).expect("Manual bill save failed");
+    let next_after_manual = get_next_bill_number_inner(&conn, "sale", "2026-11-02", None).unwrap();
+    assert_eq!(next_suggested, next_after_manual, "Manual non-matching invoice number must not break the standard sequence!");
+
+    // 6. Test Cascade Rename
+    // Add matched receipt payment and print log for INV-2026-001
+    record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 1,
+        payment_type: "receipt".to_string(),
+        amount_paise: 5000,
+        payment_mode: "cash".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Advance/partial payment for INV-2026-001".to_string()),
+        ref_id: Some("INV-2026-001".to_string()),
+    }).unwrap();
+    conn.execute(
+        "INSERT INTO invoice_print_log (invoice_no, bill_mode, printed_at)
+         VALUES ('INV-2026-001', 'WITH_GST', '2026-11-01 10:00:00')",
+        [],
+    ).unwrap();
+
+    // Snapshot totals before rename
+    let stock_qty_before: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger", [], |r| r.get(0)).unwrap();
+    let party_bal_before: i64 = conn.query_row("SELECT SUM(debit - credit) FROM party_ledger", [], |r| r.get(0)).unwrap();
+
+    // Execute rename
+    change_sales_invoice_no_inner(
+        &mut conn,
+        "INV-2026-001",
+        "INV-2026-888",
+        "Correction of series for audit",
+    ).expect("Cascade rename failed");
+
+    // Verify all tables updated
+    let count_old_sales: i64 = conn.query_row("SELECT COUNT(*) FROM sales WHERE invoice_no = 'INV-2026-001'", [], |r| r.get(0)).unwrap();
+    let count_new_sales: i64 = conn.query_row("SELECT COUNT(*) FROM sales WHERE invoice_no = 'INV-2026-888'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_old_sales, 0);
+    assert_eq!(count_new_sales, 1);
+
+    let count_old_lines: i64 = conn.query_row("SELECT COUNT(*) FROM sale_lines WHERE invoice_no = 'INV-2026-001'", [], |r| r.get(0)).unwrap();
+    let count_new_lines: i64 = conn.query_row("SELECT COUNT(*) FROM sale_lines WHERE invoice_no = 'INV-2026-888'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_old_lines, 0);
+    assert_eq!(count_new_lines, 1);
+
+    let count_old_stock: i64 = conn.query_row("SELECT COUNT(*) FROM stock_ledger WHERE ref_id = 'INV-2026-001'", [], |r| r.get(0)).unwrap();
+    let count_new_stock: i64 = conn.query_row("SELECT COUNT(*) FROM stock_ledger WHERE ref_id = 'INV-2026-888'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_old_stock, 0);
+    assert_eq!(count_new_stock, 1);
+
+    let count_old_party: i64 = conn.query_row("SELECT COUNT(*) FROM party_ledger WHERE ref_id = 'INV-2026-001'", [], |r| r.get(0)).unwrap();
+    let count_new_party: i64 = conn.query_row("SELECT COUNT(*) FROM party_ledger WHERE ref_id = 'INV-2026-888'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_old_party, 0);
+    assert_eq!(count_new_party, 3); // 1 from sale bill, 1 from immediate cash receipt, 1 from subsequent receipt voucher
+
+    let count_old_print: i64 = conn.query_row("SELECT COUNT(*) FROM invoice_print_log WHERE invoice_no = 'INV-2026-001'", [], |r| r.get(0)).unwrap();
+    let count_new_print: i64 = conn.query_row("SELECT COUNT(*) FROM invoice_print_log WHERE invoice_no = 'INV-2026-888'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_old_print, 0);
+    assert_eq!(count_new_print, 1);
+
+    // Verify stock and party balances are unchanged
+    let stock_qty_after: i64 = conn.query_row("SELECT SUM(qty_base) FROM stock_ledger", [], |r| r.get(0)).unwrap();
+    let party_bal_after: i64 = conn.query_row("SELECT SUM(debit - credit) FROM party_ledger", [], |r| r.get(0)).unwrap();
+    assert_eq!(stock_qty_before, stock_qty_after);
+    assert_eq!(party_bal_before, party_bal_after);
+
+    // Verify audit log
+    let audit_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE entity_type = 'sale' AND entity_id = 'INV-2026-888' AND action = 'rename_invoice'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(audit_count, 1);
+
+    // 7. Period lock rejection test
+    conn.execute("UPDATE settings SET books_locked_until = '2026-11-05' WHERE id = 1", []).unwrap();
+    let rename_locked_err = change_sales_invoice_no_inner(
+        &mut conn,
+        "INV-2026-888",
+        "INV-2026-999",
+        "Attempt during locked period",
+    ).unwrap_err();
+    assert!(rename_locked_err.contains("बंद अवधि") || rename_locked_err.contains("Books locked"));
+}
+
+
