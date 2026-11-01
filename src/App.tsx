@@ -435,6 +435,7 @@ export default function App() {
             <ReportsView
               settings={settings}
               refreshTrigger={refreshTrigger}
+              onRefresh={triggerGlobalRefresh}
               onPrintInvoice={openPrintModal}
               onAlterInvoice={(invNo, type) => {
                 setAlteringInvoice({ invoiceNo: invNo, type });

@@ -5117,3 +5117,366 @@ fn test_stage4_migration_from_legacy_schema() {
     // Clean up temp file
     let _ = std::fs::remove_file(&temp_path);
 }
+
+#[test]
+fn test_dashboard_stats_and_queries_with_hand_calculated_values() {
+    use crate::db::init_db;
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::{
+        get_dashboard_stats_inner, get_yesterday_comparison_inner,
+        get_pending_bills_inner, record_payment_inner, PaymentPayload,
+        cancel_invoice_inner
+    };
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone, village) VALUES (2, 'Customer A', 'customer', 'unregistered', '9898000001', 'Kalyanpur')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone, village) VALUES (3, 'Supplier B', 'supplier', 'regular', '9898000002', 'Indore')",
+        [],
+    ).unwrap();
+
+    conn.execute(
+        "INSERT INTO items (id, name, base_unit, hsn, gst_rate, is_active) VALUES (1, 'Urea 45kg', 'bag', '3102', 5000, 1)",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO items (id, name, base_unit, hsn, gst_rate, is_active) VALUES (2, 'DAP 50kg', 'bag', '3105', 5000, 1)",
+        [],
+    ).unwrap();
+
+    // Opening stock of Urea: 20 bags
+    crate::inventory::add_stock_ledger_entry(
+        &conn, "2026-10-30", 1, 1, 20000, "adjust", Some("OPENING"), None, None, None,
+    ).unwrap();
+
+    // --- DAY 1: 2026-10-31 ---
+    // 1. Purchase 10 bags Urea @ Rs 1,000 = Rs 10,000 + 5% GST (Rs 500) = Rs 10,500 (1,050,000 paise) on credit
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR/26-27/0001".to_string(),
+        date: "2026-10-31".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-INV-101".to_string()),
+        supplier_invoice_date: Some("2026-10-31".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 10000,
+            unit: "bag".to_string(),
+            rate: 100000,
+            taxable: 1000000,
+            cgst: 25000,
+            sgst: 25000,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // 2. Sale 2 bags Urea @ Rs 1,200 = Rs 2,400 + 5% GST (Rs 120) = Rs 2,520 (252,000 paise) on credit
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SAL/26-27/0001".to_string(),
+        date: "2026-10-31".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 2000,
+            unit: "bag".to_string(),
+            rate: 120000,
+            taxable: 240000,
+            cgst: 6000,
+            sgst: 6000,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // Assert Dashboard on 2026-10-31
+    let stats_oct31 = get_dashboard_stats_inner(&conn, "2026-10-31").unwrap();
+    assert_eq!(stats_oct31.today_sales, 252000, "Today sales on 2026-10-31 must be Rs 2,520");
+    assert_eq!(stats_oct31.today_purchases, 1050000, "Today purchases on 2026-10-31 must be Rs 10,500");
+    assert_eq!(stats_oct31.total_receivable, 252000, "Receivable on 2026-10-31 must be Rs 2,520");
+    assert_eq!(stats_oct31.total_payable, 1050000, "Payable on 2026-10-31 must be Rs 10,500");
+
+    // --- DAY 2: 2026-11-01 ---
+    // 3. Sale 1 bag Urea @ Rs 1,200 = Rs 1,200 + 5% GST (Rs 60) = Rs 1,260 (126,000 paise) on credit
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "SAL/26-27/0002".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 1000,
+            unit: "bag".to_string(),
+            rate: 120000,
+            taxable: 120000,
+            cgst: 3000,
+            sgst: 3000,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // 4. Purchase 5 bags DAP @ Rs 1,500 = Rs 7,500 + 5% GST (Rs 375) = Rs 7,875 (787,500 paise) on credit
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR/26-27/0002".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 3,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("SUPP-INV-102".to_string()),
+        supplier_invoice_date: Some("2026-11-01".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: 2,
+            qty: 5000,
+            unit: "bag".to_string(),
+            rate: 150000,
+            taxable: 750000,
+            cgst: 18750,
+            sgst: 18750,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // 5. Payment Received from Customer A: Rs 1,500 (150,000 paise) against SAL/26-27/0001
+    record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "receipt".to_string(),
+        amount_paise: 150000,
+        payment_mode: "cash".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Partial payment on bill 1".to_string()),
+        ref_id: Some("SAL/26-27/0001".to_string()),
+    }).unwrap();
+
+    // 6. Payment Made to Supplier B: Rs 5,000 (500,000 paise) against PUR/26-27/0001
+    record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 3,
+        payment_type: "payment".to_string(),
+        amount_paise: 500000,
+        payment_mode: "bank_transfer".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Partial payment on purchase 1".to_string()),
+        ref_id: Some("PUR/26-27/0001".to_string()),
+    }).unwrap();
+
+    // Assert Dashboard on 2026-11-01
+    let stats_nov01 = get_dashboard_stats_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(stats_nov01.today_sales, 126000, "Today sales on 2026-11-01 must be Rs 1,260");
+    assert_eq!(stats_nov01.today_purchases, 787500, "Today purchases on 2026-11-01 must be Rs 7,875");
+    // Customer receivable: (252,000 + 126,000) - 150,000 = 228,000 paise (Rs 2,280)
+    assert_eq!(stats_nov01.total_receivable, 228000, "Receivable must be Rs 2,280");
+    // Supplier payable: (1,050,000 + 787,500) - 500,000 = 1,337,500 paise (Rs 13,375)
+    assert_eq!(stats_nov01.total_payable, 1337500, "Payable must be Rs 13,375");
+
+    // Pending bills verification
+    let cust_pending = get_pending_bills_inner(&conn, 2).unwrap();
+    assert_eq!(cust_pending.len(), 2);
+    assert_eq!(cust_pending[0].invoice_no, "SAL/26-27/0001");
+    assert_eq!(cust_pending[0].pending_amount, 102000); // 252,000 - 150,000 = 102,000
+    assert_eq!(cust_pending[1].invoice_no, "SAL/26-27/0002");
+    assert_eq!(cust_pending[1].pending_amount, 126000);
+
+    let supp_pending = get_pending_bills_inner(&conn, 3).unwrap();
+    assert_eq!(supp_pending.len(), 2);
+    assert_eq!(supp_pending[0].invoice_no, "PUR/26-27/0001");
+    assert_eq!(supp_pending[0].pending_amount, 550000); // 1,050,000 - 500,000 = 550,000
+    assert_eq!(supp_pending[1].invoice_no, "PUR/26-27/0002");
+    assert_eq!(supp_pending[1].pending_amount, 787500);
+
+    // Cancel sale SAL/26-27/0002 on 2026-11-01:
+    cancel_invoice_inner(&mut conn, "SAL/26-27/0002", Some("Customer changed mind")).unwrap();
+
+    // Assert Dashboard after cancellation:
+    let stats_after_cancel = get_dashboard_stats_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(stats_after_cancel.today_sales, 0, "Today sales after cancellation must drop to 0");
+    assert_eq!(stats_after_cancel.total_receivable, 102000, "Receivable must drop by cancelled amount to Rs 1,020");
+
+    // Yesterday comparison on 2026-11-01:
+    let comp = get_yesterday_comparison_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(comp.yesterday_sales, 252000, "Yesterday sales must be 252,000");
+    assert_eq!(comp.today_sales, 0, "Today sales must be 0");
+    assert_eq!(comp.yesterday_purchases, 1050000, "Yesterday purchases must be 1,050,000");
+    assert_eq!(comp.today_purchases, 787500, "Today purchases must be 787,500");
+}
+
+#[test]
+fn test_end_to_end_payment_against_purchase_invoice() {
+    use crate::db::init_db;
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::commands::{
+        get_dashboard_stats_inner, get_party_balances_inner,
+        get_pending_bills_inner, record_payment_inner, PaymentPayload,
+        alter_payment_inner, AlterPaymentPayload, cancel_payment_inner
+    };
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute(
+        "INSERT INTO parties (id, name, type, category, phone, village) 
+         VALUES (2, 'National Agro Chemicals Ltd', 'supplier', 'regular', '9898123456', 'Dewas')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO items (id, name, base_unit, hsn, gst_rate, is_active) 
+         VALUES (1, 'NPK 19-19-19 Fertilizer', 'bag', '3105', 0, 1)",
+        [],
+    ).unwrap();
+
+    // 1. Create purchase PUR/26-27/0001 for exactly Rs 14,750 (1,475,000 paise) on credit (paid_amount: 0)
+    save_invoice(&mut conn, InvoicePayload {
+        invoice_no: "PUR/26-27/0001".to_string(),
+        date: "2026-11-01".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: Some("23".to_string()),
+        supplier_invoice_no: Some("NAC-INV-9901".to_string()),
+        supplier_invoice_date: Some("2026-11-01".to_string()),
+        lines: vec![InvoiceLine {
+            item_id: 1,
+            qty: 10000,
+            unit: "bag".to_string(),
+            rate: 147500,
+            taxable: 1475000,
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+        }],
+    }).unwrap();
+
+    // Verify initial state:
+    // a) Pending bills list shows PUR/26-27/0001 for Rs 14,750
+    let pending_pre = get_pending_bills_inner(&conn, 2).unwrap();
+    assert_eq!(pending_pre.len(), 1);
+    assert_eq!(pending_pre[0].invoice_no, "PUR/26-27/0001");
+    assert_eq!(pending_pre[0].total_amount, 1475000);
+    assert_eq!(pending_pre[0].paid_amount, 0);
+    assert_eq!(pending_pre[0].pending_amount, 1475000);
+
+    // b) Supplier payable in party ledger is Rs 14,750
+    let balances_pre = get_party_balances_inner(&conn).unwrap();
+    let supp_bal_pre = balances_pre.iter().find(|b| b.party_id == 2).unwrap();
+    assert_eq!(supp_bal_pre.net_balance, -1475000); // Negative indicates payable
+
+    // c) Dashboard payable is Rs 14,750
+    let stats_pre = get_dashboard_stats_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(stats_pre.total_payable, 1475000);
+
+    // 2. Record Payment Made against PUR/26-27/0001 for Rs 14,750 (1,475,000 paise)
+    let pay_ref = record_payment_inner(&mut conn, PaymentPayload {
+        party_id: 2,
+        payment_type: "payment".to_string(),
+        amount_paise: 1475000,
+        payment_mode: "bank_transfer".to_string(),
+        date: "2026-11-01".to_string(),
+        remark: Some("Full settlement of bill PUR/26-27/0001".to_string()),
+        ref_id: Some("PUR/26-27/0001".to_string()),
+    }).unwrap();
+
+    // Verify after payment:
+    // a) Pending bills list is now empty (bill disappeared from pending list!)
+    let pending_post = get_pending_bills_inner(&conn, 2).unwrap();
+    assert!(pending_post.is_empty(), "Fully settled bill must disappear from pending list");
+
+    // b) Supplier payable is now 0 in party balances
+    let balances_post = get_party_balances_inner(&conn).unwrap();
+    let supp_bal_post = balances_post.iter().find(|b| b.party_id == 2).unwrap();
+    assert_eq!(supp_bal_post.net_balance, 0, "Supplier payable must be 0 after full settlement");
+
+    // c) Dashboard payable tile is now 0
+    let stats_post = get_dashboard_stats_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(stats_post.total_payable, 0, "Dashboard payable must be 0 after full settlement");
+
+    // d) Purchase record paid_amount is 1,475,000
+    let (pur_paid, pur_total): (i64, i64) = conn.query_row(
+        "SELECT paid_amount, total_amount FROM purchases WHERE invoice_no = 'PUR/26-27/0001'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(pur_paid, 1475000);
+    assert_eq!(pur_total, 1475000);
+
+    // 3. Alter payment: change payment amount to Rs 10,000 (1,000,000 paise)
+    let ledger_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = ?1 AND type = 'payment'",
+        rusqlite::params![&pay_ref],
+        |r| r.get(0),
+    ).unwrap();
+
+    alter_payment_inner(&mut conn, AlterPaymentPayload {
+        ledger_id,
+        date: "2026-11-01".to_string(),
+        amount_paise: 1000000,
+        payment_mode: "cheque".to_string(),
+        remark: Some("Partially revised payment".to_string()),
+        ref_id: Some("PUR/26-27/0001".to_string()),
+        reason: Some("Deduction for damaged goods".to_string()),
+    }).unwrap();
+
+    // Assert after alteration:
+    // a) Bill reappears in pending bills with pending = Rs 4,750 (475,000 paise)
+    let pending_altered = get_pending_bills_inner(&conn, 2).unwrap();
+    assert_eq!(pending_altered.len(), 1);
+    assert_eq!(pending_altered[0].pending_amount, 475000);
+
+    // b) Supplier payable becomes Rs 4,750
+    let balances_altered = get_party_balances_inner(&conn).unwrap();
+    let supp_bal_altered = balances_altered.iter().find(|b| b.party_id == 2).unwrap();
+    assert_eq!(supp_bal_altered.net_balance, -475000);
+
+    // c) Dashboard payable becomes Rs 4,750
+    let stats_altered = get_dashboard_stats_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(stats_altered.total_payable, 475000);
+
+    // 4. Cancel payment voucher:
+    cancel_payment_inner(&mut conn, ledger_id, Some("Cheque bounced")).unwrap();
+
+    // Assert after payment cancellation:
+    // a) Bill pending amount returns to full Rs 14,750
+    let pending_cancelled = get_pending_bills_inner(&conn, 2).unwrap();
+    assert_eq!(pending_cancelled.len(), 1);
+    assert_eq!(pending_cancelled[0].pending_amount, 1475000);
+
+    // b) Supplier payable returns to full Rs 14,750
+    let balances_cancelled = get_party_balances_inner(&conn).unwrap();
+    let supp_bal_cancelled = balances_cancelled.iter().find(|b| b.party_id == 2).unwrap();
+    assert_eq!(supp_bal_cancelled.net_balance, -1475000);
+
+    // c) Dashboard payable returns to full Rs 14,750
+    let stats_cancelled = get_dashboard_stats_inner(&conn, "2026-11-01").unwrap();
+    assert_eq!(stats_cancelled.total_payable, 1475000);
+
+    // d) Purchase record paid_amount is back to 0
+    let pur_paid_final: i64 = conn.query_row(
+        "SELECT paid_amount FROM purchases WHERE invoice_no = 'PUR/26-27/0001'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(pur_paid_final, 0);
+}
+

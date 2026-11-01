@@ -89,16 +89,24 @@ export function EditItemModal({
 
     setIsSaving(true);
     try {
-      await invoke("update_item_cmd", {
+      const updatePayload = {
         id: item.id,
         name: name.trim(),
         category: category.trim() || null,
         hsn: hsn.trim() || null,
+        gst_rate: g,
         gstRate: g,
+        base_unit: baseUnit.trim(),
         baseUnit: baseUnit.trim(),
+        gst_status: gstStatus,
         gstStatus: gstStatus,
+        is_active: isActive ? 1 : 0,
         isActive: isActive ? 1 : 0,
         reason: reason.trim() || null,
+      };
+      await invoke("update_item_cmd", {
+        payload: updatePayload,
+        ...updatePayload,
       });
 
       setIsSaving(false);

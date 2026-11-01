@@ -106,7 +106,8 @@ fn main() {
             commands::cancel_invoice_cmd,
             commands::alter_sale_cmd,
             commands::alter_purchase_cmd,
-            commands::alter_payment_cmd
+            commands::alter_payment_cmd,
+            commands::cancel_payment_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

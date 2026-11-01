@@ -94,17 +94,23 @@ export function EditPartyModal({
 
     setIsSaving(true);
     try {
-      await invoke("update_party_cmd", {
+      const updatePayload = {
         id: party.id,
         name: name.trim(),
+        party_type: isCashSale ? "customer" : partyType,
         partyType: isCashSale ? "customer" : partyType,
         category,
         village: village.trim() || null,
         address: address.trim() || null,
         gstin: gstin.trim().toUpperCase() || null,
         phone: phone.trim() || null,
+        state_code: stateCode.trim() || null,
         stateCode: stateCode.trim() || null,
         reason: reason.trim() || null,
+      };
+      await invoke("update_party_cmd", {
+        payload: updatePayload,
+        ...updatePayload,
       });
 
       setIsSaving(false);

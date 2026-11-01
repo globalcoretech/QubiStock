@@ -54,6 +54,7 @@ type ReportTab =
 interface ReportsViewProps {
   settings: AppSettings;
   refreshTrigger: number;
+  onRefresh?: () => void;
   onPrintInvoice?: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
   onAlterInvoice?: (invNo: string, type: "sale" | "purchase") => void;
   t: Translations;
@@ -83,6 +84,7 @@ function exportToCsv(filename: string, headers: string[], rows: (string | number
 export function ReportsView({
   settings,
   refreshTrigger,
+  onRefresh,
   onPrintInvoice,
   onAlterInvoice,
   t,
@@ -173,6 +175,7 @@ export function ReportsView({
       setSelectedInvoiceForCancel(null);
       setCancelReason("");
       fetchReportData();
+      if (onRefresh) onRefresh();
     } catch (err: any) {
       console.error("cancel_invoice_cmd error:", err);
       const raw = typeof err === "string" ? err : err?.message || String(err || "");

@@ -529,9 +529,41 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
 }
 
 #[command]
-pub fn update_item_cmd(app: AppHandle, payload: UpdateItemPayload) -> Result<(), String> {
+pub fn update_item_cmd(
+    app: AppHandle,
+    payload: Option<UpdateItemPayload>,
+    id: Option<i64>,
+    name: Option<String>,
+    category: Option<String>,
+    hsn: Option<String>,
+    gst_rate: Option<i64>,
+    base_unit: Option<String>,
+    gst_status: Option<String>,
+    is_active: Option<i64>,
+    units: Option<Vec<UpdateItemUnitItem>>,
+    reason: Option<String>,
+) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    update_item_inner(&mut conn, payload)
+    let final_payload = if let Some(p) = payload {
+        p
+    } else {
+        let item_id = id.ok_or_else(|| "Item ID is required".to_string())?;
+        let item_name = name.ok_or_else(|| "Item name is required".to_string())?;
+        let b_unit = base_unit.unwrap_or_else(|| "kg".to_string());
+        UpdateItemPayload {
+            id: item_id,
+            name: item_name,
+            category,
+            hsn,
+            gst_rate,
+            base_unit: b_unit,
+            gst_status,
+            is_active,
+            units,
+            reason,
+        }
+    };
+    update_item_inner(&mut conn, final_payload)
 }
 
 pub fn delete_item_inner(conn: &mut Connection, item_id: i64) -> Result<(), String> {
@@ -717,9 +749,9 @@ pub fn get_parties_inner(conn: &Connection, party_type: &str) -> Result<Vec<Part
 }
 
 #[command]
-pub fn get_parties_cmd(app: AppHandle, party_type: String) -> Result<Vec<Party>, String> {
+pub fn get_parties_cmd(app: AppHandle, party_type: Option<String>) -> Result<Vec<Party>, String> {
     let conn = get_conn(&app)?;
-    get_parties_inner(&conn, &party_type)
+    get_parties_inner(&conn, party_type.as_deref().unwrap_or(""))
 }
 
 pub fn add_party_inner(
@@ -910,9 +942,42 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
 }
 
 #[command]
-pub fn update_party_cmd(app: AppHandle, payload: UpdatePartyPayload) -> Result<(), String> {
+pub fn update_party_cmd(
+    app: AppHandle,
+    payload: Option<UpdatePartyPayload>,
+    id: Option<i64>,
+    name: Option<String>,
+    party_type: Option<String>,
+    category: Option<String>,
+    village: Option<String>,
+    address: Option<String>,
+    phone: Option<String>,
+    gstin: Option<String>,
+    state_code: Option<String>,
+    reason: Option<String>,
+) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    update_party_inner(&mut conn, payload)
+    let final_payload = if let Some(p) = payload {
+        p
+    } else {
+        let party_id = id.ok_or_else(|| "Party ID is required".to_string())?;
+        let party_name = name.ok_or_else(|| "Party name is required".to_string())?;
+        let p_type = party_type.unwrap_or_else(|| "customer".to_string());
+        let cat = category.unwrap_or_else(|| "unregistered".to_string());
+        UpdatePartyPayload {
+            id: party_id,
+            name: party_name,
+            party_type: p_type,
+            category: cat,
+            village,
+            address,
+            phone,
+            gstin,
+            state_code,
+            reason,
+        }
+    };
+    update_party_inner(&mut conn, final_payload)
 }
 
 pub fn delete_party_inner(conn: &mut Connection, party_id: i64) -> Result<(), String> {
@@ -1078,15 +1143,16 @@ pub struct DashboardStats {
 }
 
 pub fn get_dashboard_stats_inner(conn: &Connection, today_date: &str) -> Result<DashboardStats, String> {
+    let clean_date = today_date.split('T').next().unwrap_or(today_date).trim();
     let today_sales: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
-        rusqlite::params![today_date],
+        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE (date = ?1 OR date LIKE (?1 || '%')) AND COALESCE(status, 'active') <> 'cancelled'",
+        rusqlite::params![clean_date],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let today_purchases: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
-        rusqlite::params![today_date],
+        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE (date = ?1 OR date LIKE (?1 || '%')) AND COALESCE(status, 'active') <> 'cancelled'",
+        rusqlite::params![clean_date],
         |row| row.get(0)
     ).unwrap_or(0);
 
@@ -1110,9 +1176,10 @@ pub fn get_dashboard_stats_inner(conn: &Connection, today_date: &str) -> Result<
 }
 
 #[command]
-pub fn get_dashboard_stats_cmd(app: AppHandle, today_date: String) -> Result<DashboardStats, String> {
+pub fn get_dashboard_stats_cmd(app: AppHandle, today_date: Option<String>) -> Result<DashboardStats, String> {
     let conn = get_conn(&app)?;
-    get_dashboard_stats_inner(&conn, &today_date)
+    let date_str = today_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    get_dashboard_stats_inner(&conn, &date_str)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -3244,7 +3311,8 @@ pub struct YesterdayComparison {
 pub fn get_yesterday_comparison_inner(conn: &Connection, today_date: &str) -> Result<YesterdayComparison, String> {
     use chrono::{NaiveDate, Duration};
 
-    let base_date = NaiveDate::parse_from_str(today_date, "%Y-%m-%d")
+    let clean_today = today_date.split('T').next().unwrap_or(today_date).trim();
+    let base_date = NaiveDate::parse_from_str(clean_today, "%Y-%m-%d")
         .unwrap_or_else(|_| chrono::Local::now().date_naive());
     let yesterday = base_date - Duration::days(1);
 
@@ -3252,25 +3320,25 @@ pub fn get_yesterday_comparison_inner(conn: &Connection, today_date: &str) -> Re
     let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
 
     let today_sales: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE (date = ?1 OR date LIKE (?1 || '%')) AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&today_str],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let yesterday_sales: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE (date = ?1 OR date LIKE (?1 || '%')) AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&yesterday_str],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let today_purchases: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE (date = ?1 OR date LIKE (?1 || '%')) AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&today_str],
         |row| row.get(0)
     ).unwrap_or(0);
 
     let yesterday_purchases: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE date = ?1 AND COALESCE(status, 'active') <> 'cancelled'",
+        "SELECT COALESCE(SUM(total_amount), 0) FROM purchases WHERE (date = ?1 OR date LIKE (?1 || '%')) AND COALESCE(status, 'active') <> 'cancelled'",
         rusqlite::params![&yesterday_str],
         |row| row.get(0)
     ).unwrap_or(0);
@@ -5069,5 +5137,86 @@ pub fn alter_payment_cmd(
     let mut conn = get_conn(&app)?;
     alter_payment_inner(&mut conn, payload)
 }
+
+pub fn cancel_payment_inner(conn: &mut Connection, ledger_id: i64, reason: Option<&str>) -> Result<(), String> {
+    let (party_id, old_date, old_debit, old_credit, old_ref_id, old_mode, old_remark): (i64, String, i64, i64, String, String, Option<String>) = conn.query_row(
+        "SELECT party_id, date, debit, credit, ref_id, payment_mode, remark FROM party_ledger WHERE id = ?1 AND type = 'payment'",
+        rusqlite::params![ledger_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+    ).map_err(|_| format!("Payment ledger entry #{} not found / भुगतान प्रविष्टि नहीं मिली", ledger_id))?;
+
+    crate::audit::check_period_lock(conn, &old_date)?;
+
+    let is_receipt = old_credit > 0;
+    let old_amount = if is_receipt { old_credit } else { old_debit };
+
+    let before_json = serde_json::json!({
+        "id": ledger_id,
+        "party_id": party_id,
+        "date": old_date,
+        "amount_paise": old_amount,
+        "payment_mode": old_mode,
+        "ref_id": old_ref_id,
+        "remark": old_remark
+    }).to_string();
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    // Undo old payment amount on matched invoice
+    if is_receipt {
+        tx.execute(
+            "UPDATE sales SET paid_amount = MAX(0, paid_amount - ?1) WHERE invoice_no = ?2 AND customer_id = ?3",
+            rusqlite::params![old_amount, &old_ref_id, party_id],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        tx.execute(
+            "UPDATE purchases SET paid_amount = MAX(0, paid_amount - ?1) WHERE invoice_no = ?2 AND supplier_id = ?3",
+            rusqlite::params![old_amount, &old_ref_id, party_id],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // Insert reversal into party_ledger
+    let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let reason_str = reason.unwrap_or("Payment cancelled").trim();
+    if is_receipt {
+        // Receipt reversal: debit party
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+             VALUES (?1, ?2, 'reversal', ?3, ?4, 0, 'cancel', ?5)",
+            rusqlite::params![today_str, party_id, old_ref_id, old_amount, format!("Cancel payment: {}", reason_str)],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        // Payment made reversal: credit party
+        tx.execute(
+            "INSERT INTO party_ledger (date, party_id, type, ref_id, debit, credit, payment_mode, remark)
+             VALUES (?1, ?2, 'reversal', ?3, 0, ?4, 'cancel', ?5)",
+            rusqlite::params![today_str, party_id, old_ref_id, old_amount, format!("Cancel payment: {}", reason_str)],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    crate::audit::write_audit(
+        &tx,
+        "party_ledger",
+        &ledger_id.to_string(),
+        "cancel",
+        Some(&before_json),
+        None,
+        reason,
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[command]
+pub fn cancel_payment_cmd(
+    app: AppHandle,
+    ledger_id: i64,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let mut conn = get_conn(&app)?;
+    cancel_payment_inner(&mut conn, ledger_id, reason.as_deref())
+}
+
 
 

@@ -58,6 +58,7 @@ export function DashboardView({
   const [topReceivables, setTopReceivables] = useState<TopReceivableParty[]>([]);
   const [lowStockItems, setLowStockItems] = useState<LowStockItem[]>([]);
   const [backupStatus, setBackupStatus] = useState<BackupStatusInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Tab, filter & pagination state for Attention section
   const [activeListTab, setActiveListTab] = useState<"receivables" | "low_stock">("receivables");
@@ -69,14 +70,26 @@ export function DashboardView({
   const isBillBlocked =
     !settings.shopName?.trim() || (settings.isGstRegistered && !settings.gstin?.trim());
 
-  const todayIso = new Date().toISOString().split("T")[0];
+  // Use local timezone date (YYYY-MM-DD) instead of UTC to prevent date mismatch
+  const getLocalTodayIso = (): string => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const todayIso = getLocalTodayIso();
 
   const loadAllData = async () => {
+    const errors: string[] = [];
+
     try {
       const s = await invoke<DashboardStats>("get_dashboard_stats_cmd", { todayDate: todayIso });
       setStats(s);
-    } catch (e) {
+    } catch (e: any) {
       console.error("get_dashboard_stats_cmd error:", e);
+      errors.push(`Stats: ${typeof e === "string" ? e : e?.message || String(e)}`);
     }
 
     try {
@@ -84,8 +97,9 @@ export function DashboardView({
         todayDate: todayIso,
       });
       setYesterdayComp(comp);
-    } catch (e) {
+    } catch (e: any) {
       console.error("get_yesterday_comparison_cmd error:", e);
+      errors.push(`Comparison: ${typeof e === "string" ? e : e?.message || String(e)}`);
     }
 
     try {
@@ -94,8 +108,9 @@ export function DashboardView({
         asOfDate: todayIso,
       });
       setTopReceivables(rec);
-    } catch (e) {
+    } catch (e: any) {
       console.error("get_top_receivables_cmd error:", e);
+      errors.push(`Receivables: ${typeof e === "string" ? e : e?.message || String(e)}`);
     }
 
     try {
@@ -103,20 +118,29 @@ export function DashboardView({
         thresholdMilli: (settings.lowStockThreshold || 10) * 1000,
       });
       setLowStockItems(low.filter((item) => item.current_stock_milli > 0));
-    } catch (e) {
+    } catch (e: any) {
       console.error("get_low_stock_items_cmd error:", e);
+      errors.push(`Low Stock: ${typeof e === "string" ? e : e?.message || String(e)}`);
     }
 
     try {
       const bStatus = await invoke<BackupStatusInfo>("get_backup_status_cmd");
       setBackupStatus(bStatus);
-    } catch (e) {
+    } catch (e: any) {
       console.error("get_backup_status_cmd error:", e);
+      errors.push(`Backup: ${typeof e === "string" ? e : e?.message || String(e)}`);
     }
+
+    setLoadError(errors.length > 0 ? errors.join(" | ") : null);
   };
 
   useEffect(() => {
     loadAllData();
+    const handleFocus = () => {
+      loadAllData();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
   }, [refreshTrigger]);
 
   // Keyboard shortcut F1 (Sale), F2 (Purchase)
@@ -234,6 +258,29 @@ export function DashboardView({
           )}
         </div>
       </div>
+
+      {/* Visible Error Banner if any dashboard invoke failed */}
+      {loadError && (
+        <div
+          data-testid="dashboard-error-banner"
+          className="p-2.5 bg-rose-50 border border-rose-300 rounded-xl text-rose-900 text-xs flex items-center justify-between shadow-2xs flex-shrink-0 animate-in fade-in"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle size={16} className="text-rose-600 flex-shrink-0" />
+            <span className="font-semibold truncate">
+              {lang === "hi" ? "डैशबोर्ड लोड करने में समस्या आई: " : "Dashboard load error: "}
+              <span className="font-mono text-[11px] text-rose-800">{loadError}</span>
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => loadAllData()}
+            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer flex-shrink-0 ml-2"
+          >
+            {lang === "hi" ? "पुनः प्रयास करें" : "Retry"}
+          </button>
+        </div>
+      )}
 
       {/* Warning banner when shop info incomplete */}
       {isBillBlocked && (
