@@ -2838,6 +2838,7 @@ fn test_stage1_audit_log_append_only() {
         Some(r#"{"name":"Urea Old","gst_rate":5}"#),
         Some(r#"{"name":"Urea New","gst_rate":5}"#),
         Some("Name corrected"),
+        Some("admin"),
     ).expect("Failed to write audit");
 
     // 2. Fetch logs and assert content
@@ -5964,5 +5965,404 @@ fn test_wal_checkpoint_truncate_and_safety_info() {
     let checkpoint_res = run_wal_checkpoint_truncate(&conn);
     assert!(checkpoint_res.is_ok(), "run_wal_checkpoint_truncate must succeed");
 }
+
+#[test]
+fn test_auth_password_hash_and_verify() {
+    use crate::auth::{hash_password, verify_password};
+
+    let password = "SuperSecretPassword123!";
+    let hash1 = hash_password(password).expect("hashing failed");
+    let hash2 = hash_password(password).expect("hashing failed");
+
+    // Must be Argon2id format
+    assert!(hash1.starts_with("$argon2id$"));
+    // Salt must be random -> hash1 != hash2
+    assert_ne!(hash1, hash2);
+    // Never match plaintext
+    assert_ne!(hash1, password);
+
+    // Verify correct password
+    assert!(verify_password(password, &hash1));
+    assert!(verify_password(password, &hash2));
+
+    // Verify wrong password
+    assert!(!verify_password("WrongPassword!", &hash1));
+    assert!(!verify_password("", &hash1));
+}
+
+#[test]
+fn test_auth_lockout_after_5_failures_and_reset_after_time() {
+    use crate::auth::{create_user_inner, verify_and_login_user};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    // Enable security
+    conn.execute("UPDATE settings SET security_enabled = 1 WHERE id = 1", []).unwrap();
+    create_user_inner(&conn, "owner1", "owner", "CorrectPass123").expect("create owner failed");
+
+    // Attempts 1 to 4 with wrong password: fail but not locked yet
+    for i in 1..=4 {
+        let err = verify_and_login_user(&conn, "owner1", "WrongPass").unwrap_err();
+        assert!(err.contains("Incorrect password") || err.contains("पासवर्ड गलत है"), "Attempt {} failed with wrong message: {}", i, err);
+        let attempts: i64 = conn.query_row("SELECT failed_attempts FROM users WHERE name = 'owner1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(attempts, i);
+    }
+
+    // Attempt 5: triggers lockout
+    let err5 = verify_and_login_user(&conn, "owner1", "WrongPass").unwrap_err();
+    assert!(err5.contains("5 मिनट") || err5.contains("5 minutes"), "Attempt 5 must trigger lockout: {}", err5);
+    let locked_until: Option<String> = conn.query_row("SELECT locked_until FROM users WHERE name = 'owner1'", [], |r| r.get(0)).unwrap();
+    assert!(locked_until.is_some());
+
+    // Attempt 6: even correct password is blocked during lockout
+    let err6 = verify_and_login_user(&conn, "owner1", "CorrectPass123").unwrap_err();
+    assert!(err6.contains("खाता लॉक है") || err6.contains("locked"), "Must reject during lockout: {}", err6);
+
+    // Fast-forward time: set locked_until to 6 minutes in the past
+    let past_time = (chrono::Local::now() - chrono::Duration::minutes(6)).to_rfc3339();
+    conn.execute("UPDATE users SET locked_until = ?1 WHERE name = 'owner1'", rusqlite::params![past_time]).unwrap();
+
+    // Now correct password succeeds and clears lockout
+    let login_res = verify_and_login_user(&conn, "owner1", "CorrectPass123").expect("Login after lockout expired must succeed");
+    assert_eq!(login_res.name, "owner1");
+    assert_eq!(login_res.role, "owner");
+
+    let post_attempts: i64 = conn.query_row("SELECT failed_attempts FROM users WHERE name = 'owner1'", [], |r| r.get(0)).unwrap();
+    let post_lock: Option<String> = conn.query_row("SELECT locked_until FROM users WHERE name = 'owner1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(post_attempts, 0);
+    assert!(post_lock.is_none());
+}
+
+#[test]
+fn test_auth_recovery_key_reset_works_once() {
+    use crate::auth::{
+        create_user_inner, generate_recovery_key, hash_password,
+        reset_owner_with_recovery_key_inner, verify_and_login_user,
+    };
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    let original_key = generate_recovery_key();
+    let original_hash = hash_password(&original_key).unwrap();
+
+    conn.execute(
+        "UPDATE settings SET security_enabled = 1, recovery_key_hash = ?1 WHERE id = 1",
+        rusqlite::params![original_hash],
+    ).unwrap();
+
+    create_user_inner(&conn, "rajesh_owner", "owner", "OldPassword123").unwrap();
+
+    // Try wrong recovery key -> fails
+    let wrong_res = reset_owner_with_recovery_key_inner(
+        &conn,
+        "RK-WRONG-KEY-1234-5678",
+        "BrandNewPass123",
+    );
+    assert!(wrong_res.is_err(), "Wrong recovery key must fail");
+
+    // Reset with correct recovery key -> succeeds and returns new recovery key
+    let new_key = reset_owner_with_recovery_key_inner(
+        &conn,
+        &original_key,
+        "BrandNewPass123",
+    ).expect("Recovery key reset failed");
+
+    assert!(new_key.starts_with("RK-"));
+    assert_ne!(new_key, original_key);
+
+    // Can login with new password
+    let login_res = verify_and_login_user(&conn, "rajesh_owner", "BrandNewPass123");
+    assert!(login_res.is_ok());
+
+    // Old password no longer works
+    let old_login = verify_and_login_user(&conn, "rajesh_owner", "OldPassword123");
+    assert!(old_login.is_err());
+
+    // Old recovery key is INVALID now (cannot be reused)
+    let reuse_res = reset_owner_with_recovery_key_inner(
+        &conn,
+        &original_key,
+        "AnotherNewPass",
+    );
+    assert!(reuse_res.is_err(), "Old recovery key must not be reusable");
+
+    // Resetting with the NEW key works!
+    let next_key = reset_owner_with_recovery_key_inner(
+        &conn,
+        &new_key,
+        "FinalPass1234",
+    ).expect("Reset with new recovery key must succeed");
+    assert_ne!(next_key, new_key);
+}
+
+#[test]
+fn test_auth_last_owner_protection() {
+    use crate::auth::{create_user_inner, update_user_status_inner};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+
+    create_user_inner(&conn, "sole_owner", "owner", "Password123").unwrap();
+    create_user_inner(&conn, "staff_ramesh", "staff", "Password123").unwrap();
+
+    let sole_owner_id: i64 = conn.query_row("SELECT id FROM users WHERE name = 'sole_owner'", [], |r| r.get(0)).unwrap();
+    let staff_id: i64 = conn.query_row("SELECT id FROM users WHERE name = 'staff_ramesh'", [], |r| r.get(0)).unwrap();
+
+    // 1. Cannot deactivate sole active owner
+    let deact_res = update_user_status_inner(&conn, sole_owner_id, false, "owner");
+    assert!(deact_res.is_err());
+    let deact_err = deact_res.unwrap_err();
+    assert!(deact_err.contains("Last active Owner") || deact_err.contains("अंतिम सक्रिय"));
+
+    // 2. Cannot demote sole active owner to staff
+    let demote_res = update_user_status_inner(&conn, sole_owner_id, true, "staff");
+    assert!(demote_res.is_err());
+    let demote_err = demote_res.unwrap_err();
+    assert!(demote_err.contains("Last active Owner") || demote_err.contains("अंतिम सक्रिय"));
+
+    // 3. Staff can be deactivated or promoted
+    let deact_staff = update_user_status_inner(&conn, staff_id, false, "staff");
+    assert!(deact_staff.is_ok());
+
+    let promote_staff = update_user_status_inner(&conn, staff_id, true, "owner");
+    assert!(promote_staff.is_ok());
+
+    // 4. Now that we have 2 owners, deactivating sole_owner succeeds
+    let deact_first = update_user_status_inner(&conn, sole_owner_id, false, "owner");
+    assert!(deact_first.is_ok());
+
+    // 5. But deactivating the remaining active owner fails again!
+    let deact_last = update_user_status_inner(&conn, staff_id, false, "owner");
+    assert!(deact_last.is_err());
+}
+
+#[test]
+fn test_auth_permission_matrix_and_unauthenticated() {
+    use crate::auth::{check_command_permission, SessionUser};
+
+    let staff_user = SessionUser {
+        id: 2,
+        name: "ramesh".to_string(),
+        role: "staff".to_string(),
+    };
+    let owner_user = SessionUser {
+        id: 1,
+        name: "owner".to_string(),
+        role: "owner".to_string(),
+    };
+
+    // Case 1: Security Disabled -> old behaviour (all permitted, even unauthenticated)
+    assert!(check_command_permission(false, None, false, "cancel_invoice_cmd").is_ok());
+    assert!(check_command_permission(false, None, false, "get_profit_report_cmd").is_ok());
+
+    // Case 2: Security Enabled, Unauthenticated -> only Public commands permitted
+    assert!(check_command_permission(true, None, false, "login_cmd").is_ok());
+    assert!(check_command_permission(true, None, false, "get_security_status_cmd").is_ok());
+    assert!(check_command_permission(true, None, false, "save_invoice_cmd").is_err());
+    assert!(check_command_permission(true, None, false, "cancel_invoice_cmd").is_err());
+
+    // Case 3: Security Enabled, Session Locked -> only unlock/public commands permitted
+    assert!(check_command_permission(true, Some(&staff_user), true, "unlock_session_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&staff_user), true, "save_invoice_cmd").is_err());
+
+    // Case 4: Staff permissions
+    let staff_allowed_commands = vec![
+        "get_dashboard_stats_cmd",
+        "save_invoice_cmd",
+        "record_payment_cmd",
+        "get_stock_list_cmd",
+        "get_available_stock_cmd",
+        "get_items_cmd",
+        "add_item_cmd",
+        "get_parties_cmd",
+        "add_party_cmd",
+        "get_party_statement_cmd",
+        "get_party_balances_cmd",
+        "get_backup_status_cmd",
+        "print_bill",
+        "get_settings_cmd",
+    ];
+    for cmd in staff_allowed_commands {
+        assert!(
+            check_command_permission(true, Some(&staff_user), false, cmd).is_ok(),
+            "Staff should be allowed command: {}",
+            cmd
+        );
+    }
+
+    let staff_denied_commands = vec![
+        "update_item_cmd",
+        "delete_item_cmd",
+        "update_party_cmd",
+        "delete_party_cmd",
+        "add_opening_stock_cmd",
+        "add_stock_adjustment_cmd",
+        "change_sales_invoice_no_cmd",
+        "update_purchase_supplier_invoice_cmd",
+        "cancel_invoice_cmd",
+        "alter_sale_cmd",
+        "alter_purchase_cmd",
+        "alter_payment_cmd",
+        "cancel_payment_cmd",
+        "set_settings_cmd",
+        "get_audit_logs_cmd",
+        "get_profit_report_cmd",
+        "get_sales_gst_mode_profit_report_cmd",
+        "get_item_parties_report_cmd",
+        "get_party_items_report_cmd",
+        "cleanup_accounting_parties_cmd",
+        "preview_tally_import_cmd",
+        "confirm_tally_import_cmd",
+        "create_user_cmd",
+        "update_user_status_cmd",
+        "reset_user_password_cmd",
+        "get_users_cmd",
+        "get_login_logs_cmd",
+        "backup_now_cmd",
+        "list_backups_cmd",
+        "prepare_restore_cmd",
+    ];
+    for cmd in staff_denied_commands {
+        let err = check_command_permission(true, Some(&staff_user), false, cmd).unwrap_err();
+        assert!(
+            err.contains("Is kaam ki anumati nahi hai"),
+            "Staff denied command '{}' must return bilingual permission error, got: {}",
+            cmd,
+            err
+        );
+    }
+
+    // Case 5: Owner permissions (allowed everything)
+    assert!(check_command_permission(true, Some(&owner_user), false, "save_invoice_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&owner_user), false, "cancel_invoice_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&owner_user), false, "get_profit_report_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&owner_user), false, "backup_now_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&owner_user), false, "create_user_cmd").is_ok());
+}
+
+#[test]
+fn test_auth_audit_rows_carry_user_name_and_login_log_appended() {
+    use crate::audit::{get_audit_logs_inner, set_current_user_name, write_audit};
+    use crate::auth::{get_login_logs_inner, log_login_event};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+
+    // 1. Thread-local user tagging in audit
+    set_current_user_name(Some("sharma_ji".to_string()));
+    write_audit(
+        &mut conn,
+        "item",
+        "101",
+        "create",
+        None,
+        Some(r#"{"name":"DAP"}"#),
+        Some("Item added"),
+        None, // Falls back to thread-local "sharma_ji"
+    ).unwrap();
+
+    let logs = get_audit_logs_inner(&conn, Some("item"), Some("101"), None).unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].user_name.as_deref(), Some("sharma_ji"));
+
+    set_current_user_name(None);
+
+    // 2. Login log event recording
+    log_login_event(&conn, "sharma_ji", "login").unwrap();
+    log_login_event(&conn, "sharma_ji", "failed_attempt").unwrap();
+    log_login_event(&conn, "sharma_ji", "lock").unwrap();
+    log_login_event(&conn, "sharma_ji", "unlock").unwrap();
+    log_login_event(&conn, "sharma_ji", "password_change").unwrap();
+    log_login_event(&conn, "sharma_ji", "recovery_use").unwrap();
+    log_login_event(&conn, "sharma_ji", "logout").unwrap();
+
+    let login_logs = get_login_logs_inner(&conn, Some(50)).unwrap();
+    assert_eq!(login_logs.len(), 7);
+    assert_eq!(login_logs[0].event, "logout"); // DESC order
+    assert_eq!(login_logs[6].event, "login");
+
+    // 3. Append-only triggers on login_log
+    let update_err = conn.execute("UPDATE login_log SET event = 'tampered' WHERE id = 1", []);
+    assert!(update_err.is_err(), "Trigger must prevent UPDATE on login_log");
+
+    let delete_err = conn.execute("DELETE FROM login_log WHERE id = 1", []);
+    assert!(delete_err.is_err(), "Trigger must prevent DELETE on login_log");
+}
+
+#[test]
+fn test_auth_upgrade_from_old_db_without_users_table() {
+    let conn = Connection::open_in_memory().unwrap();
+
+    // Setup legacy schema (like older DB before auth feature)
+    conn.execute_batch(
+        r#"
+        CREATE TABLE settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            shop_name TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            gstin TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT 'MADHYA PRADESH',
+            state_code TEXT NOT NULL DEFAULT '23',
+            invoice_prefix TEXT NOT NULL DEFAULT 'INV-',
+            terms_and_conditions TEXT NOT NULL DEFAULT '',
+            bank_name TEXT NOT NULL DEFAULT '',
+            account_no TEXT NOT NULL DEFAULT '',
+            ifsc TEXT NOT NULL DEFAULT '',
+            branch TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO settings (id, shop_name) VALUES (1, 'Old Shop');
+
+        CREATE TABLE items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            unit TEXT NOT NULL,
+            hsn_code TEXT NOT NULL,
+            gst_rate INTEGER NOT NULL,
+            purchase_rate INTEGER NOT NULL,
+            sale_rate INTEGER NOT NULL
+        );
+        INSERT INTO items (name, unit, hsn_code, gst_rate, purchase_rate, sale_rate)
+        VALUES ('Legacy Urea', 'BAG', '3102', 5, 25000, 27000);
+
+        CREATE TABLE audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            before_json TEXT,
+            after_json TEXT,
+            reason TEXT
+        );
+        INSERT INTO audit_log (timestamp, entity_type, entity_id, action, before_json, after_json, reason)
+        VALUES ('2026-01-01T00:00:00Z', 'item', '1', 'create', NULL, '{"name":"Legacy Urea"}', 'Initial setup');
+        "#,
+    ).unwrap();
+
+    // Now run our additive, guarded migrations
+    crate::db::run_migrations(&conn).expect("Migration on old DB must succeed");
+
+    // 1. Check users table exists and is empty
+    let users_count: i64 = conn.query_row("SELECT count(*) FROM users", [], |r| r.get(0)).unwrap();
+    assert_eq!(users_count, 0);
+
+    // 2. Check login_log table exists and is empty
+    let login_logs_count: i64 = conn.query_row("SELECT count(*) FROM login_log", [], |r| r.get(0)).unwrap();
+    assert_eq!(login_logs_count, 0);
+
+    // 3. Check audit_log user_name column was added and old row is NULL
+    let user_name_val: Option<String> = conn.query_row("SELECT user_name FROM audit_log WHERE id = 1", [], |r| r.get(0)).unwrap();
+    assert!(user_name_val.is_none());
+
+    // 4. Check settings columns were added with security_enabled default 0 (or null)
+    let sec_status = crate::auth::get_security_status_inner(&conn, None).unwrap();
+    assert!(!sec_status.has_users);
+    assert!(!sec_status.security_enabled);
+    assert_eq!(sec_status.auto_lock_minutes, 10);
+
+    // 5. Existing item data is 100% untouched
+    let item_name: String = conn.query_row("SELECT name FROM items WHERE id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(item_name, "Legacy Urea");
+}
+
 
 

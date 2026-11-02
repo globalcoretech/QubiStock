@@ -755,6 +755,7 @@ export interface AuditLogEntry {
   after_json: string | null;
   reason: string | null;
   created_at: string;
+  user_name?: string | null;
 }
 
 export interface AlterPaymentPayload {
@@ -765,4 +766,41 @@ export interface AlterPaymentPayload {
   remark?: string | null;
   ref_id?: string | null;
   reason?: string | null;
+}
+
+// ==========================================
+// AUTH & LOCAL SECURITY TYPES
+// ==========================================
+
+export type UserRole = "owner" | "staff";
+
+export interface SessionUser {
+  id: number;
+  name: string;
+  role: UserRole;
+}
+
+export interface UserInfo {
+  id: number;
+  name: string;
+  role: UserRole;
+  is_active: boolean;
+  failed_attempts: number;
+  locked_until: string | null;
+  created_at: string;
+}
+
+export interface SecurityStatus {
+  has_users: boolean;
+  security_enabled: boolean;
+  auto_lock_minutes: number;
+  is_locked: boolean;
+  current_user: SessionUser | null;
+}
+
+export interface LoginLogEntry {
+  id: number;
+  user_name: string;
+  event: string;
+  at: string;
 }

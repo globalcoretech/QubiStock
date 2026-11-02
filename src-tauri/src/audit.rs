@@ -1,5 +1,20 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+
+thread_local! {
+    pub static CURRENT_USER_NAME: RefCell<Option<String>> = RefCell::new(None);
+}
+
+pub fn set_current_user_name(name: Option<String>) {
+    CURRENT_USER_NAME.with(|cell| {
+        *cell.borrow_mut() = name;
+    });
+}
+
+pub fn get_current_user_name() -> Option<String> {
+    CURRENT_USER_NAME.with(|cell| cell.borrow().clone())
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AuditLogEntry {
@@ -10,6 +25,7 @@ pub struct AuditLogEntry {
     pub before_json: Option<String>,
     pub after_json: Option<String>,
     pub reason: Option<String>,
+    pub user_name: Option<String>,
     pub created_at: String,
 }
 
@@ -21,12 +37,17 @@ pub fn write_audit(
     before_json: Option<&str>,
     after_json: Option<&str>,
     reason: Option<&str>,
+    user_name: Option<&str>,
 ) -> Result<(), String> {
     let now = chrono::Local::now().to_rfc3339();
+    let effective_user = match user_name {
+        Some(u) => Some(u.to_string()),
+        None => get_current_user_name(),
+    };
     conn.execute(
-        "INSERT INTO audit_log (entity_type, entity_id, action, before_json, after_json, reason, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![entity_type, entity_id, action, before_json, after_json, reason, now],
+        "INSERT INTO audit_log (entity_type, entity_id, action, before_json, after_json, reason, user_name, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![entity_type, entity_id, action, before_json, after_json, reason, effective_user, now],
     ).map_err(|e| format!("Failed to write audit log: {}", e))?;
     Ok(())
 }
@@ -38,7 +59,7 @@ pub fn get_audit_logs_inner(
     limit: Option<i64>,
 ) -> Result<Vec<AuditLogEntry>, String> {
     let lim = limit.unwrap_or(200);
-    let mut sql = "SELECT id, COALESCE(entity_type, ''), COALESCE(entity_id, ''), action, before_json, after_json, reason, COALESCE(created_at, '') FROM audit_log WHERE 1=1".to_string();
+    let mut sql = "SELECT id, COALESCE(entity_type, ''), COALESCE(entity_id, ''), action, before_json, after_json, reason, user_name, COALESCE(created_at, '') FROM audit_log WHERE 1=1".to_string();
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     if let Some(et) = entity_type {
@@ -69,7 +90,8 @@ pub fn get_audit_logs_inner(
             before_json: row.get(4)?,
             after_json: row.get(5)?,
             reason: row.get(6)?,
-            created_at: row.get(7)?,
+            user_name: row.get(7)?,
+            created_at: row.get(8)?,
         })
     }).map_err(|e| e.to_string())?;
 

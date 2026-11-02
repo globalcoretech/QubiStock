@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Item, Feedback, GstStatus } from "../types";
+import { Item, Feedback, GstStatus, SessionUser } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner, EmptyTableMessage } from "../components/FeedbackBanner";
 import { Plus, Search, X, getItemCategoryIcon, Edit, History } from "../components/icons";
@@ -14,6 +14,7 @@ interface ItemsViewProps {
   t: Translations;
   lang: Language;
   initialOpenForm?: boolean;
+  currentUser?: SessionUser | null;
 }
 
 export function ItemsView({
@@ -22,7 +23,9 @@ export function ItemsView({
   t,
   lang,
   initialOpenForm = false,
+  currentUser,
 }: ItemsViewProps) {
+  const isStaff = currentUser?.role === "staff";
   const [items, setItems] = useState<Item[]>([]);
   const [name, setName] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -363,13 +366,13 @@ export function ItemsView({
                 <th className="py-2 px-3">{t.items.gstRate}</th>
                 <th className="py-2 px-3">{t.items.baseUnit}</th>
                 <th className="py-2 px-3">{lang === "hi" ? "स्थिति" : "Status"}</th>
-                <th className="py-2 px-3 text-right">{lang === "hi" ? "कार्रवाई" : "Actions"}</th>
+                {!isStaff && <th className="py-2 px-3 text-right">{lang === "hi" ? "कार्रवाई" : "Actions"}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={isStaff ? 6 : 7}>
                     <EmptyTableMessage
                       message={t.common.emptyMessage}
                       actionText={t.items.addItemBtn}
@@ -427,28 +430,30 @@ export function ItemsView({
                         </span>
                       )}
                     </td>
-                    <td className="py-2 px-3 text-right">
-                      <div className="inline-flex items-center gap-1.5 justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setEditingItem(it)}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded border border-slate-200 hover:border-emerald-200 transition-colors text-[11px] font-medium"
-                          title={lang === "hi" ? "संपादित करें" : "Edit"}
-                        >
-                          <Edit size={13} strokeWidth={1.75} />
-                          <span>{lang === "hi" ? "संपादित" : "Edit"}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setHistoryItem(it)}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded border border-slate-200 hover:border-blue-200 transition-colors text-[11px] font-medium"
-                          title={lang === "hi" ? "संशोधन इतिहास देखें" : "View History"}
-                        >
-                          <History size={13} strokeWidth={1.75} />
-                          <span>{lang === "hi" ? "इतिहास" : "History"}</span>
-                        </button>
-                      </div>
-                    </td>
+                    {!isStaff && (
+                      <td className="py-2 px-3 text-right">
+                        <div className="inline-flex items-center gap-1.5 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setEditingItem(it)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded border border-slate-200 hover:border-emerald-200 transition-colors text-[11px] font-medium"
+                            title={lang === "hi" ? "संपादित करें" : "Edit"}
+                          >
+                            <Edit size={13} strokeWidth={1.75} />
+                            <span>{lang === "hi" ? "संपादित" : "Edit"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setHistoryItem(it)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded border border-slate-200 hover:border-blue-200 transition-colors text-[11px] font-medium"
+                            title={lang === "hi" ? "संशोधन इतिहास देखें" : "View History"}
+                          >
+                            <History size={13} strokeWidth={1.75} />
+                            <span>{lang === "hi" ? "इतिहास" : "History"}</span>
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))
               )}

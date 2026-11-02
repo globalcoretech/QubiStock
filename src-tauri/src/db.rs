@@ -19,7 +19,7 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
     Ok(conn)
 }
 
-fn run_migrations(conn: &Connection) -> Result<()> {
+pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS items (
@@ -248,8 +248,41 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             secondary_backup_folder TEXT DEFAULT '',
             last_backup_time TEXT,
             books_locked_until TEXT,
+            security_enabled INTEGER NOT NULL DEFAULT 0,
+            auto_lock_minutes INTEGER NOT NULL DEFAULT 10,
+            recovery_key_hash TEXT,
             updated_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('owner','staff')),
+            password_hash TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            failed_attempts INTEGER NOT NULL DEFAULT 0,
+            locked_until TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS login_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_name TEXT NOT NULL,
+            event TEXT NOT NULL,
+            at TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS prevent_login_log_update
+        BEFORE UPDATE ON login_log
+        BEGIN
+            SELECT RAISE(ABORT, 'login_log is append-only. Updates are not allowed.');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS prevent_login_log_delete
+        BEFORE DELETE ON login_log
+        BEGIN
+            SELECT RAISE(ABORT, 'login_log is append-only. Deletes are not allowed.');
+        END;
         "
     )?;
 
@@ -292,6 +325,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN after_json TEXT", []);
     let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN reason TEXT", []);
     let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute("ALTER TABLE audit_log ADD COLUMN user_name TEXT", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN security_enabled INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN auto_lock_minutes INTEGER NOT NULL DEFAULT 10", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN recovery_key_hash TEXT", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);

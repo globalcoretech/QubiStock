@@ -17,6 +17,7 @@ import {
   ItemPartySummary,
   PartyItemsReport,
   PartyItemSummary,
+  SessionUser,
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
@@ -65,6 +66,7 @@ interface ReportsViewProps {
   onAlterInvoice?: (invNo: string, type: "sale" | "purchase") => void;
   t: Translations;
   lang: Language;
+  currentUser?: SessionUser | null;
 }
 
 // CSV Export Helper with UTF-8 BOM (\uFEFF)
@@ -95,7 +97,9 @@ export function ReportsView({
   onAlterInvoice,
   t,
   lang,
+  currentUser,
 }: ReportsViewProps) {
+  const isStaff = currentUser?.role === "staff";
   const [activeTab, setActiveTab] = useState<ReportTab>("sales_reg");
 
   const getInitialDates = () => {
@@ -405,7 +409,7 @@ export function ReportsView({
     window.print();
   };
 
-  const tabs: { id: ReportTab; title: string; testId: string }[] = [
+  const allTabs: { id: ReportTab; title: string; testId: string }[] = [
     { id: "sales_reg", title: lang === "hi" ? "बिक्री" : "Sales", testId: "report-tab-sales_reg" },
     { id: "purchase_reg", title: lang === "hi" ? "खरीदी" : "Purchase", testId: "report-tab-purchase_reg" },
     { id: "gst_summary", title: "GST", testId: "report-tab-gst_summary" },
@@ -427,6 +431,10 @@ export function ReportsView({
       testId: "report-tab-party_items",
     },
   ];
+
+  const tabs = isStaff
+    ? allTabs.filter((t) => t.id === "sales_reg" || t.id === "purchase_reg")
+    : allTabs;
 
   const gstRows = gstSummary
     ? [

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Party, Feedback } from "../types";
+import { Party, Feedback, SessionUser } from "../types";
 import { Translations, Language } from "../i18n";
 import { AddPartyModal } from "../components/AddPartyModal";
 import { EditPartyModal } from "../components/EditPartyModal";
@@ -14,6 +14,7 @@ interface PartiesViewProps {
   onRefresh?: () => void;
   t: Translations;
   lang: Language;
+  currentUser?: SessionUser | null;
 }
 
 export function PartiesView({
@@ -21,7 +22,9 @@ export function PartiesView({
   onRefresh,
   t,
   lang,
+  currentUser,
 }: PartiesViewProps) {
+  const isStaff = currentUser?.role === "staff";
   const [parties, setParties] = useState<Party[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingParty, setEditingParty] = useState<Party | null>(null);
@@ -106,16 +109,18 @@ export function PartiesView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleCleanAccountingParties}
-            disabled={isCleaning}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
-            title={t.parties.cleanConfirm}
-          >
-            <Trash2 size={13} strokeWidth={1.75} />
-            <span>{isCleaning ? t.common.saving : t.parties.cleanLedgersBtn}</span>
-          </button>
+          {!isStaff && (
+            <button
+              type="button"
+              onClick={handleCleanAccountingParties}
+              disabled={isCleaning}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-lg text-xs font-medium transition-colors"
+              title={t.parties.cleanConfirm}
+            >
+              <Trash2 size={13} strokeWidth={1.75} />
+              <span>{isCleaning ? t.common.saving : t.parties.cleanLedgersBtn}</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -190,13 +195,13 @@ export function PartiesView({
                 <th className="py-2 px-3">GSTIN</th>
                 <th className="py-2 px-3">{t.common.village}</th>
                 <th className="py-2 px-3">{t.common.phone}</th>
-                <th className="py-2 px-3 text-right">{lang === "hi" ? "कार्रवाई" : "Actions"}</th>
+                {!isStaff && <th className="py-2 px-3 text-right">{lang === "hi" ? "कार्रवाई" : "Actions"}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedParties.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={isStaff ? 7 : 8}>
                     <EmptyTableMessage
                       message={t.common.emptyMessage}
                       actionText={t.parties.addPartyBtn}
@@ -252,28 +257,30 @@ export function PartiesView({
                       <td className="py-2 px-3 font-mono text-slate-700 text-[11px]">
                         {p.phone || "-"}
                       </td>
-                      <td className="py-2 px-3 text-right">
-                        <div className="inline-flex items-center gap-1.5 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setEditingParty(p)}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded border border-slate-200 hover:border-emerald-200 transition-colors text-[11px] font-medium"
-                            title={lang === "hi" ? "संपादित करें" : "Edit"}
-                          >
-                            <Edit size={13} strokeWidth={1.75} />
-                            <span>{lang === "hi" ? "संपादित" : "Edit"}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setHistoryParty(p)}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded border border-slate-200 hover:border-blue-200 transition-colors text-[11px] font-medium"
-                            title={lang === "hi" ? "संशोधन इतिहास देखें" : "View History"}
-                          >
-                            <History size={13} strokeWidth={1.75} />
-                            <span>{lang === "hi" ? "इतिहास" : "History"}</span>
-                          </button>
-                        </div>
-                      </td>
+                      {!isStaff && (
+                        <td className="py-2 px-3 text-right">
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditingParty(p)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded border border-slate-200 hover:border-emerald-200 transition-colors text-[11px] font-medium"
+                              title={lang === "hi" ? "संपादित करें" : "Edit"}
+                            >
+                              <Edit size={13} strokeWidth={1.75} />
+                              <span>{lang === "hi" ? "संपादित" : "Edit"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setHistoryParty(p)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded border border-slate-200 hover:border-blue-200 transition-colors text-[11px] font-medium"
+                              title={lang === "hi" ? "संशोधन इतिहास देखें" : "View History"}
+                            >
+                              <History size={13} strokeWidth={1.75} />
+                              <span>{lang === "hi" ? "इतिहास" : "History"}</span>
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })

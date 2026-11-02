@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { View, AppSettings } from "../types";
+import { View, AppSettings, SessionUser } from "../types";
 import { Language, Translations } from "../i18n";
+import { Lock, User } from "lucide-react";
 import {
   BahiLogoMark,
   DuotoneHouse,
@@ -31,6 +32,8 @@ interface SidebarProps {
   onSelectLanguage: (lang: Language) => void;
   t: Translations;
   onExitClick?: () => void;
+  currentUser?: SessionUser | null;
+  onLockClick?: () => void;
 }
 
 interface NavItemDef {
@@ -52,6 +55,8 @@ export function Sidebar({
   onSelectLanguage,
   t: _t,
   onExitClick,
+  currentUser,
+  onLockClick,
 }: SidebarProps) {
   const [isFlyoutOpen, setIsFlyoutOpen] = useState(false);
   const [flyoutPos, setFlyoutPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -132,8 +137,10 @@ export function Sidebar({
     },
   ];
 
+  const isStaff = currentUser?.role === "staff";
+
   // Secondary items shown inside "और" flyout
-  const flyoutItems: { id: View; titleHi: string; titleEn: string; icon: any }[] = [
+  const allFlyoutItems: { id: View; titleHi: string; titleEn: string; icon: any }[] = [
     { id: "Items", titleHi: "सामान सूची", titleEn: "Items List", icon: Tags },
     { id: "Parties", titleHi: "पार्टी खाता", titleEn: "Parties", icon: Users },
     { id: "Opening Stock", titleHi: "ओपनिंग स्टॉक", titleEn: "Opening Stock", icon: Package },
@@ -143,6 +150,10 @@ export function Sidebar({
     { id: "Backup", titleHi: "बैकअप", titleEn: "Backup", icon: Database },
     { id: "Settings", titleHi: "सेटिंग्स", titleEn: "Settings", icon: Settings },
   ];
+
+  const flyoutItems = isStaff
+    ? allFlyoutItems.filter((f) => f.id === "Items" || f.id === "Parties" || f.id === "PrinterSetup")
+    : allFlyoutItems;
 
   const isFlyoutActive = flyoutItems.some((f) => f.id === currentView);
 
@@ -387,8 +398,46 @@ export function Sidebar({
         </div>
       </nav>
 
-      {/* 3. Bottom Area: Exit Button + Language Toggle ("हिं | EN" pill) + State info */}
+      {/* 3. Bottom Area: User info + Lock button + Exit Button + Language Toggle ("हिं | EN" pill) + State info */}
       <div className="p-2 border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30 space-y-2">
+        {/* User Badge & Lock Button */}
+        {currentUser && (
+          <div
+            data-testid="sidebar-user-badge"
+            className="flex items-center justify-between gap-1.5 p-1.5 bg-forest-dark/90 rounded-lg border border-forest-2/60"
+          >
+            <div className="min-w-0 flex-1 flex items-center gap-1.5 px-1">
+              <User size={13} className="text-emerald-400 shrink-0" />
+              <div className="min-w-0 flex-1 truncate">
+                <div className="text-[11px] font-semibold text-surface truncate leading-tight">
+                  {currentUser.name}
+                </div>
+                <div className="text-[9px] text-surface/60 font-medium">
+                  {currentUser.role === "owner"
+                    ? lang === "hi"
+                      ? "व्यवस्थापक (Owner)"
+                      : "Owner"
+                    : lang === "hi"
+                    ? "कर्मचारी (Staff)"
+                    : "Staff"}
+                </div>
+              </div>
+            </div>
+            {onLockClick && (
+              <button
+                type="button"
+                data-testid="sidebar-lock-btn"
+                onClick={onLockClick}
+                className="px-2 py-1 rounded-md bg-forest-2/50 hover:bg-forest-2 text-surface/90 hover:text-white transition flex items-center gap-1 text-[11px] font-medium cursor-pointer shrink-0 border border-forest-2/70"
+                title={lang === "hi" ? "स्क्रीन लॉक करें" : "Lock Screen"}
+              >
+                <Lock size={12} className="text-emerald-300" />
+                <span className="text-[10px]">{lang === "hi" ? "लॉक" : "Lock"}</span>
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Exit Application Button */}
         <button
           type="button"

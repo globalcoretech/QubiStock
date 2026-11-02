@@ -1,26 +1,13 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AppSettings, StockItem, Godown, Movement } from "../types";
-import { Translations, Language } from "../i18n";
-import { 
-  Search, 
-  X, 
-  AlertCircle, 
-  Package, 
-  getItemCategoryIcon,
-  Clock,
-  ArrowDownLeft,
-  ArrowUpRight
-} from "../components/icons";
-import { EmptyTableMessage } from "../components/FeedbackBanner";
-import { formatCurrency, formatDate } from "../utils/formatters";
-import { Pagination } from "../components/Pagination";
+import { AppSettings, StockItem, Godown, Movement, SessionUser } from "../types";
 
 interface StockViewProps {
   settings: AppSettings;
   refreshTrigger: number;
   t: Translations;
   lang: Language;
+  currentUser?: SessionUser | null;
 }
 
 interface MovementModalProps {
@@ -114,7 +101,8 @@ function MovementModal({
   );
 }
 
-export function StockView({ settings, refreshTrigger, t, lang }: StockViewProps) {
+export function StockView({ settings, refreshTrigger, t, lang, currentUser }: StockViewProps) {
+  const isStaff = currentUser?.role === "staff";
   const [stock, setStock] = useState<StockItem[]>([]);
   const [godowns, setGodowns] = useState<Godown[]>([]);
   const [selectedGodownId, setSelectedGodownId] = useState<string>("all");
@@ -224,7 +212,7 @@ export function StockView({ settings, refreshTrigger, t, lang }: StockViewProps)
       </div>
 
       {/* Summary KPI Cards - Compact single row */}
-      <div className="grid grid-cols-2 gap-3 flex-shrink-0">
+      <div className={`grid ${isStaff ? "grid-cols-1 max-w-xs" : "grid-cols-2"} gap-3 flex-shrink-0`}>
         <div className="bg-white border border-slate-200/80 px-3.5 py-2.5 rounded-xl shadow-2xs flex items-center justify-between">
           <div>
             <span className="text-[11px] font-medium text-slate-500 block">
@@ -239,19 +227,21 @@ export function StockView({ settings, refreshTrigger, t, lang }: StockViewProps)
           </span>
         </div>
 
-        <div className="bg-white border border-slate-200/80 px-3.5 py-2.5 rounded-xl shadow-2xs flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-medium text-slate-500 block">
-              {t.stock.totalStockValue}
-            </span>
-            <span className="text-lg font-bold font-mono text-emerald-800 mt-0.5 block leading-tight">
-              {formatCurrency(totalStockValue)}
+        {!isStaff && (
+          <div className="bg-white border border-slate-200/80 px-3.5 py-2.5 rounded-xl shadow-2xs flex items-center justify-between">
+            <div>
+              <span className="text-[11px] font-medium text-slate-500 block">
+                {t.stock.totalStockValue}
+              </span>
+              <span className="text-lg font-bold font-mono text-emerald-800 mt-0.5 block leading-tight">
+                {formatCurrency(totalStockValue)}
+              </span>
+            </div>
+            <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+              <Package size={18} strokeWidth={1.75} />
             </span>
           </div>
-          <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-            <Package size={18} strokeWidth={1.75} />
-          </span>
-        </div>
+        )}
       </div>
 
       {/* Paginated Stock Table Card */}
@@ -264,14 +254,14 @@ export function StockView({ settings, refreshTrigger, t, lang }: StockViewProps)
                 <th className="py-2 px-3">{t.common.godown}</th>
                 <th className="py-2 px-3 text-right">{t.stock.availableQty}</th>
                 <th className="py-2 px-3">{t.common.unit}</th>
-                <th className="py-2 px-3 text-right">{t.stock.lastRate}</th>
-                <th className="py-2 px-3 text-right">{t.stock.stockValue}</th>
+                {!isStaff && <th className="py-2 px-3 text-right">{t.stock.lastRate}</th>}
+                {!isStaff && <th className="py-2 px-3 text-right">{t.stock.stockValue}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedStock.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={isStaff ? 4 : 6}>
                     <EmptyTableMessage message={t.common.emptyMessage} />
                   </td>
                 </tr>
@@ -308,12 +298,16 @@ export function StockView({ settings, refreshTrigger, t, lang }: StockViewProps)
                         {(s.qty_base / 1000).toFixed(2)}
                       </td>
                       <td className="py-2 px-3 text-slate-500 font-medium text-[11px]">{s.base_unit}</td>
-                      <td className="py-2 px-3 font-mono text-right text-slate-600 text-[11px]">
-                        {s.last_purchase_rate > 0 ? formatCurrency(s.last_purchase_rate) : "-"}
-                      </td>
-                      <td className="py-2 px-3 font-mono font-bold text-slate-900 text-right">
-                        {formatCurrency(s.stock_value)}
-                      </td>
+                      {!isStaff && (
+                        <td className="py-2 px-3 font-mono text-right text-slate-600 text-[11px]">
+                          {s.last_purchase_rate > 0 ? formatCurrency(s.last_purchase_rate) : "-"}
+                        </td>
+                      )}
+                      {!isStaff && (
+                        <td className="py-2 px-3 font-mono font-bold text-slate-900 text-right">
+                          {formatCurrency(s.stock_value)}
+                        </td>
+                      )}
                     </tr>
                   );
                 })

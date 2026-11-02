@@ -5,6 +5,7 @@ use tauri::Manager;
 
 mod db;
 pub mod audit;
+pub mod auth;
 mod inventory;
 mod tally_import;
 mod invoice;
@@ -27,6 +28,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
+            app.manage(auth::AuthState::default());
             let data_dir = app.path().app_data_dir().unwrap_or_default();
             let db_path = data_dir.join("inventory.db");
             let _ = backup::check_and_apply_pending_restore(&db_path.to_string_lossy());
@@ -144,7 +146,22 @@ fn main() {
             commands::alter_payment_cmd,
             commands::cancel_payment_cmd,
             commands::get_db_safety_info_cmd,
-            commands::graceful_exit_cmd
+            commands::graceful_exit_cmd,
+            commands::get_security_status_cmd,
+            commands::create_owner_initial_cmd,
+            commands::skip_security_setup_cmd,
+            commands::login_cmd,
+            commands::logout_cmd,
+            commands::lock_session_cmd,
+            commands::unlock_session_cmd,
+            commands::get_current_user_cmd,
+            commands::reset_owner_with_recovery_key_cmd,
+            commands::get_users_cmd,
+            commands::create_user_cmd,
+            commands::update_user_status_cmd,
+            commands::reset_user_password_cmd,
+            commands::change_own_password_cmd,
+            commands::get_login_logs_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

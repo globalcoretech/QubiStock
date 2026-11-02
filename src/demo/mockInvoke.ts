@@ -662,6 +662,87 @@ export function setupDemoMocks() {
       case "copy_backups_cmd":
         return 3;
 
+      case "get_security_status_cmd":
+        return {
+          has_users: true,
+          security_enabled: true,
+          auto_lock_minutes: 10,
+          is_locked: false,
+          current_user: { id: 1, name: "sharma_owner", role: "owner" },
+        };
+
+      case "create_owner_initial_cmd":
+        return "RK-DEMO-TEST-1234-5678";
+
+      case "skip_security_setup_cmd":
+        return true;
+
+      case "login_cmd":
+        return {
+          id: 1,
+          name: payload?.name || "sharma_owner",
+          role: payload?.name?.includes("staff") ? "staff" : "owner",
+        };
+
+      case "logout_cmd":
+        return true;
+
+      case "lock_session_cmd":
+        return true;
+
+      case "unlock_session_cmd":
+        return { id: 1, name: "sharma_owner", role: "owner" };
+
+      case "get_current_user_cmd":
+        return { id: 1, name: "sharma_owner", role: "owner" };
+
+      case "reset_owner_with_recovery_key_cmd":
+        return "RK-NEW-RECOVERY-KEY-9999";
+
+      case "get_users_cmd":
+        return [
+          {
+            id: 1,
+            name: "sharma_owner",
+            role: "owner",
+            is_active: true,
+            failed_attempts: 0,
+            locked_until: null,
+            created_at: "2026-01-01T10:00:00Z",
+          },
+          {
+            id: 2,
+            name: "ramesh_staff",
+            role: "staff",
+            is_active: true,
+            failed_attempts: 0,
+            locked_until: null,
+            created_at: "2026-02-01T10:00:00Z",
+          },
+        ];
+
+      case "create_user_cmd":
+        return 3;
+
+      case "update_user_status_cmd":
+        return true;
+
+      case "reset_user_password_cmd":
+        return "ramesh_staff";
+
+      case "change_own_password_cmd":
+        return true;
+
+      case "get_login_logs_cmd":
+        return [
+          {
+            id: 1,
+            user_name: "sharma_owner",
+            event: "login",
+            at: new Date().toISOString(),
+          },
+        ];
+
       default:
         console.warn(`[mockInvoke] Unhandled command: ${cmd}`, payload);
         return null;

@@ -6,21 +6,29 @@ import {
   BillLanguage,
   BillVisibleColumns,
   DEFAULT_VISIBLE_COLUMNS,
+  SessionUser,
+  SecurityStatus,
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database } from "../components/icons";
+import { Users as UsersIcon, ShieldAlert } from "lucide-react";
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";
 import { localTodayIso } from "../utils/dateUtils";
 import { PrinterSetupView } from "./PrinterSetupView";
+import { UserManagementView } from "../components/UserManagementView";
 
 interface SettingsViewProps {
   settings: AppSettings;
   onSave: (s: AppSettings) => Promise<void> | void;
   t: Translations;
   lang: Language;
+  currentUser?: SessionUser | null;
+  securityStatus?: SecurityStatus | null;
+  onEnableSecurity?: () => void;
+  onUpdateAutoLock?: (minutes: number) => void;
 }
 
 export function SettingsView({
@@ -28,8 +36,12 @@ export function SettingsView({
   onSave,
   t,
   lang,
+  currentUser,
+  securityStatus,
+  onEnableSecurity,
+  onUpdateAutoLock,
 }: SettingsViewProps) {
-  const [activeTab, setActiveTab] = useState<"general" | "bill" | "printer">("bill");
+  const [activeTab, setActiveTab] = useState<"general" | "bill" | "printer" | "users">("bill");
   const [formData, setFormData] = useState<AppSettings>({
     ...settings,
     visibleColumns: settings.visibleColumns || DEFAULT_VISIBLE_COLUMNS,
@@ -221,8 +233,49 @@ export function SettingsView({
             <Settings size={15} />
             <span>दुकान सेटिंग्स (General)</span>
           </button>
+          {(!currentUser || currentUser.role === "owner") && (
+            <button
+              type="button"
+              data-testid="tab-users-settings"
+              onClick={() => setActiveTab("users")}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+                activeTab === "users"
+                  ? "bg-forest text-surface shadow-xs"
+                  : "text-muted hover:text-ink"
+              }`}
+            >
+              <UsersIcon size={15} />
+              <span>यूज़र प्रबंधन (Users)</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Persistent Reminder Banner when Security is disabled */}
+      {securityStatus && !securityStatus.security_enabled && (
+        <div
+          data-testid="security-disabled-banner"
+          className="mx-4 mt-3 p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 flex flex-wrap items-center justify-between gap-3 text-xs flex-shrink-0"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <span className="font-bold">सुरक्षा अक्षम है (Security Disabled):</span> कोई भी बिना पासवर्ड के व्यवस्थापक (Owner) के रूप में कार्य कर सकता है।
+              <span className="text-amber-700 block mt-0.5">Local login and role permissions are currently turned off.</span>
+            </div>
+          </div>
+          {onEnableSecurity && (
+            <button
+              type="button"
+              data-testid="enable-security-banner-btn"
+              onClick={onEnableSecurity}
+              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-lg shrink-0 shadow-xs text-xs"
+            >
+              सुरक्षा चालू करें / Enable Security
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="p-2 px-4 flex-shrink-0">
         <FeedbackBanner feedback={feedback} />
@@ -230,7 +283,15 @@ export function SettingsView({
 
       {/* Main Content Area */}
       <div className="flex-1 min-h-0 overflow-y-auto p-3 pt-0" data-scroll="true">
-        {activeTab === "printer" ? (
+        {activeTab === "users" ? (
+          <UserManagementView
+            currentUser={currentUser}
+            securityEnabled={!!securityStatus?.security_enabled}
+            autoLockMinutes={securityStatus?.auto_lock_minutes ?? 10}
+            onUpdateAutoLock={onUpdateAutoLock || (() => {})}
+            onEnableSecurity={onEnableSecurity}
+          />
+        ) : activeTab === "printer" ? (
           <PrinterSetupView
             settings={formData}
             onSave={(updated) => {

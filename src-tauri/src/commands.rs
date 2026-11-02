@@ -36,6 +36,7 @@ pub fn init_db_cmd(app: AppHandle) -> Result<String, String> {
 pub fn preview_tally_import_cmd(app: AppHandle, xml_base64: String) -> Result<PreviewReport, String> {
     use base64::Engine;
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "preview_tally_import_cmd")?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&xml_base64)
         .map_err(|e| format!("Invalid base64 encoding: {}", e))?;
@@ -47,6 +48,7 @@ pub fn preview_tally_import_cmd(app: AppHandle, xml_base64: String) -> Result<Pr
 pub fn confirm_tally_import_cmd(app: AppHandle, xml_base64: String, file_name: String) -> Result<(), String> {
     use base64::Engine;
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "confirm_tally_import_cmd")?;
     let path = get_db_path(&app)?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&xml_base64)
@@ -113,7 +115,17 @@ pub fn get_stock_list_inner(conn: &Connection) -> Result<Vec<StockItem>, String>
 #[command]
 pub fn get_stock_list_cmd(app: AppHandle) -> Result<Vec<StockItem>, String> {
     let conn = get_conn(&app)?;
-    get_stock_list_inner(&conn)
+    let user_opt = check_permission_for_command(&app, &conn, "get_stock_list_cmd")?;
+    let mut list = get_stock_list_inner(&conn)?;
+    if let Some(ref u) = user_opt {
+        if u.role == "staff" {
+            for item in &mut list {
+                item.last_purchase_rate = 0;
+                item.stock_value = 0;
+            }
+        }
+    }
+    Ok(list)
 }
 
 pub fn get_available_stock_inner(conn: &Connection, item_id: i64, godown_id: i64) -> Result<i64, String> {
@@ -166,6 +178,7 @@ pub fn add_opening_stock_cmd(
     date: String
 ) -> Result<i64, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "add_opening_stock_cmd")?;
     add_opening_stock_inner(&conn, item_id, godown_id, qty, &unit, &date)
 }
 
@@ -207,6 +220,7 @@ pub fn add_stock_adjustment_cmd(
     date: String
 ) -> Result<i64, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "add_stock_adjustment_cmd")?;
     add_stock_adjustment_inner(&conn, item_id, godown_id, qty_change, &unit, reason.as_deref(), &date)
 }
 
@@ -525,6 +539,7 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
         Some(&before_obj.to_string()),
         Some(&after_obj.to_string()),
         payload.reason.as_deref(),
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -538,6 +553,7 @@ pub fn update_item_cmd(
     payload: UpdateItemPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "update_item_cmd")?;
     update_item_inner(&mut conn, payload)
 }
 
@@ -562,6 +578,7 @@ pub fn delete_item_inner(conn: &mut Connection, item_id: i64) -> Result<(), Stri
 #[command]
 pub fn delete_item_cmd(app: AppHandle, id: i64) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "delete_item_cmd")?;
     delete_item_inner(&mut conn, id)
 }
 
@@ -913,6 +930,7 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
         Some(&before_obj.to_string()),
         Some(&after_obj.to_string()),
         payload.reason.as_deref(),
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -926,6 +944,7 @@ pub fn update_party_cmd(
     payload: UpdatePartyPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "update_party_cmd")?;
     update_party_inner(&mut conn, payload)
 }
 
@@ -953,6 +972,7 @@ pub fn delete_party_inner(conn: &mut Connection, party_id: i64) -> Result<(), St
 #[command]
 pub fn delete_party_cmd(app: AppHandle, id: i64) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "delete_party_cmd")?;
     delete_party_inner(&mut conn, id)
 }
 
@@ -1127,8 +1147,10 @@ pub fn get_dashboard_stats_inner(conn: &Connection, today_date: &str) -> Result<
 #[command]
 pub fn get_dashboard_stats_cmd(app: AppHandle, today_date: Option<String>) -> Result<DashboardStats, String> {
     let conn = get_conn(&app)?;
+    let _user_opt = check_permission_for_command(&app, &conn, "get_dashboard_stats_cmd")?;
     let date_str = today_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    get_dashboard_stats_inner(&conn, &date_str)
+    let stats = get_dashboard_stats_inner(&conn, &date_str)?;
+    Ok(stats)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1830,6 +1852,7 @@ pub fn get_gst_summary_cmd(
     shop_state: Option<String>,
 ) -> Result<GstSummaryReport, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_gst_summary_cmd")?;
     get_gst_summary_inner(&conn, &from_date, &to_date, shop_state.as_deref())
 }
 
@@ -1976,6 +1999,7 @@ pub fn get_hsn_summary_cmd(
     shop_state: Option<String>,
 ) -> Result<HsnSummaryReport, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_hsn_summary_cmd")?;
     get_hsn_summary_inner(&conn, &from_date, &to_date, shop_state.as_deref())
 }
 
@@ -2140,6 +2164,7 @@ pub fn get_profit_report_cmd(
     to_date: String,
 ) -> Result<ProfitReport, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_profit_report_cmd")?;
     get_profit_report_inner(&conn, &from_date, &to_date)
 }
 
@@ -2391,6 +2416,7 @@ pub fn get_sales_gst_mode_profit_report_cmd(
     to_date: String,
 ) -> Result<SalesGstModeReport, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_sales_gst_mode_profit_report_cmd")?;
     get_sales_gst_mode_profit_report_inner(&conn, &from_date, &to_date)
 }
 
@@ -2628,6 +2654,7 @@ pub fn get_item_parties_report_cmd(
     direction: String,
 ) -> Result<ItemPartiesReport, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_item_parties_report_cmd")?;
     get_item_parties_report_inner(&conn, item_id, &from_date, &to_date, &direction)
 }
 
@@ -2866,6 +2893,7 @@ pub fn get_party_items_report_cmd(
     direction: String,
 ) -> Result<PartyItemsReport, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_party_items_report_cmd")?;
     get_party_items_report_inner(&conn, party_id, &from_date, &to_date, &direction)
 }
 
@@ -2895,6 +2923,7 @@ pub fn cleanup_accounting_parties_inner(conn: &Connection) -> Result<usize, Stri
 #[command]
 pub fn cleanup_accounting_parties_cmd(app: AppHandle) -> Result<usize, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "cleanup_accounting_parties_cmd")?;
     cleanup_accounting_parties_inner(&conn)
 }
 
@@ -3716,6 +3745,7 @@ pub fn get_settings_cmd(app: AppHandle) -> Result<AppSettingsPayload, String> {
 #[command]
 pub fn set_settings_cmd(app: AppHandle, settings: AppSettingsPayload) -> Result<AppSettingsPayload, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "set_settings_cmd")?;
     set_settings_inner(&conn, settings)
 }
 
@@ -3727,6 +3757,7 @@ pub fn get_audit_logs_cmd(
     limit: Option<i64>,
 ) -> Result<Vec<crate::audit::AuditLogEntry>, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_audit_logs_cmd")?;
     crate::audit::get_audit_logs_inner(&conn, entity_type.as_deref(), entity_id.as_deref(), limit)
 }
 
@@ -3811,6 +3842,7 @@ pub fn get_last_invoice_print_mode_cmd(app: AppHandle, invoice_no: String) -> Re
 #[command]
 pub fn backup_now_cmd(app: AppHandle) -> Result<crate::backup::BackupResult, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "backup_now_cmd")?;
     let primary_dir = crate::backup::get_primary_backup_dir(&conn);
     let secondary_dir = crate::backup::get_secondary_backup_dir(&conn);
     crate::backup::backup_now_inner(&conn, &primary_dir, secondary_dir.as_deref())
@@ -3819,6 +3851,7 @@ pub fn backup_now_cmd(app: AppHandle) -> Result<crate::backup::BackupResult, Str
 #[command]
 pub fn list_backups_cmd(app: AppHandle) -> Result<Vec<crate::backup::BackupInfo>, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "list_backups_cmd")?;
     crate::backup::list_backups(&conn)
 }
 
@@ -3826,6 +3859,7 @@ pub fn list_backups_cmd(app: AppHandle) -> Result<Vec<crate::backup::BackupInfo>
 pub fn get_backup_status_cmd(app: AppHandle) -> Result<crate::backup::BackupStatusInfo, String> {
     use tauri::Manager;
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_backup_status_cmd")?;
     let last_time: Option<String> = conn
         .query_row("SELECT last_backup_time FROM settings WHERE id = 1", [], |r| r.get(0))
         .unwrap_or(None);
@@ -3885,10 +3919,14 @@ pub fn get_backup_status_cmd(app: AppHandle) -> Result<crate::backup::BackupStat
 #[command]
 pub fn prepare_restore_cmd(app: AppHandle, backup_path: String) -> Result<crate::backup::RestoreResult, String> {
     use tauri::Manager;
+    let conn_res = get_conn(&app);
+    if let Ok(ref conn) = conn_res {
+        check_permission_for_command(&app, conn, "prepare_restore_cmd")?;
+    }
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_path = data_dir.join("inventory.db");
     let selected_backup = std::path::PathBuf::from(backup_path);
-    let conn = get_conn(&app).ok();
+    let conn = conn_res.ok();
     let backup_dir = conn.as_ref()
         .map(|c| crate::backup::get_primary_backup_dir(c))
         .unwrap_or_else(|| crate::backup::get_default_backup_dir());
@@ -4050,6 +4088,7 @@ pub fn change_sales_invoice_no_inner(
         Some(&before_json),
         Some(&after_json),
         Some(clean_reason),
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -4064,6 +4103,7 @@ pub fn change_sales_invoice_no_cmd(
     reason: String,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "change_sales_invoice_no_cmd")?;
     change_sales_invoice_no_inner(&mut conn, &old_no, &new_no, &reason)
 }
 
@@ -4127,6 +4167,7 @@ pub fn update_purchase_supplier_invoice_inner(
         Some(&before_json),
         Some(&after_json),
         reason,
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -4142,6 +4183,7 @@ pub fn update_purchase_supplier_invoice_cmd(
     reason: Option<String>,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "update_purchase_supplier_invoice_cmd")?;
     update_purchase_supplier_invoice_inner(&mut conn, &internal_invoice_no, &supplier_invoice_no, supplier_invoice_date.as_deref(), reason.as_deref())
 }
 
@@ -4338,6 +4380,7 @@ pub fn cancel_invoice_inner(conn: &mut Connection, invoice_no: &str, reason: Opt
         Some(&before_json),
         Some(&after_json),
         reason,
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -4351,6 +4394,7 @@ pub fn cancel_invoice_cmd(
     reason: Option<String>,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "cancel_invoice_cmd")?;
     cancel_invoice_inner(&mut conn, &invoice_no, reason.as_deref())
 }
 
@@ -4635,6 +4679,7 @@ pub fn alter_sale_inner(
         Some(&before_json),
         Some(&after_json),
         reason,
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -4649,6 +4694,7 @@ pub fn alter_sale_cmd(
     reason: Option<String>,
 ) -> Result<String, String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "alter_sale_cmd")?;
     alter_sale_inner(&mut conn, &invoice_no, payload, reason.as_deref())
 }
 
@@ -4970,6 +5016,7 @@ pub fn alter_purchase_inner(
         Some(&before_json),
         Some(&after_json),
         reason,
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -4984,6 +5031,7 @@ pub fn alter_purchase_cmd(
     reason: Option<String>,
 ) -> Result<String, String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "alter_purchase_cmd")?;
     alter_purchase_inner(&mut conn, &invoice_no, payload, reason.as_deref())
 }
 
@@ -5131,6 +5179,7 @@ pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) 
         Some(&before_json),
         Some(&after_json),
         payload.reason.as_deref(),
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -5143,6 +5192,7 @@ pub fn alter_payment_cmd(
     payload: AlterPaymentPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "alter_payment_cmd")?;
     alter_payment_inner(&mut conn, payload)
 }
 
@@ -5220,6 +5270,7 @@ pub fn cancel_payment_inner(conn: &mut Connection, ledger_id: i64, reason: Optio
         Some(&before_json),
         None,
         reason,
+        None,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -5233,6 +5284,7 @@ pub fn cancel_payment_cmd(
     reason: Option<String>,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "cancel_payment_cmd")?;
     cancel_payment_inner(&mut conn, ledger_id, reason.as_deref())
 }
 
@@ -5380,6 +5432,336 @@ pub fn graceful_exit_cmd(app: AppHandle) -> Result<(), String> {
     // 3. Exit process cleanly
     app.exit(0);
     Ok(())
+}
+
+// ==================== AUTH & SECURITY COMMANDS ====================
+
+pub fn get_app_session_user(app: &AppHandle) -> Option<crate::auth::SessionUser> {
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        state.current_user.lock().unwrap().clone()
+    } else {
+        None
+    }
+}
+
+pub fn check_permission_for_command(
+    app: &AppHandle,
+    conn: &Connection,
+    command_name: &str,
+) -> Result<Option<crate::auth::SessionUser>, String> {
+    let security_enabled: bool = conn
+        .query_row(
+            "SELECT COALESCE(security_enabled, 0) FROM settings WHERE id = 1",
+            [],
+            |r| {
+                let s: i64 = r.get(0)?;
+                Ok(s != 0)
+            },
+        )
+        .unwrap_or(false);
+
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        let session_opt = state.current_user.lock().unwrap().clone();
+        let is_locked = *state.is_locked.lock().unwrap();
+        let res = crate::auth::check_command_permission(
+            security_enabled,
+            session_opt.as_ref(),
+            is_locked,
+            command_name,
+        )?;
+        if let Some(ref u) = res {
+            crate::audit::set_current_user_name(Some(u.name.clone()));
+        } else {
+            crate::audit::set_current_user_name(None);
+        }
+        Ok(res)
+    } else {
+        crate::audit::set_current_user_name(Some("व्यवस्थापक (Owner)".to_string()));
+        Ok(Some(crate::auth::SessionUser {
+            id: 0,
+            name: "व्यवस्थापक (Owner)".to_string(),
+            role: "owner".to_string(),
+        }))
+    }
+}
+
+#[command]
+pub fn get_security_status_cmd(app: AppHandle) -> Result<crate::auth::SecurityStatus, String> {
+    let conn = get_conn(&app)?;
+    let auth_state = app.try_state::<crate::auth::AuthState>();
+    crate::auth::get_security_status_inner(&conn, auth_state.as_deref())
+}
+
+#[command]
+pub fn create_owner_initial_cmd(
+    app: AppHandle,
+    name: String,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let mut conn = get_conn(&app)?;
+    let user_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+        .unwrap_or(0);
+    if user_count > 0 {
+        return Err("व्यवस्थापक खाता पहले से मौजूद है। / Owner account already exists.".to_string());
+    }
+
+    let recovery_key = crate::auth::generate_recovery_key();
+    let recovery_key_hash = crate::auth::hash_password(&recovery_key)?;
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    let owner = crate::auth::create_user_inner(&tx, &name, "owner", &password)?;
+
+    tx.execute(
+        "UPDATE settings SET security_enabled = 1, recovery_key_hash = ?1 WHERE id = 1",
+        rusqlite::params![recovery_key_hash],
+    )
+    .map_err(|e| e.to_string())?;
+
+    crate::auth::log_login_event(&tx, &owner.name, "login")?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    let session_user = crate::auth::SessionUser {
+        id: owner.id,
+        name: owner.name.clone(),
+        role: "owner".to_string(),
+    };
+
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        *state.current_user.lock().unwrap() = Some(session_user);
+        *state.is_locked.lock().unwrap() = false;
+    }
+    crate::audit::set_current_user_name(Some(owner.name.clone()));
+
+    Ok(serde_json::json!({
+        "user": owner,
+        "recovery_key": recovery_key
+    }))
+}
+
+#[command]
+pub fn skip_security_setup_cmd(app: AppHandle) -> Result<(), String> {
+    let conn = get_conn(&app)?;
+    let user_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+        .unwrap_or(0);
+    if user_count > 0 {
+        return Err("व्यवस्थापक खाता पहले से मौजूद है। / Owner account already exists.".to_string());
+    }
+
+    conn.execute("UPDATE settings SET security_enabled = 0 WHERE id = 1", [])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        *state.current_user.lock().unwrap() = Some(crate::auth::SessionUser {
+            id: 0,
+            name: "व्यवस्थापक (Owner)".to_string(),
+            role: "owner".to_string(),
+        });
+        *state.is_locked.lock().unwrap() = false;
+    }
+
+    Ok(())
+}
+
+#[command]
+pub fn login_cmd(app: AppHandle, name: String, password: String) -> Result<crate::auth::UserInfo, String> {
+    let conn = get_conn(&app)?;
+    let session = crate::auth::verify_and_login_user(&conn, &name, &password)?;
+
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        *state.current_user.lock().unwrap() = Some(session.clone());
+        *state.is_locked.lock().unwrap() = false;
+    }
+    crate::audit::set_current_user_name(Some(session.name.clone()));
+
+    let user_info = conn.query_row(
+        "SELECT id, name, role, is_active, failed_attempts, locked_until, created_at FROM users WHERE id = ?1",
+        rusqlite::params![session.id],
+        |r| {
+            let active_int: i64 = r.get(3)?;
+            Ok(crate::auth::UserInfo {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                role: r.get(2)?,
+                is_active: active_int != 0,
+                failed_attempts: r.get(4)?,
+                locked_until: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        }
+    ).map_err(|e| e.to_string())?;
+
+    Ok(user_info)
+}
+
+#[command]
+pub fn logout_cmd(app: AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        let prev_user = state.current_user.lock().unwrap().take();
+        *state.is_locked.lock().unwrap() = false;
+        if let Some(u) = prev_user {
+            if let Ok(conn) = get_conn(&app) {
+                let _ = crate::auth::log_login_event(&conn, &u.name, "logout");
+            }
+        }
+    }
+    crate::audit::set_current_user_name(None);
+    Ok(())
+}
+
+#[command]
+pub fn lock_session_cmd(app: AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        let current_user = state.current_user.lock().unwrap().clone();
+        if let Some(u) = current_user {
+            *state.is_locked.lock().unwrap() = true;
+            if let Ok(conn) = get_conn(&app) {
+                let _ = crate::auth::log_login_event(&conn, &u.name, "lock");
+            }
+            Ok(())
+        } else {
+            Err("कोई सक्रिय सत्र नहीं है / No active session".to_string())
+        }
+    } else {
+        Ok(())
+    }
+}
+
+#[command]
+pub fn unlock_session_cmd(app: AppHandle, password: String) -> Result<crate::auth::UserInfo, String> {
+    let conn = get_conn(&app)?;
+    let locked_user = if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        state.current_user.lock().unwrap().clone()
+    } else {
+        None
+    };
+
+    let user = match locked_user {
+        Some(u) => u,
+        None => return Err("कोई सक्रिय सत्र नहीं है / No active session".to_string()),
+    };
+
+    let session = crate::auth::verify_and_login_user(&conn, &user.name, &password)?;
+
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        *state.current_user.lock().unwrap() = Some(session.clone());
+        *state.is_locked.lock().unwrap() = false;
+    }
+    let _ = crate::auth::log_login_event(&conn, &user.name, "unlock");
+    crate::audit::set_current_user_name(Some(session.name.clone()));
+
+    let user_info = conn.query_row(
+        "SELECT id, name, role, is_active, failed_attempts, locked_until, created_at FROM users WHERE id = ?1",
+        rusqlite::params![session.id],
+        |r| {
+            let active_int: i64 = r.get(3)?;
+            Ok(crate::auth::UserInfo {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                role: r.get(2)?,
+                is_active: active_int != 0,
+                failed_attempts: r.get(4)?,
+                locked_until: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        }
+    ).map_err(|e| e.to_string())?;
+
+    Ok(user_info)
+}
+
+#[command]
+pub fn get_current_user_cmd(app: AppHandle) -> Result<Option<crate::auth::SessionUser>, String> {
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        let user = state.current_user.lock().unwrap().clone();
+        Ok(user)
+    } else {
+        Ok(Some(crate::auth::SessionUser {
+            id: 0,
+            name: "व्यवस्थापक (Owner)".to_string(),
+            role: "owner".to_string(),
+        }))
+    }
+}
+
+#[command]
+pub fn reset_owner_with_recovery_key_cmd(
+    app: AppHandle,
+    recovery_key: String,
+    new_password: String,
+) -> Result<String, String> {
+    let mut conn = get_conn(&app)?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let new_rec_key = crate::auth::reset_owner_with_recovery_key_inner(&tx, &recovery_key, &new_password)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(new_rec_key)
+}
+
+#[command]
+pub fn get_users_cmd(app: AppHandle) -> Result<Vec<crate::auth::UserInfo>, String> {
+    let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_users_cmd")?;
+    crate::auth::get_users_inner(&conn)
+}
+
+#[command]
+pub fn create_user_cmd(
+    app: AppHandle,
+    name: String,
+    role: String,
+    password: String,
+) -> Result<crate::auth::UserInfo, String> {
+    let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "create_user_cmd")?;
+    crate::auth::create_user_inner(&conn, &name, &role, &password)
+}
+
+#[command]
+pub fn update_user_status_cmd(
+    app: AppHandle,
+    user_id: i64,
+    is_active: bool,
+    role: String,
+) -> Result<(), String> {
+    let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "update_user_status_cmd")?;
+    crate::auth::update_user_status_inner(&conn, user_id, is_active, &role)
+}
+
+#[command]
+pub fn reset_user_password_cmd(
+    app: AppHandle,
+    user_id: i64,
+    new_password: String,
+) -> Result<String, String> {
+    let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "reset_user_password_cmd")?;
+    crate::auth::reset_user_password_inner(&conn, user_id, &new_password)
+}
+
+#[command]
+pub fn change_own_password_cmd(
+    app: AppHandle,
+    old_password: String,
+    new_password: String,
+) -> Result<(), String> {
+    let conn = get_conn(&app)?;
+    let user = check_permission_for_command(&app, &conn, "change_own_password_cmd")?;
+    let uid = match user {
+        Some(u) => u.id,
+        None => return Err("कृपया पहले लॉगिन करें / Login required".to_string()),
+    };
+    crate::auth::change_own_password_inner(&conn, uid, &old_password, &new_password)
+}
+
+#[command]
+pub fn get_login_logs_cmd(app: AppHandle, limit: Option<i64>) -> Result<Vec<crate::auth::LoginLogEntry>, String> {
+    let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_login_logs_cmd")?;
+    crate::auth::get_login_logs_inner(&conn, limit)
 }
 
 
