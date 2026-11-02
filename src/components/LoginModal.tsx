@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Lock, User, AlertTriangle, Copy, Check, Printer, Shield } from "lucide-react";
+import { Lock, User, AlertTriangle, Copy, Check, Printer, Shield } from "./icons";
 import { SessionUser, UserInfo } from "../types";
 
 interface LoginModalProps {

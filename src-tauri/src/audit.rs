@@ -1,20 +1,5 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
-
-thread_local! {
-    pub static CURRENT_USER_NAME: RefCell<Option<String>> = RefCell::new(None);
-}
-
-pub fn set_current_user_name(name: Option<String>) {
-    CURRENT_USER_NAME.with(|cell| {
-        *cell.borrow_mut() = name;
-    });
-}
-
-pub fn get_current_user_name() -> Option<String> {
-    CURRENT_USER_NAME.with(|cell| cell.borrow().clone())
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AuditLogEntry {
@@ -40,14 +25,10 @@ pub fn write_audit(
     user_name: Option<&str>,
 ) -> Result<(), String> {
     let now = chrono::Local::now().to_rfc3339();
-    let effective_user = match user_name {
-        Some(u) => Some(u.to_string()),
-        None => get_current_user_name(),
-    };
     conn.execute(
         "INSERT INTO audit_log (entity_type, entity_id, action, before_json, after_json, reason, user_name, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![entity_type, entity_id, action, before_json, after_json, reason, effective_user, now],
+        params![entity_type, entity_id, action, before_json, after_json, reason, user_name, now],
     ).map_err(|e| format!("Failed to write audit log: {}", e))?;
     Ok(())
 }

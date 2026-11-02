@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ShieldCheck, Key, Copy, Check, Printer, AlertTriangle } from "lucide-react";
+import { ShieldCheck, Key, Copy, Check, Printer, AlertTriangle } from "./icons";
 
 interface InitialSetupWizardProps {
   onComplete: () => void;

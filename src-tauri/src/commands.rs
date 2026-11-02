@@ -113,18 +113,22 @@ pub fn get_stock_list_inner(conn: &Connection) -> Result<Vec<StockItem>, String>
     Ok(items)
 }
 
+pub fn mask_stock_list_for_role(items: &mut [StockItem], role: &str) {
+    if role == "staff" {
+        for item in items {
+            item.last_purchase_rate = 0;
+            item.stock_value = 0;
+        }
+    }
+}
+
 #[command]
 pub fn get_stock_list_cmd(app: AppHandle) -> Result<Vec<StockItem>, String> {
     let conn = get_conn(&app)?;
     let user_opt = check_permission_for_command(&app, &conn, "get_stock_list_cmd")?;
     let mut list = get_stock_list_inner(&conn)?;
     if let Some(ref u) = user_opt {
-        if u.role == "staff" {
-            for item in &mut list {
-                item.last_purchase_rate = 0;
-                item.stock_value = 0;
-            }
-        }
+        mask_stock_list_for_role(&mut list, &u.role);
     }
     Ok(list)
 }
@@ -274,10 +278,21 @@ pub fn get_last_rates_inner(conn: &Connection, item_id: i64) -> Result<LastRates
     Ok(LastRates { last_purchase, last_sale })
 }
 
+pub fn mask_last_rates_for_role(rates: &mut LastRates, role: &str) {
+    if role == "staff" {
+        rates.last_purchase = None;
+    }
+}
+
 #[command]
 pub fn get_last_rates_cmd(app: AppHandle, item_id: i64) -> Result<LastRates, String> {
     let conn = get_conn(&app)?;
-    get_last_rates_inner(&conn, item_id)
+    let user_opt = check_permission_for_command(&app, &conn, "get_last_rates_cmd")?;
+    let mut rates = get_last_rates_inner(&conn, item_id)?;
+    if let Some(ref u) = user_opt {
+        mask_last_rates_for_role(&mut rates, &u.role);
+    }
+    Ok(rates)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -390,7 +405,7 @@ pub struct UpdateItemPayload {
     pub reason: Option<String>,
 }
 
-pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> Result<(), String> {
+pub fn update_item_with_user(conn: &mut Connection, payload: UpdateItemPayload, user_name: Option<&str>) -> Result<(), String> {
     let name_trimmed = payload.name.trim();
     if name_trimmed.is_empty() {
         return Err("सामान का नाम खाली नहीं हो सकता! / Item name cannot be empty!".to_string());
@@ -540,12 +555,16 @@ pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> R
         Some(&before_obj.to_string()),
         Some(&after_obj.to_string()),
         payload.reason.as_deref(),
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+pub fn update_item_inner(conn: &mut Connection, payload: UpdateItemPayload) -> Result<(), String> {
+    update_item_with_user(conn, payload, None)
 }
 
 #[command]
@@ -554,8 +573,9 @@ pub fn update_item_cmd(
     payload: UpdateItemPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "update_item_cmd")?;
-    update_item_inner(&mut conn, payload)
+    let user_opt = check_permission_for_command(&app, &conn, "update_item_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    update_item_with_user(&mut conn, payload, user_name)
 }
 
 pub fn delete_item_inner(conn: &mut Connection, item_id: i64) -> Result<(), String> {
@@ -827,7 +847,7 @@ pub struct UpdatePartyPayload {
     pub reason: Option<String>,
 }
 
-pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) -> Result<(), String> {
+pub fn update_party_with_user(conn: &mut Connection, payload: UpdatePartyPayload, user_name: Option<&str>) -> Result<(), String> {
     let name_trimmed = payload.name.trim();
     if name_trimmed.is_empty() {
         return Err("पार्टी का नाम खाली नहीं हो सकता! / Party name cannot be empty!".to_string());
@@ -931,12 +951,16 @@ pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) ->
         Some(&before_obj.to_string()),
         Some(&after_obj.to_string()),
         payload.reason.as_deref(),
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+pub fn update_party_inner(conn: &mut Connection, payload: UpdatePartyPayload) -> Result<(), String> {
+    update_party_with_user(conn, payload, None)
 }
 
 #[command]
@@ -945,8 +969,9 @@ pub fn update_party_cmd(
     payload: UpdatePartyPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "update_party_cmd")?;
-    update_party_inner(&mut conn, payload)
+    let user_opt = check_permission_for_command(&app, &conn, "update_party_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    update_party_with_user(&mut conn, payload, user_name)
 }
 
 pub fn delete_party_inner(conn: &mut Connection, party_id: i64) -> Result<(), String> {
@@ -1101,6 +1126,7 @@ pub fn get_item_movement_inner(conn: &Connection, item_id: i64, godown_id: Optio
 #[command]
 pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64>) -> Result<Vec<Movement>, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_item_movement_cmd")?;
     get_item_movement_inner(&conn, item_id, godown_id)
 }
 
@@ -1145,12 +1171,22 @@ pub fn get_dashboard_stats_inner(conn: &Connection, today_date: &str) -> Result<
     })
 }
 
+pub fn mask_dashboard_stats_for_role(stats: &mut DashboardStats, role: &str) {
+    if role == "staff" {
+        stats.today_purchases = 0;
+        stats.total_payable = 0;
+    }
+}
+
 #[command]
 pub fn get_dashboard_stats_cmd(app: AppHandle, today_date: Option<String>) -> Result<DashboardStats, String> {
     let conn = get_conn(&app)?;
-    let _user_opt = check_permission_for_command(&app, &conn, "get_dashboard_stats_cmd")?;
+    let user_opt = check_permission_for_command(&app, &conn, "get_dashboard_stats_cmd")?;
     let date_str = today_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    let stats = get_dashboard_stats_inner(&conn, &date_str)?;
+    let mut stats = get_dashboard_stats_inner(&conn, &date_str)?;
+    if let Some(ref u) = user_opt {
+        mask_dashboard_stats_for_role(&mut stats, &u.role);
+    }
     Ok(stats)
 }
 
@@ -1436,10 +1472,33 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
     Err(format!("Invoice '{}' not found", invoice_no))
 }
 
+pub fn mask_invoice_details_for_role(details: &mut InvoicePrintDetails, is_purchase: bool, role: &str) {
+    if role == "staff" && is_purchase {
+        details.paid_amount = 0;
+        details.total_amount = 0;
+        for line in &mut details.lines {
+            line.rate = 0;
+            line.taxable = 0;
+            line.gst_amount = 0;
+            line.total = 0;
+        }
+    }
+}
+
 #[command]
 pub fn get_invoice_details_cmd(app: AppHandle, invoice_no: String) -> Result<InvoicePrintDetails, String> {
     let conn = get_conn(&app)?;
-    get_invoice_details_inner(&conn, &invoice_no)
+    let user_opt = check_permission_for_command(&app, &conn, "get_invoice_details_cmd")?;
+    let mut details = get_invoice_details_inner(&conn, &invoice_no)?;
+    if let Some(ref u) = user_opt {
+        let is_purchase: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM purchases WHERE invoice_no = ?1)",
+            rusqlite::params![&invoice_no],
+            |r| r.get(0)
+        ).unwrap_or(false);
+        mask_invoice_details_for_role(&mut details, is_purchase, &u.role);
+    }
+    Ok(details)
 }
 
 // ============================================================================
@@ -1585,6 +1644,24 @@ pub fn get_purchase_register_inner(
     })
 }
 
+pub fn mask_purchase_register_for_role(report: &mut RegisterReport, role: &str) {
+    if role == "staff" {
+        report.total_taxable = 0;
+        report.total_cgst = 0;
+        report.total_sgst = 0;
+        report.total_igst = 0;
+        report.grand_total = 0;
+        for entry in &mut report.entries {
+            entry.taxable = 0;
+            entry.cgst = 0;
+            entry.sgst = 0;
+            entry.igst = 0;
+            entry.total = 0;
+            entry.paid_amount = 0;
+        }
+    }
+}
+
 #[command]
 pub fn get_purchase_register_cmd(
     app: AppHandle,
@@ -1593,7 +1670,12 @@ pub fn get_purchase_register_cmd(
     shop_state: Option<String>,
 ) -> Result<RegisterReport, String> {
     let conn = get_conn(&app)?;
-    get_purchase_register_inner(&conn, &from_date, &to_date, shop_state.as_deref())
+    let user_opt = check_permission_for_command(&app, &conn, "get_purchase_register_cmd")?;
+    let mut report = get_purchase_register_inner(&conn, &from_date, &to_date, shop_state.as_deref())?;
+    if let Some(ref u) = user_opt {
+        mask_purchase_register_for_role(&mut report, &u.role);
+    }
+    Ok(report)
 }
 
 pub fn get_sales_register_inner(
@@ -3293,11 +3375,24 @@ pub fn get_7_day_trend_inner(conn: &Connection, today_date: &str) -> Result<Vec<
     Ok(trends)
 }
 
+pub fn mask_7_day_trend_for_role(trends: &mut [DailyTrend], role: &str) {
+    if role == "staff" {
+        for t in trends {
+            t.purchases_paise = 0;
+        }
+    }
+}
+
 #[command]
 pub fn get_7_day_trend_cmd(app: AppHandle, today_date: Option<String>) -> Result<Vec<DailyTrend>, String> {
     let conn = get_conn(&app)?;
+    let user_opt = check_permission_for_command(&app, &conn, "get_7_day_trend_cmd")?;
     let date_str = today_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    get_7_day_trend_inner(&conn, &date_str)
+    let mut trends = get_7_day_trend_inner(&conn, &date_str)?;
+    if let Some(ref u) = user_opt {
+        mask_7_day_trend_for_role(&mut trends, &u.role);
+    }
+    Ok(trends)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -3371,11 +3466,24 @@ pub fn get_yesterday_comparison_inner(conn: &Connection, today_date: &str) -> Re
     })
 }
 
+pub fn mask_yesterday_comparison_for_role(comp: &mut YesterdayComparison, role: &str) {
+    if role == "staff" {
+        comp.today_purchases = 0;
+        comp.yesterday_purchases = 0;
+        comp.purchases_growth_percent = 0.0;
+    }
+}
+
 #[command]
 pub fn get_yesterday_comparison_cmd(app: AppHandle, today_date: Option<String>) -> Result<YesterdayComparison, String> {
     let conn = get_conn(&app)?;
+    let user_opt = check_permission_for_command(&app, &conn, "get_yesterday_comparison_cmd")?;
     let date_str = today_date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    get_yesterday_comparison_inner(&conn, &date_str)
+    let mut comp = get_yesterday_comparison_inner(&conn, &date_str)?;
+    if let Some(ref u) = user_opt {
+        mask_yesterday_comparison_for_role(&mut comp, &u.role);
+    }
+    Ok(comp)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -3444,6 +3552,7 @@ pub fn get_top_receivables_inner(conn: &Connection, limit: usize, as_of_date: Op
 #[command]
 pub fn get_top_receivables_cmd(app: AppHandle, limit: Option<usize>, as_of_date: Option<String>) -> Result<Vec<TopReceivableParty>, String> {
     let conn = get_conn(&app)?;
+    check_permission_for_command(&app, &conn, "get_top_receivables_cmd")?;
     get_top_receivables_inner(&conn, limit.unwrap_or(5), as_of_date.as_deref())
 }
 
@@ -3506,10 +3615,23 @@ pub fn get_low_stock_items_inner(conn: &Connection, threshold_milli: i64) -> Res
     Ok(low_items)
 }
 
+pub fn mask_low_stock_for_role(items: &mut [LowStockItem], role: &str) {
+    if role == "staff" {
+        for item in items {
+            item.last_purchase_rate = 0;
+        }
+    }
+}
+
 #[command]
 pub fn get_low_stock_items_cmd(app: AppHandle, threshold_milli: Option<i64>) -> Result<Vec<LowStockItem>, String> {
     let conn = get_conn(&app)?;
-    get_low_stock_items_inner(&conn, threshold_milli.unwrap_or(10_000))
+    let user_opt = check_permission_for_command(&app, &conn, "get_low_stock_items_cmd")?;
+    let mut low_items = get_low_stock_items_inner(&conn, threshold_milli.unwrap_or(10_000))?;
+    if let Some(ref u) = user_opt {
+        mask_low_stock_for_role(&mut low_items, &u.role);
+    }
+    Ok(low_items)
 }
 
 #[command]
@@ -3996,11 +4118,12 @@ pub fn copy_backups_cmd(from_folder: String, to_folder: String) -> Result<usize,
     crate::backup::copy_backups_with_verification(&from_dir, &to_dir)
 }
 
-pub fn change_sales_invoice_no_inner(
+pub fn change_sales_invoice_no_with_user(
     conn: &mut Connection,
     old_no: &str,
     new_no: &str,
     reason: &str,
+    user_name: Option<&str>,
 ) -> Result<(), String> {
     let clean_old = old_no.trim();
     let clean_new = new_no.trim();
@@ -4089,11 +4212,20 @@ pub fn change_sales_invoice_no_inner(
         Some(&before_json),
         Some(&after_json),
         Some(clean_reason),
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn change_sales_invoice_no_inner(
+    conn: &mut Connection,
+    old_no: &str,
+    new_no: &str,
+    reason: &str,
+) -> Result<(), String> {
+    change_sales_invoice_no_with_user(conn, old_no, new_no, reason, None)
 }
 
 #[command]
@@ -4104,16 +4236,18 @@ pub fn change_sales_invoice_no_cmd(
     reason: String,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "change_sales_invoice_no_cmd")?;
-    change_sales_invoice_no_inner(&mut conn, &old_no, &new_no, &reason)
+    let user_opt = check_permission_for_command(&app, &conn, "change_sales_invoice_no_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    change_sales_invoice_no_with_user(&mut conn, &old_no, &new_no, &reason, user_name)
 }
 
-pub fn update_purchase_supplier_invoice_inner(
+pub fn update_purchase_supplier_invoice_with_user(
     conn: &mut Connection,
     internal_invoice_no: &str,
     supplier_invoice_no: &str,
     supplier_invoice_date: Option<&str>,
     reason: Option<&str>,
+    user_name: Option<&str>,
 ) -> Result<(), String> {
     let clean_internal = internal_invoice_no.trim();
     let clean_supp_no = supplier_invoice_no.trim();
@@ -4168,11 +4302,21 @@ pub fn update_purchase_supplier_invoice_inner(
         Some(&before_json),
         Some(&after_json),
         reason,
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn update_purchase_supplier_invoice_inner(
+    conn: &mut Connection,
+    internal_invoice_no: &str,
+    supplier_invoice_no: &str,
+    supplier_invoice_date: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    update_purchase_supplier_invoice_with_user(conn, internal_invoice_no, supplier_invoice_no, supplier_invoice_date, reason, None)
 }
 
 #[command]
@@ -4184,15 +4328,16 @@ pub fn update_purchase_supplier_invoice_cmd(
     reason: Option<String>,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "update_purchase_supplier_invoice_cmd")?;
-    update_purchase_supplier_invoice_inner(&mut conn, &internal_invoice_no, &supplier_invoice_no, supplier_invoice_date.as_deref(), reason.as_deref())
+    let user_opt = check_permission_for_command(&app, &conn, "update_purchase_supplier_invoice_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    update_purchase_supplier_invoice_with_user(&mut conn, &internal_invoice_no, &supplier_invoice_no, supplier_invoice_date.as_deref(), reason.as_deref(), user_name)
 }
 
 // ==========================================
 // STAGE 4: INVOICE CANCELLATION & ALTERATION
 // ==========================================
 
-pub fn cancel_invoice_inner(conn: &mut Connection, invoice_no: &str, reason: Option<&str>) -> Result<(), String> {
+pub fn cancel_invoice_with_user(conn: &mut Connection, invoice_no: &str, reason: Option<&str>, user_name: Option<&str>) -> Result<(), String> {
     let clean_inv = invoice_no.trim();
     if clean_inv.is_empty() {
         return Err("Invoice number is required / बिल नंबर आवश्यक है".to_string());
@@ -4381,11 +4526,15 @@ pub fn cancel_invoice_inner(conn: &mut Connection, invoice_no: &str, reason: Opt
         Some(&before_json),
         Some(&after_json),
         reason,
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn cancel_invoice_inner(conn: &mut Connection, invoice_no: &str, reason: Option<&str>) -> Result<(), String> {
+    cancel_invoice_with_user(conn, invoice_no, reason, None)
 }
 
 #[command]
@@ -4395,15 +4544,17 @@ pub fn cancel_invoice_cmd(
     reason: Option<String>,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "cancel_invoice_cmd")?;
-    cancel_invoice_inner(&mut conn, &invoice_no, reason.as_deref())
+    let user_opt = check_permission_for_command(&app, &conn, "cancel_invoice_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    cancel_invoice_with_user(&mut conn, &invoice_no, reason.as_deref(), user_name)
 }
 
-pub fn alter_sale_inner(
+pub fn alter_sale_with_user(
     conn: &mut Connection,
     current_invoice_no: &str,
     payload: crate::invoice::InvoicePayload,
     reason: Option<&str>,
+    user_name: Option<&str>,
 ) -> Result<String, String> {
     let clean_current = current_invoice_no.trim();
     if clean_current.is_empty() {
@@ -4436,7 +4587,7 @@ pub fn alter_sale_inner(
     let requested_no = payload.invoice_no.trim();
     if !requested_no.is_empty() && requested_no != clean_current {
         let rename_reason = reason.unwrap_or("Sale alteration invoice rename");
-        change_sales_invoice_no_inner(conn, clean_current, requested_no, rename_reason)?;
+        change_sales_invoice_no_with_user(conn, clean_current, requested_no, rename_reason, user_name)?;
         target_inv_no = requested_no.to_string();
     }
 
@@ -4680,11 +4831,20 @@ pub fn alter_sale_inner(
         Some(&before_json),
         Some(&after_json),
         reason,
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(target_inv_no)
+}
+
+pub fn alter_sale_inner(
+    conn: &mut Connection,
+    current_invoice_no: &str,
+    payload: crate::invoice::InvoicePayload,
+    reason: Option<&str>,
+) -> Result<String, String> {
+    alter_sale_with_user(conn, current_invoice_no, payload, reason, None)
 }
 
 #[command]
@@ -4695,15 +4855,17 @@ pub fn alter_sale_cmd(
     reason: Option<String>,
 ) -> Result<String, String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "alter_sale_cmd")?;
-    alter_sale_inner(&mut conn, &invoice_no, payload, reason.as_deref())
+    let user_opt = check_permission_for_command(&app, &conn, "alter_sale_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    alter_sale_with_user(&mut conn, &invoice_no, payload, reason.as_deref(), user_name)
 }
 
-pub fn alter_purchase_inner(
+pub fn alter_purchase_with_user(
     conn: &mut Connection,
     current_invoice_no: &str,
     payload: crate::invoice::InvoicePayload,
     reason: Option<&str>,
+    user_name: Option<&str>,
 ) -> Result<String, String> {
     let clean_current = current_invoice_no.trim();
     if clean_current.is_empty() {
@@ -5017,11 +5179,20 @@ pub fn alter_purchase_inner(
         Some(&before_json),
         Some(&after_json),
         reason,
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(clean_current.to_string())
+}
+
+pub fn alter_purchase_inner(
+    conn: &mut Connection,
+    current_invoice_no: &str,
+    payload: crate::invoice::InvoicePayload,
+    reason: Option<&str>,
+) -> Result<String, String> {
+    alter_purchase_with_user(conn, current_invoice_no, payload, reason, None)
 }
 
 #[command]
@@ -5032,8 +5203,9 @@ pub fn alter_purchase_cmd(
     reason: Option<String>,
 ) -> Result<String, String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "alter_purchase_cmd")?;
-    alter_purchase_inner(&mut conn, &invoice_no, payload, reason.as_deref())
+    let user_opt = check_permission_for_command(&app, &conn, "alter_purchase_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    alter_purchase_with_user(&mut conn, &invoice_no, payload, reason.as_deref(), user_name)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -5047,7 +5219,7 @@ pub struct AlterPaymentPayload {
     pub reason: Option<String>,
 }
 
-pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) -> Result<(), String> {
+pub fn alter_payment_with_user(conn: &mut Connection, payload: AlterPaymentPayload, user_name: Option<&str>) -> Result<(), String> {
     if payload.amount_paise <= 0 {
         return Err("Payment amount must be greater than zero".to_string());
     }
@@ -5180,11 +5352,15 @@ pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) 
         Some(&before_json),
         Some(&after_json),
         payload.reason.as_deref(),
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn alter_payment_inner(conn: &mut Connection, payload: AlterPaymentPayload) -> Result<(), String> {
+    alter_payment_with_user(conn, payload, None)
 }
 
 #[command]
@@ -5193,11 +5369,12 @@ pub fn alter_payment_cmd(
     payload: AlterPaymentPayload,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "alter_payment_cmd")?;
-    alter_payment_inner(&mut conn, payload)
+    let user_opt = check_permission_for_command(&app, &conn, "alter_payment_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    alter_payment_with_user(&mut conn, payload, user_name)
 }
 
-pub fn cancel_payment_inner(conn: &mut Connection, ledger_id: i64, reason: Option<&str>) -> Result<(), String> {
+pub fn cancel_payment_with_user(conn: &mut Connection, ledger_id: i64, reason: Option<&str>, user_name: Option<&str>) -> Result<(), String> {
     let (party_id, old_date, old_debit, old_credit, old_ref_id, old_mode, old_remark): (i64, String, i64, i64, String, String, Option<String>) = conn.query_row(
         "SELECT party_id, date, debit, credit, ref_id, payment_mode, remark FROM party_ledger WHERE id = ?1 AND type = 'payment'",
         rusqlite::params![ledger_id],
@@ -5271,11 +5448,15 @@ pub fn cancel_payment_inner(conn: &mut Connection, ledger_id: i64, reason: Optio
         Some(&before_json),
         None,
         reason,
-        None,
+        user_name,
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn cancel_payment_inner(conn: &mut Connection, ledger_id: i64, reason: Option<&str>) -> Result<(), String> {
+    cancel_payment_with_user(conn, ledger_id, reason, None)
 }
 
 #[command]
@@ -5285,8 +5466,9 @@ pub fn cancel_payment_cmd(
     reason: Option<String>,
 ) -> Result<(), String> {
     let mut conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "cancel_payment_cmd")?;
-    cancel_payment_inner(&mut conn, ledger_id, reason.as_deref())
+    let user_opt = check_permission_for_command(&app, &conn, "cancel_payment_cmd")?;
+    let user_name = user_opt.as_ref().map(|u| u.name.as_str());
+    cancel_payment_with_user(&mut conn, ledger_id, reason.as_deref(), user_name)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -5505,14 +5687,8 @@ pub fn check_permission_for_command(
             is_locked,
             command_name,
         )?;
-        if let Some(ref u) = res {
-            crate::audit::set_current_user_name(Some(u.name.clone()));
-        } else {
-            crate::audit::set_current_user_name(None);
-        }
         Ok(res)
     } else {
-        crate::audit::set_current_user_name(Some("व्यवस्थापक (Owner)".to_string()));
         Ok(Some(crate::auth::SessionUser {
             id: 0,
             name: "व्यवस्थापक (Owner)".to_string(),
@@ -5569,7 +5745,6 @@ pub fn create_owner_initial_cmd(
         *state.current_user.lock().unwrap() = Some(session_user);
         *state.is_locked.lock().unwrap() = false;
     }
-    crate::audit::set_current_user_name(Some(owner.name.clone()));
 
     Ok(serde_json::json!({
         "user": owner,
@@ -5611,7 +5786,6 @@ pub fn login_cmd(app: AppHandle, name: String, password: String) -> Result<crate
         *state.current_user.lock().unwrap() = Some(session.clone());
         *state.is_locked.lock().unwrap() = false;
     }
-    crate::audit::set_current_user_name(Some(session.name.clone()));
 
     let user_info = conn.query_row(
         "SELECT id, name, role, is_active, failed_attempts, locked_until, created_at FROM users WHERE id = ?1",
@@ -5644,7 +5818,6 @@ pub fn logout_cmd(app: AppHandle) -> Result<(), String> {
             }
         }
     }
-    crate::audit::set_current_user_name(None);
     Ok(())
 }
 
@@ -5687,7 +5860,6 @@ pub fn unlock_session_cmd(app: AppHandle, password: String) -> Result<crate::aut
         *state.is_locked.lock().unwrap() = false;
     }
     let _ = crate::auth::log_login_event(&conn, &user.name, "unlock");
-    crate::audit::set_current_user_name(Some(session.name.clone()));
 
     let user_info = conn.query_row(
         "SELECT id, name, role, is_active, failed_attempts, locked_until, created_at FROM users WHERE id = ?1",

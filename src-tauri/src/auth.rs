@@ -102,62 +102,110 @@ pub fn log_login_event(conn: &Connection, user_name: &str, event: &str) -> std::
     Ok(())
 }
 
-pub fn get_command_minimum_role(command: &str) -> MinimumRole {
-    match command {
-        // Public / Unauthenticated
-        "init_db_cmd"
-        | "get_security_status_cmd"
-        | "create_owner_initial_cmd"
-        | "skip_security_setup_cmd"
-        | "login_cmd"
-        | "unlock_session_cmd"
-        | "reset_owner_with_recovery_key_cmd"
-        | "get_db_safety_info_cmd"
-        | "graceful_exit_cmd"
-        | "acknowledge_exit_request_cmd" => MinimumRole::Public,
+pub const PERMISSION_MATRIX: &[(&str, MinimumRole)] = &[
+    // Public / Unauthenticated (10)
+    ("init_db_cmd", MinimumRole::Public),
+    ("get_security_status_cmd", MinimumRole::Public),
+    ("create_owner_initial_cmd", MinimumRole::Public),
+    ("skip_security_setup_cmd", MinimumRole::Public),
+    ("login_cmd", MinimumRole::Public),
+    ("unlock_session_cmd", MinimumRole::Public),
+    ("reset_owner_with_recovery_key_cmd", MinimumRole::Public),
+    ("get_db_safety_info_cmd", MinimumRole::Public),
+    ("graceful_exit_cmd", MinimumRole::Public),
+    ("acknowledge_exit_request_cmd", MinimumRole::Public),
 
-        // Staff & Owner
-        "get_current_user_cmd"
-        | "logout_cmd"
-        | "lock_session_cmd"
-        | "change_own_password_cmd"
-        | "get_dashboard_stats_cmd"
-        | "get_7_day_trend_cmd"
-        | "get_yesterday_comparison_cmd"
-        | "get_top_receivables_cmd"
-        | "get_low_stock_items_cmd"
-        | "get_recent_entries_cmd"
-        | "get_stock_list_cmd"
-        | "get_available_stock_cmd"
-        | "get_items_cmd"
-        | "add_item_cmd"
-        | "get_item_units_cmd"
-        | "add_item_unit_cmd"
-        | "get_godowns_cmd"
-        | "get_parties_cmd"
-        | "add_party_cmd"
-        | "save_invoice_cmd"
-        | "record_payment_cmd"
-        | "get_invoice_details_cmd"
-        | "get_last_rates_cmd"
-        | "get_pending_bills_cmd"
-        | "get_party_statement_cmd"
-        | "get_party_balances_cmd"
-        | "get_item_movement_cmd"
-        | "get_purchase_register_cmd"
-        | "get_sales_register_cmd"
-        | "get_next_bill_number_cmd"
-        | "list_printers"
-        | "get_default_printer"
-        | "print_bill"
-        | "log_invoice_print_cmd"
-        | "get_last_invoice_print_mode_cmd"
-        | "get_backup_status_cmd"
-        | "get_settings_cmd" => MinimumRole::Staff,
+    // Staff & Owner (37)
+    ("get_current_user_cmd", MinimumRole::Staff),
+    ("logout_cmd", MinimumRole::Staff),
+    ("lock_session_cmd", MinimumRole::Staff),
+    ("change_own_password_cmd", MinimumRole::Staff),
+    ("get_dashboard_stats_cmd", MinimumRole::Staff),
+    ("get_7_day_trend_cmd", MinimumRole::Staff),
+    ("get_yesterday_comparison_cmd", MinimumRole::Staff),
+    ("get_top_receivables_cmd", MinimumRole::Staff),
+    ("get_low_stock_items_cmd", MinimumRole::Staff),
+    ("get_recent_entries_cmd", MinimumRole::Staff),
+    ("get_stock_list_cmd", MinimumRole::Staff),
+    ("get_available_stock_cmd", MinimumRole::Staff),
+    ("get_items_cmd", MinimumRole::Staff),
+    ("add_item_cmd", MinimumRole::Staff),
+    ("get_item_units_cmd", MinimumRole::Staff),
+    ("add_item_unit_cmd", MinimumRole::Staff),
+    ("get_godowns_cmd", MinimumRole::Staff),
+    ("get_parties_cmd", MinimumRole::Staff),
+    ("add_party_cmd", MinimumRole::Staff),
+    ("save_invoice_cmd", MinimumRole::Staff),
+    ("record_payment_cmd", MinimumRole::Staff),
+    ("get_invoice_details_cmd", MinimumRole::Staff),
+    ("get_last_rates_cmd", MinimumRole::Staff),
+    ("get_pending_bills_cmd", MinimumRole::Staff),
+    ("get_party_statement_cmd", MinimumRole::Staff),
+    ("get_party_balances_cmd", MinimumRole::Staff),
+    ("get_item_movement_cmd", MinimumRole::Staff),
+    ("get_purchase_register_cmd", MinimumRole::Staff),
+    ("get_sales_register_cmd", MinimumRole::Staff),
+    ("get_next_bill_number_cmd", MinimumRole::Staff),
+    ("list_printers", MinimumRole::Staff),
+    ("get_default_printer", MinimumRole::Staff),
+    ("print_bill", MinimumRole::Staff),
+    ("log_invoice_print_cmd", MinimumRole::Staff),
+    ("get_last_invoice_print_mode_cmd", MinimumRole::Staff),
+    ("get_backup_status_cmd", MinimumRole::Staff),
+    ("get_settings_cmd", MinimumRole::Staff),
 
-        // Defaults to Owner
-        _ => MinimumRole::Owner,
+    // Owner Only (38)
+    ("preview_tally_import_cmd", MinimumRole::Owner),
+    ("confirm_tally_import_cmd", MinimumRole::Owner),
+    ("cleanup_accounting_parties_cmd", MinimumRole::Owner),
+    ("update_item_cmd", MinimumRole::Owner),
+    ("delete_item_cmd", MinimumRole::Owner),
+    ("add_ledger_entry_cmd", MinimumRole::Owner),
+    ("update_party_cmd", MinimumRole::Owner),
+    ("delete_party_cmd", MinimumRole::Owner),
+    ("add_opening_stock_cmd", MinimumRole::Owner),
+    ("add_stock_adjustment_cmd", MinimumRole::Owner),
+    ("get_gst_summary_cmd", MinimumRole::Owner),
+    ("get_hsn_summary_cmd", MinimumRole::Owner),
+    ("get_profit_report_cmd", MinimumRole::Owner),
+    ("set_settings_cmd", MinimumRole::Owner),
+    ("backup_now_cmd", MinimumRole::Owner),
+    ("list_backups_cmd", MinimumRole::Owner),
+    ("prepare_restore_cmd", MinimumRole::Owner),
+    ("check_db_integrity_cmd", MinimumRole::Owner),
+    ("open_backup_folder_cmd", MinimumRole::Owner),
+    ("pick_folder_cmd", MinimumRole::Owner),
+    ("test_write_folder_cmd", MinimumRole::Owner),
+    ("copy_backups_cmd", MinimumRole::Owner),
+    ("get_sales_gst_mode_profit_report_cmd", MinimumRole::Owner),
+    ("get_item_parties_report_cmd", MinimumRole::Owner),
+    ("get_party_items_report_cmd", MinimumRole::Owner),
+    ("get_audit_logs_cmd", MinimumRole::Owner),
+    ("change_sales_invoice_no_cmd", MinimumRole::Owner),
+    ("update_purchase_supplier_invoice_cmd", MinimumRole::Owner),
+    ("cancel_invoice_cmd", MinimumRole::Owner),
+    ("alter_sale_cmd", MinimumRole::Owner),
+    ("alter_purchase_cmd", MinimumRole::Owner),
+    ("alter_payment_cmd", MinimumRole::Owner),
+    ("cancel_payment_cmd", MinimumRole::Owner),
+    ("get_users_cmd", MinimumRole::Owner),
+    ("create_user_cmd", MinimumRole::Owner),
+    ("update_user_status_cmd", MinimumRole::Owner),
+    ("reset_user_password_cmd", MinimumRole::Owner),
+    ("get_login_logs_cmd", MinimumRole::Owner),
+];
+
+pub fn get_command_explicit_role(command: &str) -> Option<MinimumRole> {
+    for (cmd, role) in PERMISSION_MATRIX {
+        if *cmd == command {
+            return Some(*role);
+        }
     }
+    None
+}
+
+pub fn get_command_minimum_role(command: &str) -> MinimumRole {
+    get_command_explicit_role(command).unwrap_or(MinimumRole::Owner)
 }
 
 pub fn check_command_permission(
@@ -174,6 +222,15 @@ pub fn check_command_permission(
         }));
     }
 
+    if is_locked {
+        match command {
+            "login_cmd" | "unlock_session_cmd" | "logout_cmd" | "get_security_status_cmd" => {}
+            _ => {
+                return Err("ऐप लॉक है। कृपया पहले अनलॉक करें। / App is locked. Please unlock first.".to_string());
+            }
+        }
+    }
+
     let min_role = get_command_minimum_role(command);
     if min_role == MinimumRole::Public {
         return Ok(session.cloned());
@@ -185,10 +242,6 @@ pub fn check_command_permission(
             return Err("कृपया पहले लॉगिन करें / Login required".to_string());
         }
     };
-
-    if is_locked {
-        return Err("ऐप लॉक है। कृपया पहले अनलॉक करें। / App is locked. Please unlock first.".to_string());
-    }
 
     match min_role {
         MinimumRole::Public | MinimumRole::Staff => Ok(Some(user.clone())),

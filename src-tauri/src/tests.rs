@@ -6269,13 +6269,12 @@ fn test_auth_permission_matrix_and_unauthenticated() {
 
 #[test]
 fn test_auth_audit_rows_carry_user_name_and_login_log_appended() {
-    use crate::audit::{get_audit_logs_inner, set_current_user_name, write_audit};
+    use crate::audit::{get_audit_logs_inner, write_audit};
     use crate::auth::{get_login_logs_inner, log_login_event};
 
     let mut conn = init_db(":memory:").expect("Failed to init DB");
 
-    // 1. Thread-local user tagging in audit
-    set_current_user_name(Some("sharma_ji".to_string()));
+    // 1. Direct user tagging in audit
     write_audit(
         &mut conn,
         "item",
@@ -6284,14 +6283,12 @@ fn test_auth_audit_rows_carry_user_name_and_login_log_appended() {
         None,
         Some(r#"{"name":"DAP"}"#),
         Some("Item added"),
-        None, // Falls back to thread-local "sharma_ji"
+        Some("sharma_ji"),
     ).unwrap();
 
     let logs = get_audit_logs_inner(&conn, Some("item"), Some("101"), None).unwrap();
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0].user_name.as_deref(), Some("sharma_ji"));
-
-    set_current_user_name(None);
 
     // 2. Login log event recording
     log_login_event(&conn, "sharma_ji", "login").unwrap();
@@ -6391,6 +6388,393 @@ fn test_auth_upgrade_from_old_db_without_users_table() {
     let item_name: String = conn.query_row("SELECT name FROM items WHERE id = 1", [], |r| r.get(0)).unwrap();
     assert_eq!(item_name, "Legacy Urea");
 }
+
+#[test]
+fn test_multithreaded_audit_user_isolation() {
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use crate::audit::{get_audit_logs_inner, write_audit};
+
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    let shared_conn = Arc::new(Mutex::new(conn));
+
+    let conn_a = Arc::clone(&shared_conn);
+    let handle_a = thread::spawn(move || {
+        let mut conn = conn_a.lock().unwrap();
+        write_audit(
+            &mut conn,
+            "item",
+            "1001",
+            "update",
+            None,
+            Some(r#"{"name":"Urea from Thread A"}"#),
+            Some("Thread A update"),
+            Some("user_alice"),
+        ).unwrap();
+    });
+
+    let conn_b = Arc::clone(&shared_conn);
+    let handle_b = thread::spawn(move || {
+        let mut conn = conn_b.lock().unwrap();
+        write_audit(
+            &mut conn,
+            "item",
+            "1002",
+            "update",
+            None,
+            Some(r#"{"name":"DAP from Thread B"}"#),
+            Some("Thread B update"),
+            Some("user_bob"),
+        ).unwrap();
+    });
+
+    handle_a.join().unwrap();
+    handle_b.join().unwrap();
+
+    let conn = shared_conn.lock().unwrap();
+    let logs_a = get_audit_logs_inner(&conn, Some("item"), Some("1001"), None).unwrap();
+    assert_eq!(logs_a.len(), 1);
+    assert_eq!(logs_a[0].user_name.as_deref(), Some("user_alice"));
+
+    let logs_b = get_audit_logs_inner(&conn, Some("item"), Some("1002"), None).unwrap();
+    assert_eq!(logs_b.len(), 1);
+    assert_eq!(logs_b[0].user_name.as_deref(), Some("user_bob"));
+}
+
+#[test]
+fn test_permission_matrix_covers_all_main_commands_and_default_owner() {
+    use std::path::Path;
+    use crate::auth::{get_command_minimum_role, MinimumRole, PERMISSION_MATRIX};
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let main_rs_path = Path::new(&manifest_dir).join("src/main.rs");
+    let main_rs_content = std::fs::read_to_string(&main_rs_path)
+        .expect("Failed to read src/main.rs for permission matrix check");
+
+    let handler_start = main_rs_content
+        .find("tauri::generate_handler![")
+        .expect("generate_handler! not found in main.rs");
+    let handler_slice = &main_rs_content[handler_start..];
+    let bracket_end = handler_slice
+        .find(']')
+        .expect("Closing bracket for generate_handler! not found");
+    let handler_body = &handler_slice["tauri::generate_handler![".len()..bracket_end];
+
+    let registered_commands: Vec<String> = handler_body
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.strip_prefix("commands::").unwrap_or(s).to_string())
+        .collect();
+
+    assert!(
+        !registered_commands.is_empty(),
+        "Expected registered commands in main.rs"
+    );
+
+    for cmd in &registered_commands {
+        let is_in_matrix = PERMISSION_MATRIX.iter().any(|(name, _)| *name == cmd);
+        assert!(
+            is_in_matrix,
+            "Command '{}' is registered in main.rs generate_handler! but missing from auth::PERMISSION_MATRIX",
+            cmd
+        );
+    }
+
+    // Default for any unknown command must be MinimumRole::Owner
+    let unknown_role = get_command_minimum_role("completely_unknown_future_command_cmd");
+    assert_eq!(
+        unknown_role,
+        MinimumRole::Owner,
+        "Unknown commands must default to MinimumRole::Owner"
+    );
+}
+
+#[test]
+fn test_locked_state_enforces_command_denial() {
+    use crate::auth::{check_command_permission, SessionUser};
+
+    let user = SessionUser {
+        id: 1,
+        name: "test_owner".to_string(),
+        role: "owner".to_string(),
+    };
+
+    // When session is locked:
+    // Only login_cmd, unlock_session_cmd, logout_cmd, get_security_status_cmd are allowed
+    assert!(check_command_permission(true, Some(&user), true, "login_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&user), true, "unlock_session_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&user), true, "logout_cmd").is_ok());
+    assert!(check_command_permission(true, Some(&user), true, "get_security_status_cmd").is_ok());
+
+    // All other commands must be denied with locked session error
+    let locked_denied_commands = vec![
+        "get_stock_list_cmd",
+        "save_invoice_cmd",
+        "get_dashboard_stats_cmd",
+        "get_invoice_details_cmd",
+        "backup_now_cmd",
+        "get_settings_cmd",
+        "set_settings_cmd",
+        "lock_session_cmd",
+        "create_user_cmd",
+        "get_users_cmd",
+    ];
+
+    for cmd in locked_denied_commands {
+        let err = check_command_permission(true, Some(&user), true, cmd).unwrap_err();
+        assert!(
+            err.contains("App is locked") || err.contains("लॉक"),
+            "Command '{}' should be rejected with lock error when session is locked, got: {}",
+            cmd,
+            err
+        );
+    }
+}
+
+#[test]
+fn test_staff_data_masking_per_command() {
+    use crate::auth::{check_command_permission, SessionUser};
+    use crate::commands::{
+        mask_stock_list_for_role, mask_dashboard_stats_for_role, mask_invoice_details_for_role,
+        mask_last_rates_for_role, mask_purchase_register_for_role, mask_7_day_trend_for_role,
+        mask_yesterday_comparison_for_role, mask_low_stock_for_role,
+        StockItem, DashboardStats, InvoicePrintDetails, InvoicePrintLine,
+        LastRates, LastRateInfo, RegisterReport, RegisterEntry, DailyTrend,
+        YesterdayComparison, LowStockItem
+    };
+
+    let staff_user = SessionUser {
+        id: 2,
+        name: "staff_ramesh".to_string(),
+        role: "staff".to_string(),
+    };
+    let owner_user = SessionUser {
+        id: 1,
+        name: "owner_sharma".to_string(),
+        role: "owner".to_string(),
+    };
+
+    // 1. Stock list masking: last_purchase_rate & stock_value
+    let mut stock_owner = vec![StockItem {
+        id: 1,
+        name: "DAP".to_string(),
+        godown_id: 1,
+        godown_name: "Main".to_string(),
+        qty_base: 100000,
+        base_unit: "bag".to_string(),
+        last_purchase_rate: 135000,
+        stock_value: 13500000,
+    }];
+    mask_stock_list_for_role(&mut stock_owner, "owner");
+    assert_eq!(stock_owner[0].last_purchase_rate, 135000);
+    assert_eq!(stock_owner[0].stock_value, 13500000);
+
+    let mut stock_staff = stock_owner.clone();
+    mask_stock_list_for_role(&mut stock_staff, "staff");
+    assert_eq!(stock_staff[0].last_purchase_rate, 0);
+    assert_eq!(stock_staff[0].stock_value, 0);
+
+    // 2. Dashboard stats masking: today_purchases & total_payable
+    let mut dash_owner = DashboardStats {
+        today_sales: 50000,
+        today_purchases: 30000,
+        total_receivable: 80000,
+        total_payable: 40000,
+    };
+    mask_dashboard_stats_for_role(&mut dash_owner, "owner");
+    assert_eq!(dash_owner.today_purchases, 30000);
+    assert_eq!(dash_owner.total_payable, 40000);
+
+    let mut dash_staff = dash_owner.clone();
+    mask_dashboard_stats_for_role(&mut dash_staff, "staff");
+    assert_eq!(dash_staff.today_purchases, 0);
+    assert_eq!(dash_staff.total_payable, 0);
+    assert_eq!(dash_staff.today_sales, 50000); // sales untouched
+
+    // 3. Invoice details masking for purchase invoice
+    let mut inv_owner = InvoicePrintDetails {
+        invoice_no: "PUR-101".to_string(),
+        date: "2026-10-10".to_string(),
+        party_name: "Supplier Agro".to_string(),
+        party_id: Some(10),
+        godown_id: Some(1),
+        party_phone: None,
+        party_gstin: None,
+        party_village: None,
+        party_address: None,
+        party_state_code: None,
+        payment_mode: "bank".to_string(),
+        paid_amount: 50000,
+        total_amount: 100000,
+        supplier_invoice_no: Some("SUP-1".to_string()),
+        supplier_invoice_date: None,
+        status: Some("active".to_string()),
+        lines: vec![InvoicePrintLine {
+            item_id: Some(1),
+            item_name: "DAP".to_string(),
+            hsn: Some("3105".to_string()),
+            qty: 10000,
+            unit: "bag".to_string(),
+            rate: 135000,
+            taxable: 95000,
+            gst_rate: Some(5000),
+            gst_amount: 5000,
+            total: 100000,
+        }],
+    };
+    mask_invoice_details_for_role(&mut inv_owner, true, "owner");
+    assert_eq!(inv_owner.paid_amount, 50000);
+    assert_eq!(inv_owner.total_amount, 100000);
+    assert_eq!(inv_owner.lines[0].rate, 135000);
+
+    let mut inv_staff = inv_owner.clone();
+    mask_invoice_details_for_role(&mut inv_staff, true, "staff");
+    assert_eq!(inv_staff.paid_amount, 0);
+    assert_eq!(inv_staff.total_amount, 0);
+    assert_eq!(inv_staff.lines[0].rate, 0);
+    assert_eq!(inv_staff.lines[0].taxable, 0);
+    assert_eq!(inv_staff.lines[0].gst_amount, 0);
+    assert_eq!(inv_staff.lines[0].total, 0);
+
+    // 4. Last rates masking: last_purchase
+    let mut rates_owner = LastRates {
+        last_purchase: Some(LastRateInfo {
+            rate: 26000,
+            date: "2026-10-01".to_string(),
+            party_name: "Agro Seeds".to_string(),
+        }),
+        last_sale: Some(LastRateInfo {
+            rate: 30000,
+            date: "2026-10-02".to_string(),
+            party_name: "Farmer".to_string(),
+        }),
+    };
+    mask_last_rates_for_role(&mut rates_owner, "owner");
+    assert!(rates_owner.last_purchase.is_some());
+
+    let mut rates_staff = rates_owner.clone();
+    mask_last_rates_for_role(&mut rates_staff, "staff");
+    assert!(rates_staff.last_purchase.is_none());
+    assert!(rates_staff.last_sale.is_some()); // last_sale preserved
+
+    // 5. Purchase register masking: totals and line costs
+    let mut pur_reg_owner = RegisterReport {
+        entries: vec![RegisterEntry {
+            invoice_no: "P-1".to_string(),
+            date: "2026-10-01".to_string(),
+            party_name: "Supplier".to_string(),
+            party_gstin: None,
+            state_type: "intrastate".to_string(),
+            taxable: 100000,
+            cgst: 2500,
+            sgst: 2500,
+            igst: 0,
+            total: 105000,
+            payment_mode: "bank".to_string(),
+            paid_amount: 105000,
+            supplier_invoice_no: None,
+            status: Some("active".to_string()),
+        }],
+        total_taxable: 100000,
+        total_cgst: 2500,
+        total_sgst: 2500,
+        total_igst: 0,
+        grand_total: 105000,
+    };
+    mask_purchase_register_for_role(&mut pur_reg_owner, "owner");
+    assert_eq!(pur_reg_owner.grand_total, 105000);
+
+    let mut pur_reg_staff = pur_reg_owner.clone();
+    mask_purchase_register_for_role(&mut pur_reg_staff, "staff");
+    assert_eq!(pur_reg_staff.total_taxable, 0);
+    assert_eq!(pur_reg_staff.grand_total, 0);
+    assert_eq!(pur_reg_staff.entries[0].taxable, 0);
+    assert_eq!(pur_reg_staff.entries[0].total, 0);
+    assert_eq!(pur_reg_staff.entries[0].paid_amount, 0);
+
+    // 6. 7-day trend masking: purchases_paise
+    let mut trend_owner = vec![DailyTrend {
+        date: "2026-10-10".to_string(),
+        sales_paise: 50000,
+        purchases_paise: 30000,
+    }];
+    mask_7_day_trend_for_role(&mut trend_owner, "owner");
+    assert_eq!(trend_owner[0].purchases_paise, 30000);
+
+    let mut trend_staff = trend_owner.clone();
+    mask_7_day_trend_for_role(&mut trend_staff, "staff");
+    assert_eq!(trend_staff[0].purchases_paise, 0);
+    assert_eq!(trend_staff[0].sales_paise, 50000);
+
+    // 7. Yesterday comparison masking: purchases
+    let mut comp_owner = YesterdayComparison {
+        today_date: "2026-10-11".to_string(),
+        yesterday_date: "2026-10-10".to_string(),
+        today_sales: 60000,
+        yesterday_sales: 40000,
+        sales_growth_percent: 50.0,
+        today_purchases: 30000,
+        yesterday_purchases: 20000,
+        purchases_growth_percent: 50.0,
+    };
+    mask_yesterday_comparison_for_role(&mut comp_owner, "owner");
+    assert_eq!(comp_owner.today_purchases, 30000);
+
+    let mut comp_staff = comp_owner.clone();
+    mask_yesterday_comparison_for_role(&mut comp_staff, "staff");
+    assert_eq!(comp_staff.today_purchases, 0);
+    assert_eq!(comp_staff.yesterday_purchases, 0);
+    assert_eq!(comp_staff.purchases_growth_percent, 0.0);
+    assert_eq!(comp_staff.today_sales, 60000); // sales preserved
+
+    // 8. Low stock items masking: last_purchase_rate
+    let mut low_owner = vec![LowStockItem {
+        item_id: 1,
+        name: "Urea".to_string(),
+        category: Some("fertilizer".to_string()),
+        godown_id: 1,
+        godown_name: "Main".to_string(),
+        current_stock_milli: 5000,
+        base_unit: "bag".to_string(),
+        threshold_milli: 10000,
+        last_purchase_rate: 26600,
+    }];
+    mask_low_stock_for_role(&mut low_owner, "owner");
+    assert_eq!(low_owner[0].last_purchase_rate, 26600);
+
+    let mut low_staff = low_owner.clone();
+    mask_low_stock_for_role(&mut low_staff, "staff");
+    assert_eq!(low_staff[0].last_purchase_rate, 0);
+
+    // 9. Owner-only report commands are strictly denied to Staff at the command permission layer
+    let owner_only_reports = vec![
+        "get_profit_report_cmd",
+        "get_sales_gst_mode_profit_report_cmd",
+        "get_item_parties_report_cmd",
+        "get_party_items_report_cmd",
+        "get_gst_summary_cmd",
+        "get_hsn_summary_cmd",
+    ];
+    for report_cmd in owner_only_reports {
+        // Owner gets Ok
+        assert!(
+            check_command_permission(true, Some(&owner_user), false, report_cmd).is_ok(),
+            "Owner must have permission for report command '{}'",
+            report_cmd
+        );
+        // Staff is Denied
+        let err = check_command_permission(true, Some(&staff_user), false, report_cmd).unwrap_err();
+        assert!(
+            err.contains("Is kaam ki anumati nahi hai"),
+            "Staff must be denied for Owner-only report command '{}', got: {}",
+            report_cmd,
+            err
+        );
+    }
+}
+
 
 
 

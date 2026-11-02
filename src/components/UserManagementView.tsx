@@ -11,7 +11,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Lock,
-} from "lucide-react";
+} from "./icons";
 import { UserInfo, LoginLogEntry, SessionUser } from "../types";
 
 interface UserManagementViewProps {

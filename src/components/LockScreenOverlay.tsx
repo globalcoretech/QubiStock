@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Lock, Unlock, LogOut, AlertTriangle, Shield, User } from "lucide-react";
+import { Lock, Unlock, LogOut, AlertTriangle, Shield, User } from "./icons";
 import { SessionUser } from "../types";
 
 interface LockScreenOverlayProps {

@@ -11,8 +11,7 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
-import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database } from "../components/icons";
-import { Users as UsersIcon, ShieldAlert } from "lucide-react";
+import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert } from "../components/icons";
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";

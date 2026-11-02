@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { View, AppSettings, SessionUser } from "../types";
 import { Language, Translations } from "../i18n";
-import { Lock, User } from "lucide-react";
 import {
   BahiLogoMark,
   DuotoneHouse,
@@ -22,6 +21,8 @@ import {
   Printer,
   Database,
   LogOut,
+  Lock,
+  User,
 } from "./icons";
 
 interface SidebarProps {
