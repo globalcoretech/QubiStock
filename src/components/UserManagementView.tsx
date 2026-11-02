@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Lock,
-  Unlock,
 } from "lucide-react";
 import { UserInfo, LoginLogEntry, SessionUser } from "../types";
 
@@ -168,7 +167,6 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
     try {
       await invoke("change_own_password_cmd", {
-        userId: currentUser.id,
         oldPassword,
         newPassword: ownNewPassword,
       });
@@ -275,8 +273,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         <div className="p-4 px-5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Users className="w-5 h-5 text-slate-700" />
-            <h3 className="font-bold text-slate-800 text-sm">
-              यूज़र सूची / User Accounts ({users.length})
+            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <span>यूज़र सूची / User Accounts ({users.length})</span>
+              {loading && <span className="text-xs text-slate-500 font-normal">लोड हो रहा है...</span>}
             </h3>
           </div>
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { PartyStatement, PartyStatementItem } from "../types";
+import { PartyStatement, PartyStatementItem, SessionUser } from "../types";
 import { Translations, Language } from "../i18n";
 import { formatCurrency, formatDate, formatPaymentMode } from "../utils/formatters";
 import {
@@ -26,6 +26,7 @@ interface StatementModalProps {
   shopName: string;
   onRefresh?: () => void;
   booksLockedUntil?: string | null;
+  currentUser?: SessionUser | null;
 }
 
 export function StatementModal({
@@ -37,7 +38,9 @@ export function StatementModal({
   shopName,
   onRefresh,
   booksLockedUntil,
+  currentUser,
 }: StatementModalProps) {
+  const isStaff = currentUser?.role === "staff";
   const [statement, setStatement] = useState<PartyStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -554,7 +557,7 @@ export function StatementModal({
                                 </span>
                               </td>
                               <td className="py-2.5 px-3.5 whitespace-nowrap text-center no-print">
-                                {isRealActivePayment ? (
+                                {isRealActivePayment && !isStaff ? (
                                   <div className="inline-flex items-center gap-1.5 justify-center">
                                     <button
                                       type="button"

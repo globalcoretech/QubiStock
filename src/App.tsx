@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./index.css";
-import { View, AppSettings, DEFAULT_SETTINGS, IntegrityCheckReport, RestoreResult, DbSafetyInfo, BackupInfo } from "./types";
+import { View, AppSettings, DEFAULT_SETTINGS, IntegrityCheckReport, RestoreResult, DbSafetyInfo, BackupInfo, SessionUser, SecurityStatus } from "./types";
+import { InitialSetupWizard } from "./components/InitialSetupWizard";
+import { LoginModal } from "./components/LoginModal";
+import { LockScreenOverlay } from "./components/LockScreenOverlay";
 import { Language, translations, getInitialLanguage, saveLanguagePreference } from "./i18n";
 import { Sidebar } from "./components/Sidebar";
 import { AlertCircle, LogOut } from "./components/icons";
@@ -197,6 +200,12 @@ export default function App() {
   const [dismissedLocationWarning, setDismissedLocationWarning] = useState(false);
   const [exitModalState, setExitModalState] = useState<"none" | "busy" | "dirty" | "clean" | "exiting">("none");
 
+  // Local Auth & Security State
+  const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
+  const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null);
+  const [isLocked, setIsLocked] = useState(false);
+  const [showInitialSetup, setShowInitialSetup] = useState(false);
+
   // Dirty and Busy tracking
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -274,6 +283,101 @@ export default function App() {
     }
   };
 
+  const refreshSecurityStatus = async () => {
+    try {
+      const sec = await invoke<SecurityStatus>("get_security_status_cmd");
+      setSecurityStatus(sec);
+      if (!sec.has_users) {
+        setShowInitialSetup(true);
+      } else if (sec.security_enabled) {
+        if (sec.current_user) {
+          setCurrentUser(sec.current_user);
+          setIsLocked(sec.is_locked);
+        } else {
+          setCurrentUser(null);
+          setIsLocked(false);
+        }
+      } else {
+        setCurrentUser({
+          id: 0,
+          name: "व्यवस्थापक (Owner)",
+          role: "owner",
+        });
+        setIsLocked(false);
+      }
+      return sec;
+    } catch (e) {
+      console.error("get_security_status_cmd load error:", e);
+    }
+  };
+
+  const handleLockClick = async () => {
+    try {
+      await invoke("lock_session_cmd");
+      setIsLocked(true);
+    } catch (err) {
+      console.error("Manual lock error:", err);
+    }
+  };
+
+  const handleUnlock = async () => {
+    setIsLocked(false);
+    await refreshSecurityStatus();
+  };
+
+  const handleSwitchUser = () => {
+    setIsLocked(false);
+    setCurrentUser(null);
+  };
+
+  // Auto-lock idle timer
+  useEffect(() => {
+    if (!securityStatus?.security_enabled || !currentUser || isLocked) {
+      return;
+    }
+
+    const mins = securityStatus.auto_lock_minutes > 0 ? securityStatus.auto_lock_minutes : 10;
+    const timeoutMs = mins * 60 * 1000;
+    let timer: any = null;
+
+    const resetTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        try {
+          await invoke("lock_session_cmd");
+          setIsLocked(true);
+        } catch (err) {
+          console.error("Auto lock error:", err);
+        }
+      }, timeoutMs);
+    };
+
+    const activityEvents = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
+    activityEvents.forEach((ev) => window.addEventListener(ev, resetTimer, { passive: true }));
+    resetTimer();
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      activityEvents.forEach((ev) => window.removeEventListener(ev, resetTimer));
+    };
+  }, [securityStatus?.security_enabled, securityStatus?.auto_lock_minutes, currentUser, isLocked]);
+
+  // Deny staff from accessing restricted views
+  useEffect(() => {
+    if (currentUser?.role === "staff") {
+      const staffBlockedViews: View[] = [
+        "Opening Stock",
+        "Stock Adjustment",
+        "Tally Import",
+        "Settings",
+        "Backup",
+      ];
+      if (staffBlockedViews.includes(currentView)) {
+        setCurrentView("Dashboard");
+      }
+    }
+  }, [currentUser, currentView]);
+
   const handleRestoreFromPath = async (backupPath: string) => {
     if (!backupPath) return;
     setIsRestoringFromCorruption(true);
@@ -313,6 +417,7 @@ export default function App() {
 
     invoke<string>("init_db_cmd")
       .then(async () => {
+        await refreshSecurityStatus();
         // Startup integrity check (PRAGMA quick_check)
         try {
           const report = await invoke<IntegrityCheckReport>("check_db_integrity_cmd");
@@ -398,6 +503,8 @@ export default function App() {
       {/* Sidebar with Navigation + Exit Button */}
       <Sidebar
         currentView={currentView}
+        currentUser={currentUser}
+        onLockClick={securityStatus?.security_enabled && currentUser ? handleLockClick : undefined}
         onNavigate={(v) => {
           setCurrentView(v);
           setAlteringInvoice(null);
@@ -438,6 +545,7 @@ export default function App() {
               <div className="h-full">
                 {currentView === "Dashboard" && (
                   <DashboardView
+                    currentUser={currentUser}
                     settings={settings}
                     refreshTrigger={refreshTrigger}
                     onNavigate={(v) => {
@@ -494,6 +602,7 @@ export default function App() {
 
                 {currentView === "Stock" && (
                   <StockView
+                    currentUser={currentUser}
                     settings={settings}
                     refreshTrigger={refreshTrigger}
                     t={t}
@@ -534,6 +643,7 @@ export default function App() {
 
                 {currentView === "Len-Den" && (
                   <LenDenView
+                    currentUser={currentUser}
                     refreshTrigger={refreshTrigger}
                     onRefresh={triggerGlobalRefresh}
                     booksLockedUntil={settings.booksLockedUntil}
@@ -550,6 +660,7 @@ export default function App() {
 
                 {currentView === "Parties" && (
                   <PartiesView
+                    currentUser={currentUser}
                     refreshTrigger={refreshTrigger}
                     onRefresh={triggerGlobalRefresh}
                     t={t}
@@ -559,6 +670,7 @@ export default function App() {
 
                 {currentView === "Items" && (
                   <ItemsView
+                    currentUser={currentUser}
                     refreshTrigger={refreshTrigger}
                     onRefresh={triggerGlobalRefresh}
                     t={t}
@@ -577,6 +689,7 @@ export default function App() {
 
                 {currentView === "Reports" && (
                   <ReportsView
+                    currentUser={currentUser}
                     settings={settings}
                     refreshTrigger={refreshTrigger}
                     onRefresh={triggerGlobalRefresh}
@@ -597,6 +710,18 @@ export default function App() {
                     onSave={updateSettings}
                     t={t}
                     lang={lang}
+                    currentUser={currentUser}
+                    securityStatus={securityStatus}
+                    onEnableSecurity={() => setShowInitialSetup(true)}
+                    onUpdateAutoLock={async (minutes) => {
+                      try {
+                        const updated = { ...settings, autoLockMinutes: minutes };
+                        await updateSettings(updated);
+                        await refreshSecurityStatus();
+                      } catch (e) {
+                        console.error("Update auto lock error:", e);
+                      }
+                    }}
                   />
                 )}
 
@@ -740,6 +865,36 @@ export default function App() {
           <h2 className="text-xl font-bold font-serif mb-2">सुरक्षित रूप से बंद हो रहा है...</h2>
           <p className="text-sm text-surface/80">WAL चेकपॉइंट और बैकअप लिया जा रहा है। कृपया प्रतीक्षा करें।</p>
         </div>
+      )}
+
+      {/* Local Auth Setup Wizard (First launch after update or manual enable) */}
+      {showInitialSetup && (
+        <InitialSetupWizard
+          onComplete={async () => {
+            setShowInitialSetup(false);
+            await refreshSecurityStatus();
+          }}
+        />
+      )}
+
+      {/* Login Modal at App Start */}
+      {securityStatus?.security_enabled && !currentUser && !showInitialSetup && (
+        <LoginModal
+          onLoginSuccess={(user) => {
+            setCurrentUser(user);
+            setIsLocked(false);
+          }}
+        />
+      )}
+
+      {/* Lock Screen Overlay (Over the app WITHOUT unmounting views) */}
+      {isLocked && currentUser && (
+        <LockScreenOverlay
+          currentUser={currentUser}
+          hasUnsavedWork={isDirty}
+          onUnlocked={handleUnlock}
+          onSwitchUser={handleSwitchUser}
+        />
       )}
     </div>
   );

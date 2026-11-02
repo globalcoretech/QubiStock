@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { PartyBalance } from "../types";
+import { PartyBalance, SessionUser } from "../types";
 import { Translations, Language } from "../i18n";
 import { Search, X, ArrowDownLeft, ArrowUpRight, BookOpen, Wallet } from "../components/icons";
 import { EmptyTableMessage } from "../components/FeedbackBanner";
@@ -16,6 +16,7 @@ interface LenDenViewProps {
   lang: Language;
   shopName?: string;
   onOpenPayment?: (partyId?: number, type?: "receipt" | "payment") => void;
+  currentUser?: SessionUser | null;
 }
 
 type BalanceFilter = "all" | "receivable" | "payable" | "settled";
@@ -28,6 +29,7 @@ export function LenDenView({
   lang,
   shopName = "श्री राम कृषि केंद्र",
   onOpenPayment,
+  currentUser,
 }: LenDenViewProps) {
   const [balances, setBalances] = useState<PartyBalance[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -349,6 +351,7 @@ export function LenDenView({
 
       {/* Full Account Statement Modal */}
       <StatementModal
+        currentUser={currentUser}
         partyId={selectedPartyId}
         isOpen={isStatementOpen}
         onClose={() => {

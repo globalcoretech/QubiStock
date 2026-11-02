@@ -8,6 +8,7 @@ import {
   TopReceivableParty,
   LowStockItem,
   BackupStatusInfo,
+  SessionUser,
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { formatCurrency } from "../utils/formatters";
@@ -38,6 +39,7 @@ interface DashboardViewProps {
   onPrintInvoice?: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
   t: Translations;
   lang: Language;
+  currentUser?: SessionUser | null;
 }
 
 export function DashboardView({
@@ -48,6 +50,7 @@ export function DashboardView({
   onOpenAddItem,
   t,
   lang,
+  currentUser,
 }: DashboardViewProps) {
   const [stats, setStats] = useState<DashboardStats>({
     today_sales: 0,
@@ -70,6 +73,8 @@ export function DashboardView({
 
   const isBillBlocked =
     !settings.shopName?.trim() || (settings.isGstRegistered && !settings.gstin?.trim());
+
+  const isStaff = currentUser?.role === "staff";
 
   const todayIso = localTodayIso();
 
@@ -214,7 +219,9 @@ export function DashboardView({
           {backupStatus && (
             <button
               type="button"
-              onClick={() => onNavigate("Backup")}
+              onClick={() => {
+                if (!isStaff) onNavigate("Backup");
+              }}
               data-testid="dashboard-backup-status-chip"
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all hover:scale-105 active:scale-95 cursor-pointer shadow-2xs ${
                 (backupStatus.isBackupRecent ?? backupStatus.is_recent)
@@ -515,15 +522,17 @@ export function DashboardView({
           <span className="truncate">{lang === "hi" ? "रिपोर्ट देखो" : "View Reports"}</span>
         </button>
 
-        <button
-          type="button"
-          data-testid="btn-take-backup"
-          onClick={() => onNavigate("Backup")}
-          className="flex-1 py-1.5 px-2.5 rounded-lg border border-border bg-surface hover:bg-paper text-ink font-semibold text-xs shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-        >
-          <Database size={14} className="text-amber-700 flex-shrink-0" />
-          <span className="truncate">{lang === "hi" ? "बैकअप लो" : "Take Backup"}</span>
-        </button>
+        {!isStaff && (
+          <button
+            type="button"
+            data-testid="btn-take-backup"
+            onClick={() => onNavigate("Backup")}
+            className="flex-1 py-1.5 px-2.5 rounded-lg border border-border bg-surface hover:bg-paper text-ink font-semibold text-xs shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Database size={14} className="text-amber-700 flex-shrink-0" />
+            <span className="truncate">{lang === "hi" ? "बैकअप लो" : "Take Backup"}</span>
+          </button>
+        )}
       </div>
 
       {/* 4. Four Compact KPI Cards in 1 Row */}
@@ -549,12 +558,14 @@ export function DashboardView({
             {lang === "hi" ? "आज की खरीदी (माल आया)" : "Today's Purchases"}
           </div>
           <div className="text-lg sm:text-xl font-serif font-bold text-blue-950 num-tabular tracking-tight">
-            {formatCurrency(stats.today_purchases)}
+            {isStaff ? "••••••" : formatCurrency(stats.today_purchases)}
           </div>
           <div className="text-[10px] text-blue-800/80 font-medium truncate">
-            {lang === "hi"
-              ? `कल: ${yesterdayComp ? formatCurrency(yesterdayComp.yesterday_purchases) : "₹0"}`
-              : `Yday: ${yesterdayComp ? formatCurrency(yesterdayComp.yesterday_purchases) : "₹0"}`}
+            {isStaff
+              ? (lang === "hi" ? "केवल व्यवस्थापक" : "Owner only")
+              : (lang === "hi"
+                  ? `कल: ${yesterdayComp ? formatCurrency(yesterdayComp.yesterday_purchases) : "₹0"}`
+                  : `Yday: ${yesterdayComp ? formatCurrency(yesterdayComp.yesterday_purchases) : "₹0"}`)}
           </div>
         </div>
 

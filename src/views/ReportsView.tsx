@@ -1953,7 +1953,7 @@ export function ReportsView({
                                   </span>
                                   {row.invoice_no && (
                                     <div className="inline-flex items-center gap-1">
-                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && !isCancelled && (
+                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && !isCancelled && !isStaff && (
                                         <>
                                           {onAlterInvoice && (
                                             <button
@@ -2007,7 +2007,7 @@ export function ReportsView({
                                           </button>
                                         </>
                                       )}
-                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && (
+                                      {(activeTab === "sales_reg" || activeTab === "purchase_reg") && !isStaff && (
                                         <button
                                           type="button"
                                           onClick={() => {

@@ -38,11 +38,11 @@ export const InitialSetupWizard: React.FC<InitialSetupWizardProps> = ({ onComple
 
     try {
       setLoading(true);
-      const key: string = await invoke("create_owner_initial_cmd", {
-        ownerName: name,
-        ownerPassword: password,
+      const res: any = await invoke("create_owner_initial_cmd", {
+        name,
+        password,
       });
-      setGeneratedKey(key);
+      setGeneratedKey(res.recovery_key);
       setStep("key");
     } catch (err: any) {
       setError(typeof err === "string" ? err : err?.message || "व्यवस्थापक बनाने में त्रुटि हुई।");

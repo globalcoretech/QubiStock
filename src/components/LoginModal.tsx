@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Lock, User, AlertTriangle, Key, Copy, Check, Printer, Shield } from "lucide-react";
+import { Lock, User, AlertTriangle, Copy, Check, Printer, Shield } from "lucide-react";
 import { SessionUser, UserInfo } from "../types";
 
 interface LoginModalProps {
@@ -91,7 +91,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
       setLoading(true);
       const generatedNewKey: string = await invoke("reset_owner_with_recovery_key_cmd", {
         recoveryKey: key,
-        newOwnerPassword: newPassword,
+        newPassword,
       });
       setForgotSuccessNewKey(generatedNewKey);
     } catch (err: any) {

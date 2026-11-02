@@ -5436,6 +5436,7 @@ pub fn graceful_exit_cmd(app: AppHandle) -> Result<(), String> {
 
 // ==================== AUTH & SECURITY COMMANDS ====================
 
+#[allow(dead_code)]
 pub fn get_app_session_user(app: &AppHandle) -> Option<crate::auth::SessionUser> {
     if let Some(state) = app.try_state::<crate::auth::AuthState>() {
         state.current_user.lock().unwrap().clone()
