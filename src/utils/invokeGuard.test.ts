@@ -313,4 +313,145 @@ describe("Invoke Guard: Rust commands and Frontend invoke contracts", () => {
       `Frontend passes null/undefined to non-Option Rust parameters: \n${nullViolations.join("\n")}`
     ).toEqual([]);
   });
+
+  describe("Tauri Capabilities & Permissions Guard", () => {
+    const tauriConfPath = path.join(rootDir, "src-tauri", "tauri.conf.json");
+    const capabilitiesDir = path.join(rootDir, "src-tauri", "capabilities");
+
+    it("verifies capabilities files exist, match real window labels, and grant required permissions for all frontend Tauri JS APIs", () => {
+      // 1. Read real window labels from tauri.conf.json
+      expect(fs.existsSync(tauriConfPath), "tauri.conf.json must exist").toBe(true);
+      const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, "utf-8"));
+      const configWindows: string[] = (tauriConf.app?.windows || []).map((w: any) => w.label);
+      expect(configWindows.length, "at least one window must be configured in tauri.conf.json").toBeGreaterThan(0);
+
+      // 2. Read capabilities directory
+      expect(fs.existsSync(capabilitiesDir), "src-tauri/capabilities directory must exist").toBe(true);
+      const capFiles = fs.readdirSync(capabilitiesDir).filter((f) => f.endsWith(".json"));
+      expect(capFiles.length, "at least one capability JSON file must exist in src-tauri/capabilities").toBeGreaterThan(0);
+
+      const grantedPermissions = new Set<string>();
+      const windowLabelMismatches: string[] = [];
+
+      for (const cf of capFiles) {
+        const capPath = path.join(capabilitiesDir, cf);
+        const cap = JSON.parse(fs.readFileSync(capPath, "utf-8"));
+
+        // Validate window labels
+        const capWindows: string[] = cap.windows || [];
+        const matchesRealWindow = capWindows.some(
+          (cw) => cw === "*" || configWindows.includes(cw)
+        );
+        if (!matchesRealWindow) {
+          windowLabelMismatches.push(
+            `${cf} targets windows [${capWindows.join(", ")}], but none match real window labels [${configWindows.join(", ")}]`
+          );
+        }
+
+        for (const p of cap.permissions || []) {
+          const permStr = typeof p === "string" ? p : p.identifier;
+          if (permStr) grantedPermissions.add(permStr);
+        }
+      }
+
+      expect(
+        windowLabelMismatches,
+        `Capability window labels must match real windows from tauri.conf.json: \n${windowLabelMismatches.join("\n")}`
+      ).toEqual([]);
+
+      // 3. Helper to check if a permission is satisfied by grantedPermissions
+      const isPermitted = (prefix: string, specificAllow: string): boolean => {
+        return (
+          grantedPermissions.has(`${prefix}:default`) ||
+          grantedPermissions.has(`${prefix}:*`) ||
+          grantedPermissions.has(`${prefix}:${specificAllow}`) ||
+          grantedPermissions.has("core:default")
+        );
+      };
+
+      // 4. Scan frontend code for Event, Window, and Plugin APIs
+      const permissionViolations: string[] = [];
+
+      for (const f of frontendFiles) {
+        const rel = path.relative(rootDir, f).replace(/\\/g, "/");
+        const content = fs.readFileSync(f, "utf-8");
+        const lines = content.split("\n");
+
+        lines.forEach((lineText, idx) => {
+          const lineNum = idx + 1;
+
+          // Event API checks: listen, once, emit, unlisten
+          const hasEventImport =
+            lineText.includes("@tauri-apps/api/event") ||
+            content.includes("@tauri-apps/api/event");
+
+          if (hasEventImport) {
+            const eventCalls = ["listen", "once", "emit", "unlisten"];
+            for (const call of eventCalls) {
+              const regex = new RegExp(`\\b${call}\\s*\\(`, "g");
+              if (regex.test(lineText)) {
+                const specific = `allow-${call}`;
+                if (!isPermitted("core:event", specific)) {
+                  permissionViolations.push(
+                    `${rel}:${lineNum} uses event.${call}() without matching capability permission (requires 'core:event:default' or 'core:event:${specific}')`
+                  );
+                }
+              }
+            }
+          }
+
+          // Window API checks: imports from @tauri-apps/api/window or webviewWindow
+          const hasWindowImport =
+            lineText.includes("@tauri-apps/api/window") ||
+            lineText.includes("@tauri-apps/api/webviewWindow");
+
+          if (hasWindowImport) {
+            const windowCalls = [
+              "close",
+              "destroy",
+              "hide",
+              "show",
+              "setFocus",
+              "minimize",
+              "maximize",
+              "unminimize",
+              "onCloseRequested",
+            ];
+            for (const call of windowCalls) {
+              const regex = new RegExp(`\\b${call}\\s*\\(`, "g");
+              if (regex.test(lineText)) {
+                const specific = `allow-${camelToSnake(call).replace(/_/g, "-")}`;
+                if (!isPermitted("core:window", specific)) {
+                  permissionViolations.push(
+                    `${rel}:${lineNum} uses window.${call}() without matching capability permission (requires 'core:window:default' or 'core:window:${specific}')`
+                  );
+                }
+              }
+            }
+          }
+
+          // Plugin import checks: @tauri-apps/plugin-<name>
+          const pluginMatch = lineText.match(/@tauri-apps\/plugin-([a-zA-Z0-9_-]+)/);
+          if (pluginMatch) {
+            const pluginName = pluginMatch[1];
+            const hasPluginPerm =
+              grantedPermissions.has(`${pluginName}:default`) ||
+              grantedPermissions.has(`${pluginName}:*`) ||
+              Array.from(grantedPermissions).some((p) => p.startsWith(`${pluginName}:`));
+
+            if (!hasPluginPerm) {
+              permissionViolations.push(
+                `${rel}:${lineNum} imports '@tauri-apps/plugin-${pluginName}' without matching capability permission '${pluginName}:default'`
+              );
+            }
+          }
+        });
+      }
+
+      expect(
+        permissionViolations,
+        `Frontend uses Tauri APIs without required capabilities permissions: \n${permissionViolations.join("\n")}`
+      ).toEqual([]);
+    });
+  });
 });

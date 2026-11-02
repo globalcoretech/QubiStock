@@ -74,7 +74,23 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 use tauri::Emitter;
                 api.prevent_close();
+                crate::commands::EXIT_REQUEST_ACKNOWLEDGED.store(false, std::sync::atomic::Ordering::SeqCst);
                 let _ = window.emit("request-app-exit", ());
+
+                // Safe-exit fallback: if the close-request listener cannot be registered or frontend does not answer within 3 seconds,
+                // Rust must NOT leave the window stuck: run PRAGMA wal_checkpoint(TRUNCATE), try verified backup (5s limit), and exit.
+                let app_handle = window.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if !crate::commands::EXIT_REQUEST_ACKNOWLEDGED.load(std::sync::atomic::Ordering::SeqCst) {
+                        eprintln!("[Krishi Kendra] Frontend did not answer CloseRequested within 3s; executing safe-exit fallback...");
+                        if let Ok(conn) = crate::commands::get_conn(&app_handle) {
+                            let _ = crate::commands::safe_exit_fallback_helper(Some(&conn), Some(&app_handle));
+                        } else {
+                            let _ = crate::commands::safe_exit_fallback_helper(None, Some(&app_handle));
+                        }
+                    }
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -161,7 +177,8 @@ fn main() {
             commands::update_user_status_cmd,
             commands::reset_user_password_cmd,
             commands::change_own_password_cmd,
-            commands::get_login_logs_cmd
+            commands::get_login_logs_cmd,
+            commands::acknowledge_exit_request_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

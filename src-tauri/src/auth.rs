@@ -113,7 +113,8 @@ pub fn get_command_minimum_role(command: &str) -> MinimumRole {
         | "unlock_session_cmd"
         | "reset_owner_with_recovery_key_cmd"
         | "get_db_safety_info_cmd"
-        | "graceful_exit_cmd" => MinimumRole::Public,
+        | "graceful_exit_cmd"
+        | "acknowledge_exit_request_cmd" => MinimumRole::Public,
 
         // Staff & Owner
         "get_current_user_cmd"

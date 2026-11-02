@@ -743,6 +743,9 @@ export function setupDemoMocks() {
           },
         ];
 
+      case "acknowledge_exit_request_cmd":
+        return null;
+
       default:
         console.warn(`[mockInvoke] Unhandled command: ${cmd}`, payload);
         return null;

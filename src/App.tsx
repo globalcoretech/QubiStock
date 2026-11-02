@@ -205,6 +205,7 @@ export default function App() {
   const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null);
   const [isLocked, setIsLocked] = useState(false);
   const [showInitialSetup, setShowInitialSetup] = useState(false);
+  const [exitListenerWarning, setExitListenerWarning] = useState<string | null>(null);
 
   // Dirty and Busy tracking
   const [isDirty, setIsDirty] = useState(false);
@@ -403,17 +404,31 @@ export default function App() {
 
     // Listen for CloseRequested interception event from Rust Tauri window
     let unlistenExit: (() => void) | undefined;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) => {
-        listen("request-app-exit", () => {
-          handleRequestExit();
-        }).then((unsub) => {
-          unlistenExit = unsub;
+    try {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          listen("request-app-exit", () => {
+            invoke("acknowledge_exit_request_cmd").catch(() => {});
+            handleRequestExit();
+          })
+            .then((unsub) => {
+              unlistenExit = unsub;
+            })
+            .catch((err) => {
+              console.warn("Failed to listen for request-app-exit:", err);
+              setExitListenerWarning(
+                typeof err === "string" ? err : err?.message || String(err)
+              );
+            });
+        })
+        .catch((err) => {
+          console.warn("Failed to load @tauri-apps/api/event:", err);
+          setExitListenerWarning(String(err));
         });
-      })
-      .catch(() => {
-        // Ignored in non-Tauri / mock test environment
-      });
+    } catch (err) {
+      console.warn("Exception during exit listener registration:", err);
+      setExitListenerWarning(String(err));
+    }
 
     invoke<string>("init_db_cmd")
       .then(async () => {
@@ -518,6 +533,27 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        {/* Close Listener Failure Visible Warning Banner */}
+        {exitListenerWarning && (
+          <div
+            data-testid="exit-listener-warning-banner"
+            className="bg-amber-100 border-b border-amber-300 px-4 py-2 text-amber-950 text-xs font-semibold flex items-center justify-between shadow-2xs z-30"
+          >
+            <span>
+              {lang === "hi"
+                ? `चेतावनी: विंडो क्लोज़ लिसनर सक्रिय नहीं हो सका (${exitListenerWarning})। सुरक्षित एग्जिट फॉलबैक सक्रिय है।`
+                : `Warning: Window close listener could not be registered (${exitListenerWarning}). Safe exit fallback active.`}
+            </span>
+            <button
+              type="button"
+              onClick={() => setExitListenerWarning(null)}
+              className="px-2 py-0.5 rounded bg-amber-200 hover:bg-amber-300 text-amber-900 text-xs font-bold transition-colors cursor-pointer ml-3"
+            >
+              {lang === "hi" ? "समझ गया" : "Dismiss"}
+            </button>
+          </div>
+        )}
+
         {/* Storage Location Warning Banner (OneDrive / Dropbox / Removable drive) */}
         {(safetyInfo?.sync_warning || safetyInfo?.syncWarning) && !dismissedLocationWarning && (
           <div

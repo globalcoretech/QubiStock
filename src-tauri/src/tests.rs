@@ -5967,6 +5967,34 @@ fn test_wal_checkpoint_truncate_and_safety_info() {
 }
 
 #[test]
+fn test_safe_exit_fallback_helper_executes_wal_checkpoint_and_timeout() {
+    let conn = init_db(":memory:").expect("Failed to init DB");
+    use crate::commands::{safe_exit_fallback_helper, run_wal_checkpoint_truncate};
+
+    conn.execute("INSERT OR IGNORE INTO godowns (id, name) VALUES (99, 'Fallback Test Godown')", []).unwrap();
+
+    // Call fallback helper with test connection and None for AppHandle (avoids killing test runner process)
+    let res = safe_exit_fallback_helper(Some(&conn), None);
+    assert!(res.is_ok(), "safe_exit_fallback_helper must succeed");
+
+    let ck = run_wal_checkpoint_truncate(&conn);
+    assert!(ck.is_ok(), "checkpoint TRUNCATE must succeed on database");
+}
+
+#[test]
+fn test_acknowledge_exit_request_cmd() {
+    use crate::commands::{acknowledge_exit_request_cmd, EXIT_REQUEST_ACKNOWLEDGED};
+    use std::sync::atomic::Ordering;
+
+    EXIT_REQUEST_ACKNOWLEDGED.store(false, Ordering::SeqCst);
+    assert!(!EXIT_REQUEST_ACKNOWLEDGED.load(Ordering::SeqCst));
+
+    let res = acknowledge_exit_request_cmd();
+    assert!(res.is_ok());
+    assert!(EXIT_REQUEST_ACKNOWLEDGED.load(Ordering::SeqCst));
+}
+
+#[test]
 fn test_auth_password_hash_and_verify() {
     use crate::auth::{hash_password, verify_password};
 

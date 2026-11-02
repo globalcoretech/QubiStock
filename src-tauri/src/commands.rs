@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, command};
 use rusqlite::{Connection, OptionalExtension, params};
 use crate::db::init_db;
@@ -19,7 +20,7 @@ fn get_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir)
 }
 
-fn get_conn(app: &AppHandle) -> Result<Connection, String> {
+pub fn get_conn(app: &AppHandle) -> Result<Connection, String> {
     let path = get_db_path(app)?;
     init_db(path.to_str().unwrap()).map_err(|e| e.to_string())
 }
@@ -5413,6 +5414,40 @@ pub fn run_wal_checkpoint_truncate(conn: &Connection) -> Result<String, String> 
         }
         Err(e) => Err(format!("wal_checkpoint failed: {}", e)),
     }
+}
+
+pub static EXIT_REQUEST_ACKNOWLEDGED: AtomicBool = AtomicBool::new(false);
+
+#[command]
+pub fn acknowledge_exit_request_cmd() -> Result<(), String> {
+    EXIT_REQUEST_ACKNOWLEDGED.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+pub fn safe_exit_fallback_helper(
+    conn: Option<&Connection>,
+    app: Option<&AppHandle>,
+) -> Result<(), String> {
+    eprintln!("[Krishi Kendra] Executing safe-exit fallback helper...");
+
+    // 1. Flush WAL to main database file with TRUNCATE
+    if let Some(c) = conn {
+        if let Err(e) = run_wal_checkpoint_truncate(c) {
+            eprintln!("[Krishi Kendra] Fallback WAL checkpoint warning: {}", e);
+        }
+    }
+
+    // 2. Try verified exit backup with 5-second hard limit (never blocks exit)
+    if let Some(a) = app {
+        let _ = crate::backup::auto_backup_with_timeout(
+            a,
+            "safe exit fallback",
+            std::time::Duration::from_secs(5),
+        );
+        a.exit(0);
+    }
+
+    Ok(())
 }
 
 #[command]
