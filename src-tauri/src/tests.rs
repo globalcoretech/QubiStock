@@ -6442,15 +6442,10 @@ fn test_multithreaded_audit_user_isolation() {
 }
 
 #[test]
-fn test_permission_matrix_covers_all_main_commands_and_default_owner() {
-    use std::path::Path;
-    use crate::auth::{get_command_minimum_role, MinimumRole, PERMISSION_MATRIX};
+fn test_permission_matrix_completeness_from_main_rs() {
+    use crate::auth::{PERMISSION_TABLE, PERMISSION_MATRIX};
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_else(|_| ".".to_string());
-    let main_rs_path = Path::new(&manifest_dir).join("src/main.rs");
-    let main_rs_content = std::fs::read_to_string(&main_rs_path)
-        .expect("Failed to read src/main.rs for permission matrix check");
+    let main_rs_content = include_str!("main.rs");
 
     let handler_start = main_rs_content
         .find("tauri::generate_handler![")
@@ -6474,6 +6469,12 @@ fn test_permission_matrix_covers_all_main_commands_and_default_owner() {
     );
 
     for cmd in &registered_commands {
+        let is_in_table = PERMISSION_TABLE.iter().any(|p| p.name == cmd);
+        assert!(
+            is_in_table,
+            "Command '{}' is registered in main.rs generate_handler! but missing from auth::PERMISSION_TABLE",
+            cmd
+        );
         let is_in_matrix = PERMISSION_MATRIX.iter().any(|(name, _)| *name == cmd);
         assert!(
             is_in_matrix,
@@ -6482,55 +6483,178 @@ fn test_permission_matrix_covers_all_main_commands_and_default_owner() {
         );
     }
 
-    // Default for any unknown command must be MinimumRole::Owner
-    let unknown_role = get_command_minimum_role("completely_unknown_future_command_cmd");
+    assert_eq!(
+        registered_commands.len(),
+        PERMISSION_TABLE.len(),
+        "Count of generate_handler commands ({}) must match PERMISSION_TABLE count ({})",
+        registered_commands.len(),
+        PERMISSION_TABLE.len()
+    );
+}
+
+#[test]
+fn test_permission_unknown_command_defaults_to_owner() {
+    use crate::auth::{get_command_minimum_role, is_command_allowed_while_locked, check_command_permission, MinimumRole, SessionUser};
+
+    let unknown_cmd = "completely_unknown_future_secret_command_cmd";
+    let unknown_role = get_command_minimum_role(unknown_cmd);
     assert_eq!(
         unknown_role,
         MinimumRole::Owner,
         "Unknown commands must default to MinimumRole::Owner"
     );
+
+    assert!(
+        !is_command_allowed_while_locked(unknown_cmd),
+        "Unknown commands must NOT be allowed while locked"
+    );
+
+    // Unauthenticated access denied
+    let unauth_res = check_command_permission(true, None, false, unknown_cmd);
+    assert!(unauth_res.is_err());
+
+    // Staff access denied
+    let staff = SessionUser {
+        id: 99,
+        name: "test_staff".to_string(),
+        role: "staff".to_string(),
+    };
+    let staff_res = check_command_permission(true, Some(&staff), false, unknown_cmd);
+    assert!(staff_res.is_err());
+
+    // Owner access allowed
+    let owner = SessionUser {
+        id: 1,
+        name: "test_owner".to_string(),
+        role: "owner".to_string(),
+    };
+    let owner_res = check_command_permission(true, Some(&owner), false, unknown_cmd);
+    assert!(owner_res.is_ok());
 }
 
 #[test]
-fn test_locked_state_enforces_command_denial() {
+fn test_locked_state_allowed_commands() {
     use crate::auth::{check_command_permission, SessionUser};
+    use crate::commands::{mask_settings_for_locked_state, AppSettingsPayload};
 
-    let user = SessionUser {
+    let owner = SessionUser {
         id: 1,
         name: "test_owner".to_string(),
         role: "owner".to_string(),
     };
 
-    // When session is locked:
-    // Only login_cmd, unlock_session_cmd, logout_cmd, get_security_status_cmd are allowed
-    assert!(check_command_permission(true, Some(&user), true, "login_cmd").is_ok());
-    assert!(check_command_permission(true, Some(&user), true, "unlock_session_cmd").is_ok());
-    assert!(check_command_permission(true, Some(&user), true, "logout_cmd").is_ok());
-    assert!(check_command_permission(true, Some(&user), true, "get_security_status_cmd").is_ok());
+    // Exactly these 7 commands must be allowed while locked or not logged in:
+    let allowed_locked_cmds = vec![
+        "login_cmd",
+        "unlock_session_cmd",
+        "logout_cmd",
+        "get_security_status_cmd",
+        "get_settings_cmd",
+        "acknowledge_exit_request_cmd",
+        "safe_exit_app_cmd",
+    ];
 
-    // All other commands must be denied with locked session error
-    let locked_denied_commands = vec![
-        "get_stock_list_cmd",
+    for cmd in &allowed_locked_cmds {
+        // Allowed when session is locked
+        let locked_res = check_command_permission(true, Some(&owner), true, cmd);
+        assert!(
+            locked_res.is_ok(),
+            "Command '{}' must be allowed while locked, got error: {:?}",
+            cmd,
+            locked_res.err()
+        );
+
+        // Allowed when unauthenticated / not logged in
+        let unauth_res = check_command_permission(true, None, false, cmd);
+        assert!(
+            unauth_res.is_ok(),
+            "Command '{}' must be allowed while not logged in, got error: {:?}",
+            cmd,
+            unauth_res.err()
+        );
+    }
+
+    // Commands that must be strictly denied while locked
+    let denied_cmds = vec![
         "save_invoice_cmd",
+        "get_stock_list_cmd",
         "get_dashboard_stats_cmd",
         "get_invoice_details_cmd",
         "backup_now_cmd",
-        "get_settings_cmd",
         "set_settings_cmd",
         "lock_session_cmd",
         "create_user_cmd",
         "get_users_cmd",
+        "alter_sale_cmd",
+        "cancel_invoice_cmd",
     ];
 
-    for cmd in locked_denied_commands {
-        let err = check_command_permission(true, Some(&user), true, cmd).unwrap_err();
+    for cmd in denied_cmds {
+        // Locked denial
+        let err = check_command_permission(true, Some(&owner), true, cmd).unwrap_err();
         assert!(
             err.contains("App is locked") || err.contains("लॉक"),
-            "Command '{}' should be rejected with lock error when session is locked, got: {}",
+            "Command '{}' should be rejected with lock error when locked, got: {}",
             cmd,
             err
         );
+
+        // Not logged in denial
+        let err_unauth = check_command_permission(true, None, false, cmd).unwrap_err();
+        assert!(
+            err_unauth.contains("Login required") || err_unauth.contains("लॉगिन"),
+            "Command '{}' should be rejected with login required when not logged in, got: {}",
+            cmd,
+            err_unauth
+        );
     }
+
+    // Prove mask_settings_for_locked_state strips sensitive banking/backup fields
+    let mut settings = AppSettingsPayload {
+        shop_name: "Krishi Seva Kendra".to_string(),
+        gstin: Some("22AAAAA0000A1Z5".to_string()),
+        state_code: Some("22".to_string()),
+        phone: Some("9876543210".to_string()),
+        address: Some("Main Market".to_string()),
+        bank_name: Some("SBI".to_string()),
+        bank_account_no: Some("1234567890".to_string()),
+        bank_ifsc: Some("SBIN0001234".to_string()),
+        bank_branch: Some("Raipur".to_string()),
+        upi_id: Some("krishi@upi".to_string()),
+        terms_and_conditions: Some("Terms".to_string()),
+        signature_text: Some("Auth Sign".to_string()),
+        signature_data: None,
+        logo_data: None,
+        default_bill_format: Some("a4".to_string()),
+        bill_language: Some("hi".to_string()),
+        visible_columns: None,
+        fy_prefix: Some("25-26".to_string()),
+        low_stock_threshold: Some(10),
+        footer_note: None,
+        selected_printer: None,
+        printer_paper_size: None,
+        print_offset_x_mm: None,
+        print_offset_y_mm: None,
+        print_mode: None,
+        is_gst_registered: true,
+        is_composition: false,
+        silent_print_beta: false,
+        backup_folder: Some("C:\\Secrets\\Backups".to_string()),
+        secondary_backup_folder: Some("D:\\Secrets\\Secondary".to_string()),
+        last_backup_time: None,
+        books_locked_until: None,
+    };
+
+    mask_settings_for_locked_state(&mut settings);
+    assert_eq!(settings.shop_name, "Krishi Seva Kendra");
+    assert_eq!(settings.phone, Some("9876543210".to_string()));
+    assert_eq!(settings.bank_name, None, "bank_name must be masked in locked state");
+    assert_eq!(settings.bank_account_no, None, "bank_account_no must be masked in locked state");
+    assert_eq!(settings.bank_ifsc, None, "bank_ifsc must be masked in locked state");
+    assert_eq!(settings.bank_branch, None, "bank_branch must be masked in locked state");
+    assert_eq!(settings.upi_id, None, "upi_id must be masked in locked state");
+    assert_eq!(settings.backup_folder, None, "backup_folder must be masked in locked state");
+    assert_eq!(settings.secondary_backup_folder, None, "secondary_backup_folder must be masked in locked state");
 }
 
 #[test]
@@ -6778,3 +6902,279 @@ fn test_staff_data_masking_per_command() {
 
 
 
+
+#[test]
+fn test_print_real_permission_matrix() {
+    use crate::auth::PERMISSION_TABLE;
+
+    println!("=== REAL PERMISSION MATRIX (RAW OUTPUT) ===");
+    println!("| Command | Minimum Role | Allowed While Locked | Masked for Staff |");
+    println!("| --- | --- | --- | --- |");
+    for p in PERMISSION_TABLE {
+        println!(
+            "| {} | {} | {} | {} |",
+            p.name,
+            p.min_role,
+            if p.allowed_while_locked { "Yes" } else { "No" },
+            if p.masked_for_staff { "Yes" } else { "No" }
+        );
+    }
+    println!("=== END PERMISSION MATRIX ===");
+}
+
+#[test]
+fn test_backup_helper_works_with_no_session() {
+    let temp_dir = std::env::temp_dir().join(format!("test_backup_nosession_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let db_path = temp_dir.join("test_nosession.db");
+    let backup_dir = temp_dir.join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    // Call backup_now_inner directly without any AuthState or SessionUser
+    let res = crate::backup::backup_now_inner(&conn, &backup_dir, None);
+    assert!(res.is_ok(), "backup_now_inner must succeed without session");
+    let info = res.unwrap();
+    assert!(info.success, "backup must report success");
+    assert!(std::path::Path::new(&info.primary_path).exists(), "backup file must exist on disk");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_lockout_duration_is_5_minutes() {
+    use crate::auth::{
+        verify_and_login_user, create_user_inner,
+        MAX_FAILED_LOGIN_ATTEMPTS, LOCKOUT_DURATION_MINUTES
+    };
+
+    assert_eq!(MAX_FAILED_LOGIN_ATTEMPTS, 5, "Max failed attempts must be 5");
+    assert_eq!(LOCKOUT_DURATION_MINUTES, 5, "Lockout duration must be 5 minutes");
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    let _ = create_user_inner(&conn, "lockout_test_user", "staff", "correct_pass123").unwrap();
+
+    // Fail 4 times
+    for i in 1..=4 {
+        let res = verify_and_login_user(&conn, "lockout_test_user", "wrong_pass");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains(&format!("शेष प्रयास: {}", 5 - i)));
+    }
+
+    // 5th failure must trigger 5-minute lockout
+    let res5 = verify_and_login_user(&conn, "lockout_test_user", "wrong_pass");
+    assert!(res5.is_err());
+    let err5 = res5.unwrap_err();
+    assert!(
+        err5.contains("5 मिनट") || err5.contains("5 minutes"),
+        "5th failure must report 5-minute lockout, got: {}",
+        err5
+    );
+
+    // Check locked_until in database
+    let (failed, locked_until): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT failed_attempts, locked_until FROM users WHERE name = 'lockout_test_user'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(failed, 5);
+    assert!(locked_until.is_some());
+    let until_dt = chrono::DateTime::parse_from_rfc3339(&locked_until.unwrap()).unwrap();
+    let diff = (until_dt.with_timezone(&chrono::Local) - chrono::Local::now()).num_seconds();
+    assert!(diff >= 280 && diff <= 310, "Lockout duration in DB should be approximately 300 seconds (5 mins), got {}s", diff);
+
+    // Attempting login during lockout must be immediately rejected with lockout message
+    let locked_attempt = verify_and_login_user(&conn, "lockout_test_user", "correct_pass123");
+    assert!(locked_attempt.is_err());
+    let locked_err = locked_attempt.unwrap_err();
+    assert!(
+        locked_err.contains("खाता लॉक है") || locked_err.contains("Account is locked"),
+        "Login during lockout must be denied, got: {}",
+        locked_err
+    );
+}
+
+#[test]
+fn test_secrets_never_leaked_in_command_responses() {
+    use crate::auth::{
+        create_user_inner, get_users_inner, get_security_status_inner,
+        verify_and_login_user, AuthState
+    };
+    use crate::commands::get_settings_inner;
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    // 1. Create owner with recovery key
+    let _owner = create_user_inner(&conn, "super_owner", "owner", "owner_pass_secret").unwrap();
+    conn.execute(
+        "UPDATE settings SET recovery_key_hash = 'ARGON2_SECRET_RECOVERY_KEY_HASH_VALUE' WHERE id = 1",
+        [],
+    ).unwrap();
+
+    // Command 1: get_users_cmd response (Vec<UserInfo>)
+    let users = get_users_inner(&conn).unwrap();
+    let users_json = serde_json::to_string(&users).unwrap();
+    assert!(
+        !users_json.contains("password_hash"),
+        "get_users_cmd must NOT contain password_hash: {}",
+        users_json
+    );
+    assert!(
+        !users_json.contains("recovery_key_hash"),
+        "get_users_cmd must NOT contain recovery_key_hash: {}",
+        users_json
+    );
+    assert!(
+        !users_json.contains("failed_attempts"),
+        "get_users_cmd must NOT contain failed_attempts internals: {}",
+        users_json
+    );
+
+    // Command 2: get_settings_cmd response (AppSettingsPayload)
+    let settings = get_settings_inner(&conn).unwrap();
+    let settings_json = serde_json::to_string(&settings).unwrap();
+    assert!(
+        !settings_json.contains("password_hash"),
+        "get_settings_cmd must NOT contain password_hash"
+    );
+    assert!(
+        !settings_json.contains("recovery_key_hash"),
+        "get_settings_cmd must NOT contain recovery_key_hash"
+    );
+    assert!(
+        !settings_json.contains("failed_attempts"),
+        "get_settings_cmd must NOT contain failed_attempts internals"
+    );
+
+    // Command 3: get_security_status_cmd response (SecurityStatus)
+    let auth_state = AuthState::default();
+    let status = get_security_status_inner(&conn, Some(&auth_state)).unwrap();
+    let status_json = serde_json::to_string(&status).unwrap();
+    assert!(
+        !status_json.contains("password_hash"),
+        "get_security_status_cmd must NOT contain password_hash"
+    );
+    assert!(
+        !status_json.contains("recovery_key_hash"),
+        "get_security_status_cmd must NOT contain recovery_key_hash"
+    );
+    assert!(
+        !status_json.contains("failed_attempts"),
+        "get_security_status_cmd must NOT contain failed_attempts internals"
+    );
+
+    // Command 4: login_cmd response (SessionUser)
+    let session = verify_and_login_user(&conn, "super_owner", "owner_pass_secret").unwrap();
+    let session_json = serde_json::to_string(&session).unwrap();
+    assert!(
+        !session_json.contains("password_hash"),
+        "login_cmd response must NOT contain password_hash"
+    );
+    assert!(
+        !session_json.contains("recovery_key_hash"),
+        "login_cmd response must NOT contain recovery_key_hash"
+    );
+    assert!(
+        !session_json.contains("failed_attempts"),
+        "login_cmd response must NOT contain failed_attempts internals"
+    );
+}
+
+#[test]
+fn test_audit_log_sample_rows_for_report() {
+    use crate::audit::write_audit;
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    // Sample 1: Item Edit
+    let item_before = r#"{"id":1,"name":"DAP 50kg","gst_rate":5000,"category":"fertilizer"}"#;
+    let item_after = r#"{"id":1,"name":"DAP 50kg Gold","gst_rate":5000,"category":"fertilizer"}"#;
+    write_audit(
+        &conn,
+        "item",
+        "1",
+        "update",
+        Some(item_before),
+        Some(item_after),
+        Some("Name updated to DAP 50kg Gold"),
+        Some("Ramesh Kumar (Staff)"),
+    ).unwrap();
+
+    // Sample 2: Invoice Alteration
+    let invoice_before = r#"{"invoice_no":"INV-2026-001","total_amount":500000,"status":"active"}"#;
+    let invoice_after = r#"{"invoice_no":"INV-2026-001","total_amount":480000,"status":"active"}"#;
+    write_audit(
+        &conn,
+        "sales_invoice",
+        "INV-2026-001",
+        "alter",
+        Some(invoice_before),
+        Some(invoice_after),
+        Some("Rate discount corrected after farmer request"),
+        Some("Owner Admin"),
+    ).unwrap();
+
+    // Sample 3: Payment Cancel
+    let payment_before = r#"{"payment_id":42,"party_id":10,"amount":250000,"status":"active"}"#;
+    let payment_after = r#"{"payment_id":42,"party_id":10,"amount":250000,"status":"cancelled"}"#;
+    write_audit(
+        &conn,
+        "payment",
+        "42",
+        "cancel",
+        Some(payment_before),
+        Some(payment_after),
+        Some("Cheque bounced by bank"),
+        Some("Owner Admin"),
+    ).unwrap();
+
+    // Verify 3 rows exist and print them
+    let mut stmt = conn.prepare(
+        "SELECT id, user_name, entity_type, entity_id, action, before_json, after_json, reason, created_at FROM audit_log ORDER BY id ASC"
+    ).unwrap();
+
+    let rows: Vec<(i64, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, String)> = stmt.query_map([], |r| {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+            r.get(6)?,
+            r.get(7)?,
+            r.get(8)?,
+        ))
+    }).unwrap().map(|r| r.unwrap()).collect();
+
+    assert_eq!(rows.len(), 3, "Exactly 3 sample audit rows must be recorded");
+
+    println!("=== SAMPLE AUDIT ROWS PRODUCED BY TEST ===");
+    for (id, user_name, entity_type, entity_id, action, before, after, reason, created_at) in &rows {
+        println!("Row #{}:", id);
+        println!("  user_name:   {:?}", user_name);
+        println!("  entity_type: {}", entity_type);
+        println!("  entity_id:   {}", entity_id);
+        println!("  action:      {}", action);
+        println!("  before_json: {}", before.as_deref().unwrap_or(""));
+        println!("  after_json:  {}", after.as_deref().unwrap_or(""));
+        println!("  reason:      {:?}", reason);
+        println!("  created_at:  {}", created_at);
+        println!("-------------------------------------------");
+    }
+    println!("=== END SAMPLE AUDIT ROWS ===");
+}

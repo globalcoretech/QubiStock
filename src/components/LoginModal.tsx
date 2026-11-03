@@ -170,19 +170,33 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
               यूज़र चुनें / Select User
             </label>
             <div className="relative">
-              <select
-                data-testid="login-user-select"
-                value={selectedUser}
-                onChange={(e) => setSelectedUser(e.target.value)}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm bg-white appearance-none pr-10"
-              >
-                {users.map((u) => (
-                  <option key={u.id} value={u.name}>
-                    {u.name} ({u.role === "owner" ? "व्यवस्थापक / Owner" : "कर्मचारी / Staff"})
-                  </option>
-                ))}
-              </select>
-              <User className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
+              {users.length > 0 ? (
+                <select
+                  data-testid="login-user-select"
+                  value={selectedUser}
+                  onChange={(e) => setSelectedUser(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm bg-white appearance-none pr-10"
+                >
+                  {users.map((u) => (
+                    <option key={u.id} value={u.name}>
+                      {u.name} ({u.role === "owner" ? "व्यवस्थापक / Owner" : "कर्मचारी / Staff"})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  data-testid="login-user-select"
+                  type="text"
+                  required
+                  value={selectedUser}
+                  onChange={(e) => setSelectedUser(e.target.value)}
+                  placeholder="यूज़रनेम / Username"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                />
+              )}
+              {users.length > 0 && (
+                <User className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
+              )}
             </div>
           </div>
 

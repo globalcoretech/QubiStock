@@ -277,9 +277,9 @@ export default function App() {
   const handleConfirmExit = async () => {
     setExitModalState("exiting");
     try {
-      await invoke("graceful_exit_cmd");
+      await invoke("safe_exit_app_cmd");
     } catch (e) {
-      console.error("graceful_exit_cmd error:", e);
+      console.error("safe_exit_app_cmd error:", e);
       setExitModalState("none");
     }
   };

@@ -203,6 +203,7 @@ pub fn copy_backups_with_verification(from_dir: &Path, to_dir: &Path) -> Result<
                     fs::copy(&p, &dest).map_err(|e| format!("फ़ाइल कॉपी करने में त्रुटि {}: {}", name, e))?;
 
                     if let Ok(c) = Connection::open(&dest) {
+                        let _ = crate::db::configure_connection(&c);
                         let st: Result<String, _> = c.query_row("PRAGMA integrity_check;", [], |r| r.get(0));
                         if st.map(|s| s == "ok").unwrap_or(false) {
                             copied_count += 1;
@@ -262,6 +263,7 @@ pub fn verify_backup(backup_path: &Path, expected_counts: &TableCounts) -> Resul
     let check_result: Result<(), String> = (|| {
         let backup_conn = Connection::open(backup_path)
             .map_err(|e| format!("Could not open backup connection: {}", e))?;
+        let _ = crate::db::configure_connection(&backup_conn);
 
         let integrity_result: Result<String, _> = backup_conn.query_row(
             "PRAGMA integrity_check;",
@@ -460,6 +462,7 @@ pub fn list_backups(conn: &Connection) -> Result<Vec<BackupInfo>, String> {
 
                     // Check integrity quickly
                     let is_verified = if let Ok(test_conn) = Connection::open(&path) {
+                        let _ = crate::db::configure_connection(&test_conn);
                         let res: Result<String, _> = test_conn.query_row(
                             "PRAGMA integrity_check;",
                             [],
@@ -646,6 +649,7 @@ pub fn check_db_integrity(db_path: &str, primary_dir: &Path) -> IntegrityCheckRe
 
             for p in files {
                 if let Ok(c) = Connection::open(&p) {
+                    let _ = crate::db::configure_connection(&c);
                     let st: Result<String, _> = c.query_row("PRAGMA quick_check;", [], |r| r.get(0));
                     if st.map(|s| s == "ok").unwrap_or(false) {
                         let name = p.file_name().unwrap().to_string_lossy().to_string();

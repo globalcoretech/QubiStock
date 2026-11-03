@@ -785,7 +785,7 @@ export interface UserInfo {
   name: string;
   role: UserRole;
   is_active: boolean;
-  failed_attempts: number;
+  failed_attempts?: number;
   locked_until: string | null;
   created_at: string;
 }

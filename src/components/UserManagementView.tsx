@@ -355,7 +355,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                           लॉक है (5 मिनट)
                         </span>
                       ) : (
-                        <span className="text-slate-600">{u.failed_attempts}</span>
+                        <span className="text-slate-600">{u.failed_attempts ?? 0}</span>
                       )}
                     </td>
                     <td className="p-3 pr-5 text-right space-x-2">

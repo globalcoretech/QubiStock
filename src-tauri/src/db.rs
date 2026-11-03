@@ -189,7 +189,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             before_json TEXT,
             after_json TEXT,
             reason TEXT,
-            created_at TEXT NOT NULL DEFAULT ''
+            created_at TEXT NOT NULL DEFAULT '',
+            user_name TEXT
         );
 
         CREATE TRIGGER IF NOT EXISTS prevent_audit_log_update

@@ -33,6 +33,25 @@ fn main() {
             let db_path = data_dir.join("inventory.db");
             let _ = backup::check_and_apply_pending_restore(&db_path.to_string_lossy());
 
+            // PRAGMA quick_check at startup
+            if db_path.exists() {
+                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                    let _ = db::configure_connection(&conn);
+                    let qc: Result<String, _> = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0));
+                    match qc {
+                        Ok(ref s) if s == "ok" => {
+                            eprintln!("[Krishi Kendra] Startup PRAGMA quick_check: OK");
+                        }
+                        Ok(err) => {
+                            eprintln!("[Krishi Kendra] Startup PRAGMA quick_check FAILED: {}", err);
+                        }
+                        Err(e) => {
+                            eprintln!("[Krishi Kendra] Startup PRAGMA quick_check error: {}", e);
+                        }
+                    }
+                }
+            }
+
             // Daily first-launch backup check
             let handle_launch = app.handle().clone();
             let db_path_clone = db_path.clone();
@@ -162,7 +181,7 @@ fn main() {
             commands::alter_payment_cmd,
             commands::cancel_payment_cmd,
             commands::get_db_safety_info_cmd,
-            commands::graceful_exit_cmd,
+            commands::safe_exit_app_cmd,
             commands::get_security_status_cmd,
             commands::create_owner_initial_cmd,
             commands::skip_security_setup_cmd,

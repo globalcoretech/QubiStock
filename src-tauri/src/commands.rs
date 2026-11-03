@@ -3859,10 +3859,30 @@ pub fn set_settings_inner(conn: &Connection, s: AppSettingsPayload) -> Result<Ap
     get_settings_inner(conn)
 }
 
+pub fn mask_settings_for_locked_state(settings: &mut AppSettingsPayload) {
+    settings.bank_name = None;
+    settings.bank_account_no = None;
+    settings.bank_ifsc = None;
+    settings.bank_branch = None;
+    settings.upi_id = None;
+    settings.backup_folder = None;
+    settings.secondary_backup_folder = None;
+}
+
 #[command]
 pub fn get_settings_cmd(app: AppHandle) -> Result<AppSettingsPayload, String> {
     let conn = get_conn(&app)?;
-    get_settings_inner(&conn)
+    let user_opt = check_permission_for_command(&app, &conn, "get_settings_cmd")?;
+    let is_locked = if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        *state.is_locked.lock().unwrap()
+    } else {
+        false
+    };
+    let mut settings = get_settings_inner(&conn)?;
+    if user_opt.is_none() || is_locked {
+        mask_settings_for_locked_state(&mut settings);
+    }
+    Ok(settings)
 }
 
 #[command]
@@ -5633,8 +5653,8 @@ pub fn safe_exit_fallback_helper(
 }
 
 #[command]
-pub fn graceful_exit_cmd(app: AppHandle) -> Result<(), String> {
-    eprintln!("[Krishi Kendra] Initiating graceful exit...");
+pub fn safe_exit_app_cmd(app: AppHandle) -> Result<(), String> {
+    eprintln!("[Krishi Kendra] Initiating safe exit...");
 
     // 1. Flush WAL to main database file
     if let Ok(conn) = get_conn(&app) {
@@ -5644,11 +5664,17 @@ pub fn graceful_exit_cmd(app: AppHandle) -> Result<(), String> {
     }
 
     // 2. Trigger auto backup with 5-second hard limit (never blocks exit)
-    let _ = crate::backup::auto_backup_with_timeout(&app, "graceful exit", std::time::Duration::from_secs(5));
+    let _ = crate::backup::auto_backup_with_timeout(&app, "safe exit", std::time::Duration::from_secs(5));
 
     // 3. Exit process cleanly
     app.exit(0);
     Ok(())
+}
+
+#[command]
+#[allow(dead_code)]
+pub fn graceful_exit_cmd(app: AppHandle) -> Result<(), String> {
+    safe_exit_app_cmd(app)
 }
 
 // ==================== AUTH & SECURITY COMMANDS ====================

@@ -15,12 +15,16 @@ pub struct SessionUser {
     pub role: String, // "owner" | "staff"
 }
 
+pub const MAX_FAILED_LOGIN_ATTEMPTS: i64 = 5;
+pub const LOCKOUT_DURATION_MINUTES: i64 = 5;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
     pub id: i64,
     pub name: String,
     pub role: String, // "owner" | "staff"
     pub is_active: bool,
+    #[serde(skip_serializing, default)]
     pub failed_attempts: i64,
     pub locked_until: Option<String>,
     pub created_at: String,
@@ -49,11 +53,21 @@ pub struct AuthState {
     pub is_locked: std::sync::Mutex<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MinimumRole {
     Public,
     Staff,
     Owner,
+}
+
+impl std::fmt::Display for MinimumRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MinimumRole::Public => write!(f, "Public"),
+            MinimumRole::Staff => write!(f, "Staff"),
+            MinimumRole::Owner => write!(f, "Owner"),
+        }
+    }
 }
 
 pub fn hash_password(password: &str) -> std::result::Result<String, String> {
@@ -102,6 +116,107 @@ pub fn log_login_event(conn: &Connection, user_name: &str, event: &str) -> std::
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandPermission {
+    pub name: &'static str,
+    pub min_role: MinimumRole,
+    pub allowed_while_locked: bool,
+    pub masked_for_staff: bool,
+}
+
+pub const PERMISSION_TABLE: &[CommandPermission] = &[
+    // Public / Unauthenticated commands (10)
+    CommandPermission { name: "init_db_cmd", min_role: MinimumRole::Public, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_security_status_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
+    CommandPermission { name: "create_owner_initial_cmd", min_role: MinimumRole::Public, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "skip_security_setup_cmd", min_role: MinimumRole::Public, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "login_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
+    CommandPermission { name: "unlock_session_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
+    CommandPermission { name: "reset_owner_with_recovery_key_cmd", min_role: MinimumRole::Public, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_db_safety_info_cmd", min_role: MinimumRole::Public, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "acknowledge_exit_request_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
+    CommandPermission { name: "safe_exit_app_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
+
+    // Staff & Owner commands (37)
+    CommandPermission { name: "get_current_user_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "logout_cmd", min_role: MinimumRole::Staff, allowed_while_locked: true, masked_for_staff: false },
+    CommandPermission { name: "lock_session_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "change_own_password_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_dashboard_stats_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_7_day_trend_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_yesterday_comparison_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_top_receivables_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_low_stock_items_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_recent_entries_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_stock_list_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_available_stock_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_items_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "add_item_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_item_units_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "add_item_unit_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_godowns_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_parties_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "add_party_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "save_invoice_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "record_payment_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_invoice_details_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_last_rates_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_pending_bills_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_party_statement_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_party_balances_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_item_movement_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_purchase_register_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_sales_register_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_next_bill_number_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "list_printers", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_default_printer", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "print_bill", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "log_invoice_print_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_last_invoice_print_mode_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_backup_status_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_settings_cmd", min_role: MinimumRole::Staff, allowed_while_locked: true, masked_for_staff: false },
+
+    // Owner Only commands (38)
+    CommandPermission { name: "preview_tally_import_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "confirm_tally_import_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "cleanup_accounting_parties_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "update_item_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "delete_item_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "add_ledger_entry_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "update_party_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "delete_party_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "add_opening_stock_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "add_stock_adjustment_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_gst_summary_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_hsn_summary_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_profit_report_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "set_settings_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "backup_now_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "list_backups_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "prepare_restore_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "check_db_integrity_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "open_backup_folder_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "pick_folder_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "test_write_folder_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "copy_backups_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_sales_gst_mode_profit_report_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_item_parties_report_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_party_items_report_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_audit_logs_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "change_sales_invoice_no_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "update_purchase_supplier_invoice_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "cancel_invoice_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "alter_sale_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "alter_purchase_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "alter_payment_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "cancel_payment_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_users_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "create_user_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "update_user_status_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "reset_user_password_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_login_logs_cmd", min_role: MinimumRole::Owner, allowed_while_locked: false, masked_for_staff: false },
+];
+
 pub const PERMISSION_MATRIX: &[(&str, MinimumRole)] = &[
     // Public / Unauthenticated (10)
     ("init_db_cmd", MinimumRole::Public),
@@ -112,8 +227,8 @@ pub const PERMISSION_MATRIX: &[(&str, MinimumRole)] = &[
     ("unlock_session_cmd", MinimumRole::Public),
     ("reset_owner_with_recovery_key_cmd", MinimumRole::Public),
     ("get_db_safety_info_cmd", MinimumRole::Public),
-    ("graceful_exit_cmd", MinimumRole::Public),
     ("acknowledge_exit_request_cmd", MinimumRole::Public),
+    ("safe_exit_app_cmd", MinimumRole::Public),
 
     // Staff & Owner (37)
     ("get_current_user_cmd", MinimumRole::Staff),
@@ -195,10 +310,28 @@ pub const PERMISSION_MATRIX: &[(&str, MinimumRole)] = &[
     ("get_login_logs_cmd", MinimumRole::Owner),
 ];
 
+pub fn is_command_allowed_while_locked(command: &str) -> bool {
+    for perm in PERMISSION_TABLE {
+        if perm.name == command {
+            return perm.allowed_while_locked;
+        }
+    }
+    false
+}
+
+pub fn is_command_masked_for_staff(command: &str) -> bool {
+    for perm in PERMISSION_TABLE {
+        if perm.name == command {
+            return perm.masked_for_staff;
+        }
+    }
+    false
+}
+
 pub fn get_command_explicit_role(command: &str) -> Option<MinimumRole> {
-    for (cmd, role) in PERMISSION_MATRIX {
-        if *cmd == command {
-            return Some(*role);
+    for perm in PERMISSION_TABLE {
+        if perm.name == command {
+            return Some(perm.min_role);
         }
     }
     None
@@ -222,12 +355,11 @@ pub fn check_command_permission(
         }));
     }
 
+    let is_allowed_locked = is_command_allowed_while_locked(command);
+
     if is_locked {
-        match command {
-            "login_cmd" | "unlock_session_cmd" | "logout_cmd" | "get_security_status_cmd" => {}
-            _ => {
-                return Err("ऐप लॉक है। कृपया पहले अनलॉक करें। / App is locked. Please unlock first.".to_string());
-            }
+        if !is_allowed_locked {
+            return Err("ऐप लॉक है। कृपया पहले अनलॉक करें। / App is locked. Please unlock first.".to_string());
         }
     }
 
@@ -239,6 +371,9 @@ pub fn check_command_permission(
     let user = match session {
         Some(u) => u,
         None => {
+            if is_allowed_locked {
+                return Ok(None);
+            }
             return Err("कृपया पहले लॉगिन करें / Login required".to_string());
         }
     };
@@ -529,8 +664,8 @@ pub fn verify_and_login_user(
                 let remaining_secs = (until_local - now).num_seconds();
                 let mins = (remaining_secs + 59) / 60;
                 return Err(format!(
-                    "5 गलत प्रयासों के कारण यह खाता लॉक है। कृपया {} मिनट बाद प्रयास करें। / Account is locked for {} more minute(s).",
-                    mins, mins
+                    "{} गलत प्रयासों के कारण यह खाता लॉक है। कृपया {} मिनट बाद प्रयास करें। / Account is locked for {} more minute(s).",
+                    MAX_FAILED_LOGIN_ATTEMPTS, mins, mins
                 ));
             } else {
                 // Lock expired
@@ -561,20 +696,23 @@ pub fn verify_and_login_user(
         let new_failed = failed_attempts + 1;
         let _ = log_login_event(conn, &uname, "failed_attempt");
 
-        if new_failed >= 5 {
-            let lock_until = (now + chrono::Duration::minutes(5)).to_rfc3339();
+        if new_failed >= MAX_FAILED_LOGIN_ATTEMPTS {
+            let lock_until = (now + chrono::Duration::minutes(LOCKOUT_DURATION_MINUTES)).to_rfc3339();
             let _ = conn.execute(
                 "UPDATE users SET failed_attempts = ?1, locked_until = ?2 WHERE id = ?3",
                 params![new_failed, lock_until, id],
             );
             let _ = log_login_event(conn, &uname, "lock");
-            Err("पासवर्ड गलत है। 5 गलत प्रयासों के कारण यह खाता 5 मिनट के लिए लॉक कर दिया गया है। / Account locked for 5 minutes due to 5 failed attempts.".to_string())
+            Err(format!(
+                "पासवर्ड गलत है। {} गलत प्रयासों के कारण यह खाता {} मिनट के लिए लॉक कर दिया गया है। / Account locked for {} minutes due to {} failed attempts.",
+                MAX_FAILED_LOGIN_ATTEMPTS, LOCKOUT_DURATION_MINUTES, LOCKOUT_DURATION_MINUTES, MAX_FAILED_LOGIN_ATTEMPTS
+            ))
         } else {
             let _ = conn.execute(
                 "UPDATE users SET failed_attempts = ?1 WHERE id = ?2",
                 params![new_failed, id],
             );
-            let remaining = 5 - new_failed;
+            let remaining = MAX_FAILED_LOGIN_ATTEMPTS - new_failed;
             Err(format!(
                 "पासवर्ड गलत है। (शेष प्रयास: {}) / Incorrect password. Attempts remaining: {}.",
                 remaining, remaining

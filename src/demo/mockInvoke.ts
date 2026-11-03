@@ -627,6 +627,7 @@ export function setupDemoMocks() {
           is_synced_or_removable: false,
         };
 
+      case "safe_exit_app_cmd":
       case "graceful_exit_cmd":
         return "exited";
 
