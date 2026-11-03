@@ -1049,10 +1049,27 @@ pub fn get_party_balances_inner(conn: &Connection) -> Result<Vec<PartyBalance>, 
     Ok(list)
 }
 
+pub fn mask_party_balances_for_role(balances: &mut [PartyBalance]) {
+    for b in balances.iter_mut() {
+        if crate::auth::is_supplier_party_type(&b.party_type) {
+            b.total_debit = 0;
+            b.total_credit = 0;
+            b.net_balance = 0;
+        }
+    }
+}
+
 #[command]
 pub fn get_party_balances_cmd(app: AppHandle) -> Result<Vec<PartyBalance>, String> {
     let conn = get_conn(&app)?;
-    get_party_balances_inner(&conn)
+    let user_opt = check_permission_for_command(&app, &conn, "get_party_balances_cmd")?;
+    let mut balances = get_party_balances_inner(&conn)?;
+    if let Some(user) = user_opt {
+        if crate::auth::should_mask_supplier_data_for_role(&user.role) {
+            mask_party_balances_for_role(&mut balances);
+        }
+    }
+    Ok(balances)
 }
 
 #[command]
@@ -1067,67 +1084,95 @@ pub fn save_invoice_cmd(app: AppHandle, payload: InvoicePayload) -> Result<(), S
     save_invoice(&mut conn, payload).map_err(|e| e.to_string())
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Movement {
     pub date: String,
     pub qty_base: i64,
     pub type_: String,
     pub ref_id: Option<String>,
+    #[serde(default)]
+    pub rate_paise: i64,
+    #[serde(default)]
+    pub total_amount_paise: i64,
+}
+
+pub fn mask_item_movement_for_role(movements: &mut [Movement]) {
+    for m in movements.iter_mut() {
+        if m.type_.eq_ignore_ascii_case("purchase") {
+            m.rate_paise = 0;
+            m.total_amount_paise = 0;
+        }
+    }
 }
 
 pub fn get_item_movement_inner(conn: &Connection, item_id: i64, godown_id: Option<i64>) -> Result<Vec<Movement>, String> {
     let mut items = Vec::new();
 
-    if let Some(gid) = godown_id {
-        let mut stmt = conn.prepare(
-            "SELECT sl.date, sl.qty_base, sl.type,
-                    CASE WHEN sl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, sl.ref_id) ELSE sl.ref_id END as ref_id
-             FROM stock_ledger sl
-             LEFT JOIN purchases p ON sl.ref_id = p.invoice_no AND sl.type = 'purchase'
-             WHERE sl.item_id = ?1 AND sl.godown_id = ?2
-             ORDER BY sl.id DESC"
-        ).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(rusqlite::params![item_id, gid], |row| {
-            Ok(Movement {
-                date: row.get(0)?,
-                qty_base: row.get(1)?,
-                type_: row.get(2)?,
-                ref_id: row.get(3)?,
-            })
-        }).map_err(|e| e.to_string())?;
-        for row in rows {
-            if let Ok(m) = row { items.push(m); }
-        }
+    let query = if godown_id.is_some() {
+        "SELECT sl.date, sl.qty_base, sl.type,
+                CASE WHEN sl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, sl.ref_id) ELSE sl.ref_id END as ref_id,
+                COALESCE(CASE WHEN sl.type = 'purchase' THEN pl.rate WHEN sl.type = 'sale' THEN sline.rate ELSE 0 END, 0) as rate_paise,
+                COALESCE(CASE WHEN sl.type = 'purchase' THEN pl.taxable + COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)
+                              WHEN sl.type = 'sale' THEN sline.taxable + COALESCE(sline.cgst, 0) + COALESCE(sline.sgst, 0) + COALESCE(sline.igst, 0)
+                              ELSE 0 END, 0) as total_amount_paise
+         FROM stock_ledger sl
+         LEFT JOIN purchases p ON sl.ref_id = p.invoice_no AND sl.type = 'purchase'
+         LEFT JOIN purchase_lines pl ON sl.ref_id = pl.invoice_no AND sl.item_id = pl.item_id AND sl.type = 'purchase'
+         LEFT JOIN sale_lines sline ON sl.ref_id = sline.invoice_no AND sl.item_id = sline.item_id AND sl.type = 'sale'
+         WHERE sl.item_id = ?1 AND sl.godown_id = ?2
+         ORDER BY sl.id DESC"
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT sl.date, sl.qty_base, sl.type,
-                    CASE WHEN sl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, sl.ref_id) ELSE sl.ref_id END as ref_id
-             FROM stock_ledger sl
-             LEFT JOIN purchases p ON sl.ref_id = p.invoice_no AND sl.type = 'purchase'
-             WHERE sl.item_id = ?1
-             ORDER BY sl.id DESC"
-        ).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(rusqlite::params![item_id], |row| {
-            Ok(Movement {
-                date: row.get(0)?,
-                qty_base: row.get(1)?,
-                type_: row.get(2)?,
-                ref_id: row.get(3)?,
-            })
-        }).map_err(|e| e.to_string())?;
-        for row in rows {
-            if let Ok(m) = row { items.push(m); }
+        "SELECT sl.date, sl.qty_base, sl.type,
+                CASE WHEN sl.type = 'purchase' THEN COALESCE(p.supplier_invoice_no, sl.ref_id) ELSE sl.ref_id END as ref_id,
+                COALESCE(CASE WHEN sl.type = 'purchase' THEN pl.rate WHEN sl.type = 'sale' THEN sline.rate ELSE 0 END, 0) as rate_paise,
+                COALESCE(CASE WHEN sl.type = 'purchase' THEN pl.taxable + COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)
+                              WHEN sl.type = 'sale' THEN sline.taxable + COALESCE(sline.cgst, 0) + COALESCE(sline.sgst, 0) + COALESCE(sline.igst, 0)
+                              ELSE 0 END, 0) as total_amount_paise
+         FROM stock_ledger sl
+         LEFT JOIN purchases p ON sl.ref_id = p.invoice_no AND sl.type = 'purchase'
+         LEFT JOIN purchase_lines pl ON sl.ref_id = pl.invoice_no AND sl.item_id = pl.item_id AND sl.type = 'purchase'
+         LEFT JOIN sale_lines sline ON sl.ref_id = sline.invoice_no AND sl.item_id = sline.item_id AND sl.type = 'sale'
+         WHERE sl.item_id = ?1
+         ORDER BY sl.id DESC"
+    };
+
+    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
+    let map_row = |row: &rusqlite::Row| {
+        Ok(Movement {
+            date: row.get(0)?,
+            qty_base: row.get(1)?,
+            type_: row.get(2)?,
+            ref_id: row.get(3)?,
+            rate_paise: row.get(4)?,
+            total_amount_paise: row.get(5)?,
+        })
+    };
+
+    let rows = if let Some(gid) = godown_id {
+        stmt.query_map(rusqlite::params![item_id, gid], map_row).map_err(|e| e.to_string())?
+    } else {
+        stmt.query_map(rusqlite::params![item_id], map_row).map_err(|e| e.to_string())?
+    };
+
+    for row in rows {
+        if let Ok(m) = row {
+            items.push(m);
         }
     }
-
     Ok(items)
 }
 
 #[command]
 pub fn get_item_movement_cmd(app: AppHandle, item_id: i64, godown_id: Option<i64>) -> Result<Vec<Movement>, String> {
     let conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "get_item_movement_cmd")?;
-    get_item_movement_inner(&conn, item_id, godown_id)
+    let user_opt = check_permission_for_command(&app, &conn, "get_item_movement_cmd")?;
+    let mut movements = get_item_movement_inner(&conn, item_id, godown_id)?;
+    if let Some(user) = user_opt {
+        if crate::auth::should_mask_supplier_data_for_role(&user.role) {
+            mask_item_movement_for_role(&mut movements);
+        }
+    }
+    Ok(movements)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -3139,6 +3184,12 @@ pub fn record_payment_inner(conn: &mut Connection, payload: PaymentPayload) -> R
 #[command]
 pub fn record_payment_cmd(app: AppHandle, payload: PaymentPayload) -> Result<String, String> {
     let mut conn = get_conn(&app)?;
+    let user_opt = check_permission_for_command(&app, &conn, "record_payment_cmd")?;
+    if let Some(user) = user_opt {
+        if !crate::auth::can_role_record_payment(&user.role, &payload.payment_type) {
+            return Err("सप्लायर को भुगतान (Payment Out) दर्ज करने की अनुमति केवल व्यवस्थापक को है। / Only Owner can record payments to suppliers.".to_string());
+        }
+    }
     record_payment_inner(&mut conn, payload)
 }
 
@@ -3207,6 +3258,19 @@ pub fn get_pending_bills_inner(conn: &Connection, party_id: i64) -> Result<Vec<P
 #[command]
 pub fn get_pending_bills_cmd(app: AppHandle, party_id: i64) -> Result<Vec<PendingBill>, String> {
     let conn = get_conn(&app)?;
+    let user_opt = check_permission_for_command(&app, &conn, "get_pending_bills_cmd")?;
+    if let Some(user) = user_opt {
+        let party_type: String = conn
+            .query_row(
+                "SELECT type FROM parties WHERE id = ?1",
+                rusqlite::params![party_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !crate::auth::can_role_access_pending_bills(&user.role, &party_type) {
+            return Err("सप्लायर के बकाया बिल देखने की अनुमति केवल व्यवस्थापक को है। / Access to supplier pending bills is restricted to Owner.".to_string());
+        }
+    }
     get_pending_bills_inner(&conn, party_id)
 }
 
@@ -3327,6 +3391,19 @@ pub fn get_party_statement_inner(conn: &Connection, party_id: i64) -> Result<Par
 #[command]
 pub fn get_party_statement_cmd(app: AppHandle, party_id: i64) -> Result<PartyStatement, String> {
     let conn = get_conn(&app)?;
+    let user_opt = check_permission_for_command(&app, &conn, "get_party_statement_cmd")?;
+    if let Some(user) = user_opt {
+        let party_type: String = conn
+            .query_row(
+                "SELECT type FROM parties WHERE id = ?1",
+                rusqlite::params![party_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !crate::auth::can_role_access_party_statement(&user.role, &party_type) {
+            return Err("सप्लायर का खाता विवरण देखने की अनुमति केवल व्यवस्थापक को है। / Access to supplier statement is restricted to Owner.".to_string());
+        }
+    }
     get_party_statement_inner(&conn, party_id)
 }
 
@@ -3993,9 +4070,15 @@ pub fn backup_now_cmd(app: AppHandle) -> Result<crate::backup::BackupResult, Str
 
 #[command]
 pub fn list_backups_cmd(app: AppHandle) -> Result<Vec<crate::backup::BackupInfo>, String> {
-    let conn = get_conn(&app)?;
-    check_permission_for_command(&app, &conn, "list_backups_cmd")?;
-    crate::backup::list_backups(&conn)
+    let conn_res = get_conn(&app);
+    if let Ok(ref conn) = conn_res {
+        check_permission_for_command(&app, conn, "list_backups_cmd")?;
+        crate::backup::list_backups(conn)
+    } else {
+        check_permission_without_conn(&app, "list_backups_cmd")?;
+        let default_dir = crate::backup::get_default_backup_dir();
+        crate::backup::list_backups_from_dir(&default_dir)
+    }
 }
 
 #[command]
@@ -4065,6 +4148,8 @@ pub fn prepare_restore_cmd(app: AppHandle, backup_path: String) -> Result<crate:
     let conn_res = get_conn(&app);
     if let Ok(ref conn) = conn_res {
         check_permission_for_command(&app, conn, "prepare_restore_cmd")?;
+    } else {
+        check_permission_without_conn(&app, "prepare_restore_cmd")?;
     }
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_path = data_dir.join("inventory.db");
@@ -4080,10 +4165,16 @@ pub fn prepare_restore_cmd(app: AppHandle, backup_path: String) -> Result<crate:
 #[command]
 pub fn check_db_integrity_cmd(app: AppHandle) -> Result<crate::backup::IntegrityCheckReport, String> {
     use tauri::Manager;
+    let conn_res = get_conn(&app);
+    if let Ok(ref conn) = conn_res {
+        check_permission_for_command(&app, conn, "check_db_integrity_cmd")?;
+    } else {
+        check_permission_without_conn(&app, "check_db_integrity_cmd")?;
+    }
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_path = data_dir.join("inventory.db");
-    let primary_dir = if let Ok(conn) = get_conn(&app) {
-        crate::backup::get_primary_backup_dir(&conn)
+    let primary_dir = if let Ok(ref conn) = conn_res {
+        crate::backup::get_primary_backup_dir(conn)
     } else {
         crate::backup::get_default_backup_dir()
     };
@@ -5707,19 +5798,52 @@ pub fn check_permission_for_command(
     if let Some(state) = app.try_state::<crate::auth::AuthState>() {
         let session_opt = state.current_user.lock().unwrap().clone();
         let is_locked = *state.is_locked.lock().unwrap();
-        let res = crate::auth::check_command_permission(
+        let corruption_detected = state.startup_corruption_detected.load(std::sync::atomic::Ordering::SeqCst);
+        let res = crate::auth::check_command_permission_ext(
             security_enabled,
             session_opt.as_ref(),
             is_locked,
             command_name,
+            corruption_detected,
         )?;
         Ok(res)
     } else {
-        Ok(Some(crate::auth::SessionUser {
-            id: 0,
-            name: "व्यवस्थापक (Owner)".to_string(),
-            role: "owner".to_string(),
-        }))
+        let corruption_detected = crate::auth::is_startup_corruption_detected();
+        let res = crate::auth::check_command_permission_ext(
+            security_enabled,
+            None,
+            false,
+            command_name,
+            corruption_detected,
+        )?;
+        Ok(res)
+    }
+}
+
+pub fn check_permission_without_conn(
+    app: &AppHandle,
+    command_name: &str,
+) -> Result<Option<crate::auth::SessionUser>, String> {
+    if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        let session_opt = state.current_user.lock().unwrap().clone();
+        let is_locked = *state.is_locked.lock().unwrap();
+        let corruption_detected = state.startup_corruption_detected.load(std::sync::atomic::Ordering::SeqCst);
+        crate::auth::check_command_permission_ext(
+            true,
+            session_opt.as_ref(),
+            is_locked,
+            command_name,
+            corruption_detected,
+        )
+    } else {
+        let corruption_detected = crate::auth::is_startup_corruption_detected();
+        crate::auth::check_command_permission_ext(
+            true,
+            None,
+            false,
+            command_name,
+            corruption_detected,
+        )
     }
 }
 
@@ -5730,13 +5854,11 @@ pub fn get_security_status_cmd(app: AppHandle) -> Result<crate::auth::SecuritySt
     crate::auth::get_security_status_inner(&conn, auth_state.as_deref())
 }
 
-#[command]
-pub fn create_owner_initial_cmd(
-    app: AppHandle,
-    name: String,
-    password: String,
-) -> Result<serde_json::Value, String> {
-    let mut conn = get_conn(&app)?;
+pub fn create_owner_initial_inner(
+    conn: &mut Connection,
+    name: &str,
+    password: &str,
+) -> Result<(crate::auth::UserInfo, String), String> {
     let user_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
         .unwrap_or(0);
@@ -5748,18 +5870,46 @@ pub fn create_owner_initial_cmd(
     let recovery_key_hash = crate::auth::hash_password(&recovery_key)?;
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-    let owner = crate::auth::create_user_inner(&tx, &name, "owner", &password)?;
+    let owner = crate::auth::create_user_inner(&tx, name, "owner", password)?;
 
     tx.execute(
-        "UPDATE settings SET security_enabled = 1, recovery_key_hash = ?1 WHERE id = 1",
+        "UPDATE settings SET security_enabled = 1, recovery_key_hash = ?1, recovery_failed_attempts = 0, recovery_locked_until = NULL WHERE id = 1",
         rusqlite::params![recovery_key_hash],
     )
     .map_err(|e| e.to_string())?;
 
     crate::auth::log_login_event(&tx, &owner.name, "login")?;
-
     tx.commit().map_err(|e| e.to_string())?;
+
+    Ok((owner, recovery_key))
+}
+
+pub fn skip_security_setup_inner(conn: &Connection) -> Result<(), String> {
+    let (user_count, security_enabled): (i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM users), COALESCE(security_enabled, 0) FROM settings WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0));
+    if user_count > 0 || security_enabled != 0 {
+        return Err("सुरक्षा पहले से सक्रिय है या यूज़र मौजूद हैं। / Security is already enabled or users exist.".to_string());
+    }
+
+    conn.execute("UPDATE settings SET security_enabled = 0 WHERE id = 1", [])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
+pub fn create_owner_initial_cmd(
+    app: AppHandle,
+    name: String,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let mut conn = get_conn(&app)?;
+    let (owner, recovery_key) = create_owner_initial_inner(&mut conn, &name, &password)?;
 
     let session_user = crate::auth::SessionUser {
         id: owner.id,
@@ -5781,15 +5931,7 @@ pub fn create_owner_initial_cmd(
 #[command]
 pub fn skip_security_setup_cmd(app: AppHandle) -> Result<(), String> {
     let conn = get_conn(&app)?;
-    let user_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
-        .unwrap_or(0);
-    if user_count > 0 {
-        return Err("व्यवस्थापक खाता पहले से मौजूद है। / Owner account already exists.".to_string());
-    }
-
-    conn.execute("UPDATE settings SET security_enabled = 0 WHERE id = 1", [])
-        .map_err(|e| e.to_string())?;
+    skip_security_setup_inner(&conn)?;
 
     if let Some(state) = app.try_state::<crate::auth::AuthState>() {
         *state.current_user.lock().unwrap() = Some(crate::auth::SessionUser {

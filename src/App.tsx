@@ -672,6 +672,7 @@ export default function App() {
                     onSavingChange={setIsSaving}
                     t={t}
                     lang={lang}
+                    currentUser={currentUser}
                     initialPartyId={paymentInitialPartyId}
                     initialType={paymentInitialType}
                   />

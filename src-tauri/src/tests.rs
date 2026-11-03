@@ -7093,58 +7093,183 @@ fn test_secrets_never_leaked_in_command_responses() {
 }
 
 #[test]
-fn test_audit_log_sample_rows_for_report() {
-    use crate::audit::write_audit;
+fn test_audit_log_from_real_inner_commands_by_owner() {
+    use crate::commands::{
+        update_item_with_user, UpdateItemPayload,
+        update_party_with_user, UpdatePartyPayload,
+        alter_sale_with_user,
+        cancel_payment_with_user,
+        change_sales_invoice_no_with_user,
+        record_payment_inner, PaymentPayload,
+    };
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+    use crate::auth::SessionUser;
 
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
     crate::db::configure_connection(&conn).unwrap();
     crate::db::run_migrations(&conn).unwrap();
 
-    // Sample 1: Item Edit
-    let item_before = r#"{"id":1,"name":"DAP 50kg","gst_rate":5000,"category":"fertilizer"}"#;
-    let item_after = r#"{"id":1,"name":"DAP 50kg Gold","gst_rate":5000,"category":"fertilizer"}"#;
-    write_audit(
-        &conn,
-        "item",
-        "1",
-        "update",
-        Some(item_before),
-        Some(item_after),
-        Some("Name updated to DAP 50kg Gold"),
-        Some("Ramesh Kumar (Staff)"),
+    let owner = SessionUser {
+        id: 1,
+        name: "व्यवस्थापक (Owner Vikram)".to_string(),
+        role: "owner".to_string(),
+    };
+
+    // 1. Setup seed data
+    let godown_id: i64 = conn.query_row("SELECT id FROM godowns LIMIT 1", [], |r| r.get(0)).unwrap_or_else(|_| {
+        conn.execute("INSERT INTO godowns (name) VALUES ('Main Godown')", []).unwrap();
+        conn.last_insert_rowid()
+    });
+
+    conn.execute(
+        "INSERT INTO items (name, base_unit, category, gst_rate, is_active) VALUES ('DAP 50kg', 'BAG', 'fertilizer', 5000, 1)",
+        [],
+    ).unwrap();
+    let item_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO parties (name, type, category, phone, village) VALUES ('Ramesh Farmer', 'customer', 'farmer', '9876543210', 'Bhopal')",
+        [],
+    ).unwrap();
+    let party_id = conn.last_insert_rowid();
+
+    // Provide opening stock so the sale and alterations do not oversell
+    conn.execute(
+        "INSERT INTO stock_ledger (date, item_id, godown_id, qty_base, type, ref_id) VALUES ('2026-02-28', ?1, ?2, 100000, 'opening', 'OPENING')",
+        rusqlite::params![item_id, godown_id],
     ).unwrap();
 
-    // Sample 2: Invoice Alteration
-    let invoice_before = r#"{"invoice_no":"INV-2026-001","total_amount":500000,"status":"active"}"#;
-    let invoice_after = r#"{"invoice_no":"INV-2026-001","total_amount":480000,"status":"active"}"#;
-    write_audit(
-        &conn,
-        "sales_invoice",
+    // Add Sales Invoice
+    let sale_payload = InvoicePayload {
+        invoice_no: "INV-2026-001".to_string(),
+        date: "2026-03-01".to_string(),
+        party_id,
+        godown_id,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id,
+            qty: 10_000, // 10 bags
+            unit: "BAG".to_string(),
+            rate: 135000, // 1350 Rs
+            taxable: 1350000,
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+        }],
+    };
+    save_invoice(&mut conn, sale_payload).unwrap();
+
+    // Record a payment
+    let pay_id = record_payment_inner(&mut conn, PaymentPayload {
+        party_id,
+        payment_type: "receipt".to_string(),
+        amount_paise: 500000,
+        payment_mode: "cash".to_string(),
+        date: "2026-03-02".to_string(),
+        remark: Some("Initial advance".to_string()),
+        ref_id: Some("INV-2026-001".to_string()),
+    }).unwrap();
+
+    let ledger_id: i64 = conn.query_row(
+        "SELECT id FROM party_ledger WHERE ref_id = ?1 AND type = 'payment'",
+        rusqlite::params![pay_id],
+        |r| r.get(0),
+    ).unwrap();
+
+    // NOW CALL THE 5 REAL INNER COMMANDS WITH THE OWNER USER:
+    // Command 1: update_item_with_user
+    update_item_with_user(
+        &mut conn,
+        UpdateItemPayload {
+            id: item_id,
+            name: "DAP 50kg Premium Gold".to_string(),
+            base_unit: "BAG".to_string(),
+            category: Some("fertilizer".to_string()),
+            gst_rate: Some(5000),
+            hsn: Some("3105".to_string()),
+            is_active: Some(1),
+            gst_status: Some("taxable".to_string()),
+            units: None,
+            reason: Some("Upgraded to Premium Gold brand for season".to_string()),
+        },
+        Some(&owner.name),
+    ).unwrap();
+
+    // Command 2: update_party_with_user
+    update_party_with_user(
+        &mut conn,
+        UpdatePartyPayload {
+            id: party_id,
+            name: "Rameshwar Patel".to_string(),
+            party_type: "customer".to_string(),
+            category: "farmer".to_string(),
+            phone: Some("9876543299".to_string()),
+            village: Some("Bhopal Rural".to_string()),
+            address: None,
+            gstin: None,
+            state_code: None,
+            reason: Some("Farmer full legal name and corrected phone".to_string()),
+        },
+        Some(&owner.name),
+    ).unwrap();
+
+    // Command 3: alter_sale_with_user
+    let altered_sale = InvoicePayload {
+        invoice_no: "INV-2026-001".to_string(),
+        date: "2026-03-01".to_string(),
+        party_id,
+        godown_id,
+        type_: "sale".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        shop_state: None,
+        supplier_invoice_no: None,
+        supplier_invoice_date: None,
+        lines: vec![InvoiceLine {
+            item_id,
+            qty: 8_000, // Reduced from 10 to 8 bags
+            unit: "BAG".to_string(),
+            rate: 135000,
+            taxable: 1080000,
+            cgst: 0,
+            sgst: 0,
+            igst: 0,
+        }],
+    };
+    alter_sale_with_user(
+        &mut conn,
         "INV-2026-001",
-        "alter",
-        Some(invoice_before),
-        Some(invoice_after),
-        Some("Rate discount corrected after farmer request"),
-        Some("Owner Admin"),
+        altered_sale,
+        Some("Farmer returned 2 bags at the time of delivery"),
+        Some(&owner.name),
     ).unwrap();
 
-    // Sample 3: Payment Cancel
-    let payment_before = r#"{"payment_id":42,"party_id":10,"amount":250000,"status":"active"}"#;
-    let payment_after = r#"{"payment_id":42,"party_id":10,"amount":250000,"status":"cancelled"}"#;
-    write_audit(
-        &conn,
-        "payment",
-        "42",
-        "cancel",
-        Some(payment_before),
-        Some(payment_after),
-        Some("Cheque bounced by bank"),
-        Some("Owner Admin"),
+    // Command 4: cancel_payment_with_user
+    cancel_payment_with_user(
+        &mut conn,
+        ledger_id,
+        Some("Cheque bounced by farmer bank due to signature mismatch"),
+        Some(&owner.name),
     ).unwrap();
 
-    // Verify 3 rows exist and print them
+    // Command 5: change_sales_invoice_no_with_user
+    change_sales_invoice_no_with_user(
+        &mut conn,
+        "INV-2026-001",
+        "INV-2026-001-A",
+        "Series alignment with manual book voucher",
+        Some(&owner.name),
+    ).unwrap();
+
+    // Read audit_log and verify rows produced by real commands
     let mut stmt = conn.prepare(
-        "SELECT id, user_name, entity_type, entity_id, action, before_json, after_json, reason, created_at FROM audit_log ORDER BY id ASC"
+        "SELECT id, user_name, entity_type, entity_id, action, before_json, after_json, reason, created_at
+         FROM audit_log ORDER BY id ASC"
     ).unwrap();
 
     let rows: Vec<(i64, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, String)> = stmt.query_map([], |r| {
@@ -7161,9 +7286,9 @@ fn test_audit_log_sample_rows_for_report() {
         ))
     }).unwrap().map(|r| r.unwrap()).collect();
 
-    assert_eq!(rows.len(), 3, "Exactly 3 sample audit rows must be recorded");
+    assert_eq!(rows.len(), 5, "All 5 real inner commands must record an audit row");
 
-    println!("=== SAMPLE AUDIT ROWS PRODUCED BY TEST ===");
+    println!("=== REAL AUDIT LOG ROWS PRODUCED BY COMMANDS (OWNER SESSION) ===");
     for (id, user_name, entity_type, entity_id, action, before, after, reason, created_at) in &rows {
         println!("Row #{}:", id);
         println!("  user_name:   {:?}", user_name);
@@ -7174,7 +7299,334 @@ fn test_audit_log_sample_rows_for_report() {
         println!("  after_json:  {}", after.as_deref().unwrap_or(""));
         println!("  reason:      {:?}", reason);
         println!("  created_at:  {}", created_at);
-        println!("-------------------------------------------");
+        println!("---------------------------------------------------------------");
     }
-    println!("=== END SAMPLE AUDIT ROWS ===");
+    println!("=== END REAL AUDIT LOG ROWS ===");
+}
+
+#[test]
+fn test_staff_session_calling_owner_command_writes_no_audit_and_changes_no_data() {
+    use crate::auth::{check_command_permission, SessionUser};
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    let staff = SessionUser {
+        id: 2,
+        name: "Staff Ramesh".to_string(),
+        role: "staff".to_string(),
+    };
+
+    // Seed item
+    conn.execute(
+        "INSERT INTO items (id, name, base_unit, category, gst_rate, is_active) VALUES (1, 'Urea 45kg', 'BAG', 'fertilizer', 5000, 1)",
+        [],
+    ).unwrap();
+
+    // Check permission check for Staff on Owner-only commands
+    let perm_res = check_command_permission(true, Some(&staff), false, "update_item_cmd");
+    assert!(perm_res.is_err(), "Staff must be denied for update_item_cmd");
+    let err_msg = perm_res.unwrap_err();
+    assert!(err_msg.contains("Owner") || err_msg.contains("व्यवस्थापक"));
+
+    let perm_alter = check_command_permission(true, Some(&staff), false, "alter_sale_cmd");
+    assert!(perm_alter.is_err(), "Staff must be denied for alter_sale_cmd");
+
+    let perm_cancel_pay = check_command_permission(true, Some(&staff), false, "cancel_payment_cmd");
+    assert!(perm_cancel_pay.is_err(), "Staff must be denied for cancel_payment_cmd");
+
+    // Verify 0 audit rows exist
+    let audit_count: i64 = conn.query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0)).unwrap();
+    assert_eq!(audit_count, 0, "No audit rows must be written when permission is denied");
+
+    // Verify item data is completely unchanged
+    let item_name: String = conn.query_row("SELECT name FROM items WHERE id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(item_name, "Urea 45kg", "Item data in DB must remain unchanged");
+}
+
+#[test]
+fn test_recovery_path_deliberately_corrupted_db_works_without_session() {
+    use crate::auth::check_command_permission_ext;
+
+    // (a) With startup_corruption_detected = true and no session (session = None),
+    // the three commands (check_db_integrity_cmd, list_backups_cmd, prepare_restore_cmd) are allowed!
+    let res_integrity = check_command_permission_ext(true, None, false, "check_db_integrity_cmd", true);
+    assert!(res_integrity.is_ok(), "check_db_integrity_cmd must be allowed without session on corrupted DB");
+
+    let res_backups = check_command_permission_ext(true, None, false, "list_backups_cmd", true);
+    assert!(res_backups.is_ok(), "list_backups_cmd must be allowed without session on corrupted DB");
+
+    let res_restore = check_command_permission_ext(true, None, false, "prepare_restore_cmd", true);
+    assert!(res_restore.is_ok(), "prepare_restore_cmd must be allowed without session on corrupted DB");
+}
+
+#[test]
+fn test_recovery_path_healthy_db_denies_restore_without_session() {
+    use crate::auth::check_command_permission_ext;
+
+    // (b) With healthy DB (startup_corruption_detected = false) and no session,
+    // the three commands MUST be denied, requiring login!
+    let res_integrity = check_command_permission_ext(true, None, false, "check_db_integrity_cmd", false);
+    assert!(res_integrity.is_err(), "check_db_integrity_cmd must be denied without session when DB is healthy");
+    let err_i = res_integrity.unwrap_err();
+    assert!(err_i.contains("Login required") || err_i.contains("लॉगिन"));
+
+    let res_backups = check_command_permission_ext(true, None, false, "list_backups_cmd", false);
+    assert!(res_backups.is_err(), "list_backups_cmd must be denied without session when DB is healthy");
+    let err_b = res_backups.unwrap_err();
+    assert!(err_b.contains("Login required") || err_b.contains("लॉगिन"));
+
+    let res_restore = check_command_permission_ext(true, None, false, "prepare_restore_cmd", false);
+    assert!(res_restore.is_err(), "prepare_restore_cmd must NEVER be allowed without session when DB is healthy");
+    let err_r = res_restore.unwrap_err();
+    assert!(err_r.contains("Login required") || err_r.contains("लॉगिन"));
+}
+
+#[test]
+fn test_recovery_path_failed_check_creates_safety_backup() {
+    use std::fs;
+    let temp_dir = std::env::temp_dir().join(format!("test_recovery_safety_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let corrupt_db_path = temp_dir.join("corrupt_inventory.db");
+    // Deliberately write invalid / corrupted bytes to DB file
+    fs::write(&corrupt_db_path, b"NOT A VALID SQLITE DATABASE FILE - CORRUPTED HEADER DATA").unwrap();
+
+    let backup_dir = temp_dir.join("backups");
+    fs::create_dir_all(&backup_dir).unwrap();
+
+    // Create a valid backup DB file to restore from
+    let valid_backup_path = temp_dir.join("valid_backup.db");
+    let valid_conn = rusqlite::Connection::open(&valid_backup_path).unwrap();
+    crate::db::configure_connection(&valid_conn).unwrap();
+    crate::db::run_migrations(&valid_conn).unwrap();
+    drop(valid_conn);
+
+    // Call prepare_restore on the corrupted database without an open connection
+    let res = crate::backup::prepare_restore(None, &corrupt_db_path, &valid_backup_path, &backup_dir);
+    assert!(res.is_ok(), "prepare_restore must succeed even with corrupted db file: {:?}", res.err());
+
+    let restore_result = res.unwrap();
+    assert!(restore_result.success, "prepare_restore must report success");
+    assert!(
+        fs::metadata(&restore_result.safety_backup_path).is_ok(),
+        "Pre-restore safety backup must exist on disk even after failed check / corruption: {}",
+        restore_result.safety_backup_path
+    );
+    let safety_bytes = fs::read(&restore_result.safety_backup_path).unwrap();
+    assert_eq!(safety_bytes, b"NOT A VALID SQLITE DATABASE FILE - CORRUPTED HEADER DATA");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_create_owner_initial_fails_if_user_exists() {
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    // First creation succeeds
+    let res1 = crate::commands::create_owner_initial_inner(&mut conn, "Vikram Owner", "secret123");
+    assert!(res1.is_ok(), "First owner creation must succeed");
+
+    // Second creation must fail
+    let res2 = crate::commands::create_owner_initial_inner(&mut conn, "Second Owner", "secret456");
+    assert!(res2.is_err(), "create_owner_initial must fail when any user already exists");
+    let err = res2.unwrap_err();
+    assert!(err.contains("पहले से मौजूद") || err.contains("already exists"));
+}
+
+#[test]
+fn test_skip_security_setup_fails_if_user_exists_or_security_enabled() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    // If security is enabled, skip must fail
+    conn.execute("UPDATE settings SET security_enabled = 1 WHERE id = 1", []).unwrap();
+    let res_sec = crate::commands::skip_security_setup_inner(&conn);
+    assert!(res_sec.is_err(), "skip_security_setup must fail if security_enabled is true");
+
+    // If security_enabled = 0 but a user exists, skip must fail
+    conn.execute("UPDATE settings SET security_enabled = 0 WHERE id = 1", []).unwrap();
+    conn.execute(
+        "INSERT INTO users (id, name, role, password_hash, is_active, failed_attempts, created_at) VALUES (1, 'Admin', 'owner', 'hash', 1, 0, '2026-03-01')",
+        [],
+    ).unwrap();
+    let res_user = crate::commands::skip_security_setup_inner(&conn);
+    assert!(res_user.is_err(), "skip_security_setup must fail if any user exists");
+
+    // In a completely blank system, skip succeeds
+    conn.execute("DELETE FROM users", []).unwrap();
+    conn.execute("UPDATE settings SET security_enabled = 0 WHERE id = 1", []).unwrap();
+    let res_ok = crate::commands::skip_security_setup_inner(&conn);
+    assert!(res_ok.is_ok(), "skip_security_setup succeeds only when no users exist and security not enabled");
+}
+
+#[test]
+fn test_recovery_key_rate_limiting_single_use_and_new_key() {
+    use crate::auth::{
+        create_user_inner, hash_password, reset_owner_with_recovery_key_inner,
+    };
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::db::configure_connection(&conn).unwrap();
+    crate::db::run_migrations(&conn).unwrap();
+
+    let _owner = create_user_inner(&conn, "Owner Ji", "owner", "ownerpass123").unwrap();
+    let original_key = "RK-TEST-1234-ABCD-EFGH";
+    let key_hash = hash_password(original_key).unwrap();
+
+    conn.execute(
+        "UPDATE settings SET recovery_key_hash = ?1, recovery_failed_attempts = 0, recovery_locked_until = NULL WHERE id = 1",
+        rusqlite::params![key_hash],
+    ).unwrap();
+
+    // 4 wrong attempts -> each reports remaining attempts
+    for i in 1..=4 {
+        let err = reset_owner_with_recovery_key_inner(&conn, "RK-WRONG-KEY", "newpass123").unwrap_err();
+        assert!(err.contains("अमान्य रिकवरी कुंजी"), "Attempt {} must report invalid key", i);
+    }
+
+    // 5th wrong attempt -> must lock for 5 minutes and record 'recovery_lock' in login_log
+    let err_lock = reset_owner_with_recovery_key_inner(&conn, "RK-WRONG-KEY", "newpass123").unwrap_err();
+    assert!(err_lock.contains("5 मिनट के लिए लॉक") || err_lock.contains("locked for 5 minutes"));
+
+    // Check login_log for recovery_lock
+    let lock_event_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM login_log WHERE event = 'recovery_lock'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(lock_event_count, 1, "recovery_lock event must be recorded in login_log");
+
+    // 6th attempt while locked -> immediately rejected with lockout error
+    let err_locked = reset_owner_with_recovery_key_inner(&conn, original_key, "newpass123").unwrap_err();
+    assert!(err_locked.contains("कुंजी लॉक है") || err_locked.contains("is locked"));
+
+    // Simulate lock expiration
+    conn.execute("UPDATE settings SET recovery_locked_until = NULL, recovery_failed_attempts = 0 WHERE id = 1", []).unwrap();
+
+    // Now use the correct key: must succeed, return a NEW key, and invalidate old key
+    let new_issued_key = reset_owner_with_recovery_key_inner(&conn, original_key, "newpass456").unwrap();
+    assert!(!new_issued_key.is_empty(), "Must return a new recovery key");
+    assert_ne!(new_issued_key, original_key, "New recovery key must be different from the old one");
+
+    // Check login_log for recovery_use
+    let use_event_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM login_log WHERE event = 'recovery_use'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(use_event_count, 1, "recovery_use event must be recorded in login_log");
+
+    // Trying to reuse the old recovery key must fail (single-use proof)
+    let reuse_err = reset_owner_with_recovery_key_inner(&conn, original_key, "pass789").unwrap_err();
+    assert!(reuse_err.contains("अमान्य"), "Old recovery key cannot be used again");
+
+    // Using the newly issued key succeeds!
+    let next_key = reset_owner_with_recovery_key_inner(&conn, &new_issued_key, "finalpass123").unwrap();
+    assert!(!next_key.is_empty(), "Using new recovery key succeeds and issues next key");
+}
+
+#[test]
+fn test_staff_and_supplier_data_policy_masking_and_denial() {
+    use crate::auth::{
+        can_role_access_party_statement, can_role_access_pending_bills,
+        can_role_record_payment, should_mask_supplier_data_for_role,
+    };
+    use crate::commands::{
+        mask_party_balances_for_role, PartyBalance,
+        mask_item_movement_for_role, Movement,
+    };
+
+    // 1. Party balances masking
+    let mut balances = vec![
+        PartyBalance {
+            party_id: 1,
+            party_name: "Ram Kisan".to_string(),
+            party_type: "customer".to_string(),
+            category: "farmer".to_string(),
+            phone: None,
+            village: None,
+            total_debit: 500000,
+            total_credit: 100000,
+            net_balance: 400000,
+        },
+        PartyBalance {
+            party_id: 2,
+            party_name: "IFFCO Supplier".to_string(),
+            party_type: "supplier".to_string(),
+            category: "wholesaler".to_string(),
+            phone: None,
+            village: None,
+            total_debit: 200000,
+            total_credit: 800000,
+            net_balance: -600000,
+        },
+    ];
+
+    // Owner sees real values
+    assert_eq!(balances[1].net_balance, -600000);
+    assert_eq!(balances[1].total_debit, 200000);
+
+    // For Staff: should_mask is true, supplier row amounts become 0
+    assert!(should_mask_supplier_data_for_role("staff"));
+    assert!(!should_mask_supplier_data_for_role("owner"));
+    mask_party_balances_for_role(&mut balances);
+
+    // Customer balance unchanged
+    assert_eq!(balances[0].total_debit, 500000);
+    assert_eq!(balances[0].net_balance, 400000);
+    // Supplier balance zeroed out for Staff
+    assert_eq!(balances[1].total_debit, 0, "Supplier total_debit must be 0 for Staff");
+    assert_eq!(balances[1].total_credit, 0, "Supplier total_credit must be 0 for Staff");
+    assert_eq!(balances[1].net_balance, 0, "Supplier net_balance must be 0 for Staff");
+
+    // 2. Party statement access policy
+    assert!(can_role_access_party_statement("owner", "supplier"), "Owner can access supplier statement");
+    assert!(can_role_access_party_statement("owner", "customer"), "Owner can access customer statement");
+    assert!(can_role_access_party_statement("staff", "customer"), "Staff can access customer statement");
+    assert!(!can_role_access_party_statement("staff", "supplier"), "Staff MUST BE DENIED for supplier statement");
+
+    // 3. Pending bills access policy
+    assert!(can_role_access_pending_bills("owner", "supplier"), "Owner can access supplier pending bills");
+    assert!(can_role_access_pending_bills("owner", "customer"), "Owner can access customer pending bills");
+    assert!(can_role_access_pending_bills("staff", "customer"), "Staff can access customer pending bills");
+    assert!(!can_role_access_pending_bills("staff", "supplier"), "Staff MUST BE DENIED for supplier pending bills");
+
+    // 4. Item movement rate/amount masking
+    let mut movements = vec![
+        Movement {
+            date: "2026-03-01".to_string(),
+            qty_base: 10_000,
+            type_: "purchase".to_string(),
+            ref_id: Some("PUR-001".to_string()),
+            rate_paise: 120000,
+            total_amount_paise: 1200000,
+        },
+        Movement {
+            date: "2026-03-02".to_string(),
+            qty_base: -2_000,
+            type_: "sale".to_string(),
+            ref_id: Some("INV-001".to_string()),
+            rate_paise: 135000,
+            total_amount_paise: 270000,
+        },
+    ];
+
+    // For Staff: purchase rate & total amount are masked to 0
+    mask_item_movement_for_role(&mut movements);
+    assert_eq!(movements[0].rate_paise, 0, "Purchase rate_paise must be masked to 0 for Staff");
+    assert_eq!(movements[0].total_amount_paise, 0, "Purchase total_amount_paise must be masked to 0 for Staff");
+    // Sales side rate & amount remain visible
+    assert_eq!(movements[1].rate_paise, 135000, "Sale rate_paise must remain real");
+    assert_eq!(movements[1].total_amount_paise, 270000, "Sale total_amount_paise must remain real");
+
+    // 5. Payment recording policy: "payment" is Owner-only, "receipt" is Staff
+    assert!(can_role_record_payment("staff", "receipt"), "Staff can record receipt from customer");
+    assert!(!can_role_record_payment("staff", "payment"), "Staff CANNOT record payment to supplier");
+    assert!(can_role_record_payment("owner", "receipt"), "Owner can record receipt");
+    assert!(can_role_record_payment("owner", "payment"), "Owner can record payment to supplier");
 }

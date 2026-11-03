@@ -438,8 +438,7 @@ pub fn backup_db_before_import(conn: &Connection, _db_path: &str) -> Result<Back
 }
 
 /// Lists all backup files in the primary directory (and secondary if configured)
-pub fn list_backups(conn: &Connection) -> Result<Vec<BackupInfo>, String> {
-    let primary_dir = get_primary_backup_dir(conn);
+pub fn list_backups_from_dir(primary_dir: &Path) -> Result<Vec<BackupInfo>, String> {
     if !primary_dir.exists() {
         return Ok(Vec::new());
     }
@@ -492,6 +491,12 @@ pub fn list_backups(conn: &Connection) -> Result<Vec<BackupInfo>, String> {
     Ok(list)
 }
 
+/// Lists all backup files in the primary directory (and secondary if configured)
+pub fn list_backups(conn: &Connection) -> Result<Vec<BackupInfo>, String> {
+    let primary_dir = get_primary_backup_dir(conn);
+    list_backups_from_dir(&primary_dir)
+}
+
 fn parse_timestamp_from_filename(filename: &str) -> String {
     // inventory_2026-10-29_11-30.db or pre_restore_2026-10-29_11-30.db
     let stripped = filename
@@ -538,11 +543,17 @@ pub fn prepare_restore(
     let safety_name = format!("pre_restore_{}.db", now.format("%Y-%m-%d_%H-%M-%S"));
     let safety_path = backup_dir.join(&safety_name);
 
-    if let Some(c) = conn {
-        let escaped = safety_path.to_string_lossy().replace('\'', "''");
-        let _ = c.execute(&format!("VACUUM INTO '{}'", escaped), []);
-    } else if current_db_path.exists() {
-        let _ = fs::copy(current_db_path, &safety_path);
+    if current_db_path.exists() {
+        let mut created = false;
+        if let Some(c) = conn {
+            let escaped = safety_path.to_string_lossy().replace('\'', "''");
+            if c.execute(&format!("VACUUM INTO '{}'", escaped), []).is_ok() && safety_path.exists() {
+                created = true;
+            }
+        }
+        if !created {
+            let _ = fs::copy(current_db_path, &safety_path);
+        }
     }
 
     // 2. Stage pending file: inventory.db.restore_pending

@@ -43,6 +43,7 @@ export function StatementModal({
   const isStaff = currentUser?.role === "staff";
   const [statement, setStatement] = useState<PartyStatement | null>(null);
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
 
   // Payment Alteration and Cancellation States
@@ -76,11 +77,13 @@ export function StatementModal({
 
   const loadStatement = async (id: number) => {
     setLoading(true);
+    setErrorMessage(null);
     try {
       const res = await invoke<PartyStatement>("get_party_statement_cmd", { partyId: id });
       setStatement(res);
-    } catch (e) {
+    } catch (e: any) {
       console.error("get_party_statement_cmd error:", e);
+      setErrorMessage(typeof e === "string" ? e : (e?.message || "विवरण लोड नहीं हो सका / Error loading statement"));
     } finally {
       setLoading(false);
     }
@@ -319,6 +322,18 @@ export function StatementModal({
             <div className="py-16 text-center text-slate-400 text-sm">
               <div className="animate-spin w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full mx-auto mb-2" />
               {t.common.loading}
+            </div>
+          ) : errorMessage ? (
+            <div className="py-16 text-center text-amber-700 text-sm max-w-md mx-auto space-y-2">
+              <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto text-xl">
+                🔒
+              </div>
+              <p className="font-semibold text-slate-800">{errorMessage}</p>
+              <p className="text-xs text-slate-500">
+                {lang === "hi"
+                  ? "सप्लायर का खाता विवरण केवल व्यवस्थापक (Owner) देख सकते हैं।"
+                  : "Supplier statements are restricted to Owner."}
+              </p>
             </div>
           ) : !statement ? (
             <div className="py-16 text-center text-slate-400 text-sm">

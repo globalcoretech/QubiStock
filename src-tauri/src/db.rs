@@ -330,6 +330,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN security_enabled INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN auto_lock_minutes INTEGER NOT NULL DEFAULT 10", []);
     let _ = conn.execute("ALTER TABLE settings ADD COLUMN recovery_key_hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN recovery_failed_attempts INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE settings ADD COLUMN recovery_locked_until TEXT", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN gst_status TEXT DEFAULT 'not_set'", []);
     let _ = conn.execute("ALTER TABLE items ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("UPDATE items SET gst_status = 'taxable' WHERE (gst_status IS NULL OR gst_status = 'not_set') AND gst_rate > 0", []);

@@ -47,10 +47,21 @@ pub struct SecurityStatus {
     pub is_locked: bool,
 }
 
+pub static STARTUP_CORRUPTION_DETECTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_startup_corruption_detected() -> bool {
+    STARTUP_CORRUPTION_DETECTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn set_startup_corruption_detected(val: bool) {
+    STARTUP_CORRUPTION_DETECTED.store(val, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[derive(Default)]
 pub struct AuthState {
     pub current_user: std::sync::Mutex<Option<SessionUser>>,
     pub is_locked: std::sync::Mutex<bool>,
+    pub startup_corruption_detected: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,13 +169,13 @@ pub const PERMISSION_TABLE: &[CommandPermission] = &[
     CommandPermission { name: "get_parties_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
     CommandPermission { name: "add_party_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
     CommandPermission { name: "save_invoice_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
-    CommandPermission { name: "record_payment_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "record_payment_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
     CommandPermission { name: "get_invoice_details_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
     CommandPermission { name: "get_last_rates_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
-    CommandPermission { name: "get_pending_bills_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
-    CommandPermission { name: "get_party_statement_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
-    CommandPermission { name: "get_party_balances_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
-    CommandPermission { name: "get_item_movement_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
+    CommandPermission { name: "get_pending_bills_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_party_statement_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_party_balances_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
+    CommandPermission { name: "get_item_movement_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
     CommandPermission { name: "get_purchase_register_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: true },
     CommandPermission { name: "get_sales_register_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
     CommandPermission { name: "get_next_bill_number_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
@@ -347,12 +358,39 @@ pub fn check_command_permission(
     is_locked: bool,
     command: &str,
 ) -> std::result::Result<Option<SessionUser>, String> {
+    check_command_permission_ext(
+        security_enabled,
+        session,
+        is_locked,
+        command,
+        is_startup_corruption_detected(),
+    )
+}
+
+pub fn check_command_permission_ext(
+    security_enabled: bool,
+    session: Option<&SessionUser>,
+    is_locked: bool,
+    command: &str,
+    startup_corruption_detected: bool,
+) -> std::result::Result<Option<SessionUser>, String> {
     if !security_enabled {
         return Ok(Some(SessionUser {
             id: 0,
             name: "व्यवस्थापक (Owner)".to_string(),
             role: "owner".to_string(),
         }));
+    }
+
+    // Special recovery path: If startup quick_check failed and there is no session,
+    // allow the recovery screen commands:
+    if session.is_none() && startup_corruption_detected {
+        if command == "check_db_integrity_cmd"
+            || command == "list_backups_cmd"
+            || command == "prepare_restore_cmd"
+        {
+            return Ok(None);
+        }
     }
 
     let is_allowed_locked = is_command_allowed_while_locked(command);
@@ -730,44 +768,91 @@ pub fn reset_owner_with_recovery_key_inner(
         return Err("नया पासवर्ड कम से कम 6 अक्षरों का होना चाहिए। / Password must be at least 6 characters.".to_string());
     }
 
-    let stored_key_hash: Option<String> = conn
+    let owner_info: Option<(i64, String)> = conn
         .query_row(
-            "SELECT recovery_key_hash FROM settings WHERE id = 1",
+            "SELECT id, name FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1",
             [],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .unwrap_or(None);
+        .ok();
+
+    let (owner_id, owner_name) = match owner_info {
+        Some(info) => info,
+        None => return Err("कोई व्यवस्थापक यूज़र नहीं मिला। / No Owner found.".to_string()),
+    };
+
+    let (stored_key_hash, mut failed_attempts, locked_until): (Option<String>, i64, Option<String>) = conn
+        .query_row(
+            "SELECT recovery_key_hash, COALESCE(recovery_failed_attempts, 0), recovery_locked_until FROM settings WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap_or((None, 0, None));
 
     let hash = match stored_key_hash {
         Some(h) if !h.trim().is_empty() => h,
         _ => return Err("कोई रिकवरी कुंजी कॉन्फ़िगर नहीं है। / No recovery key configured.".to_string()),
     };
 
-    let cleaned_entered = recovery_key.trim();
-    if !verify_password(cleaned_entered, &hash) {
-        return Err("अमान्य रिकवरी कुंजी! / Invalid recovery key.".to_string());
+    let now = chrono::Local::now();
+
+    // Check rate-limit lock status (5 wrong keys -> 5 minutes lockout)
+    if let Some(ref until_str) = locked_until {
+        if let Ok(until_dt) = chrono::DateTime::parse_from_rfc3339(until_str) {
+            let until_local = until_dt.with_timezone(&chrono::Local);
+            if now < until_local {
+                let remaining_secs = (until_local - now).num_seconds();
+                let mins = (remaining_secs + 59) / 60;
+                return Err(format!(
+                    "{} गलत प्रयासों के कारण रिकवरी कुंजी लॉक है। कृपया {} मिनट बाद प्रयास करें। / Recovery key is locked for {} more minute(s).",
+                    MAX_FAILED_LOGIN_ATTEMPTS, mins, mins
+                ));
+            } else {
+                failed_attempts = 0;
+                let _ = conn.execute(
+                    "UPDATE settings SET recovery_failed_attempts = 0, recovery_locked_until = NULL WHERE id = 1",
+                    [],
+                );
+            }
+        }
     }
 
-    // Find the primary owner
-    let owner_id: i64 = conn
-        .query_row(
-            "SELECT id FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|_| "कोई व्यवस्थापक यूज़र नहीं मिला। / No Owner found.".to_string())?;
+    let cleaned_entered = recovery_key.trim();
+    if !verify_password(cleaned_entered, &hash) {
+        let new_failed = failed_attempts + 1;
+        let _ = log_login_event(conn, &owner_name, "recovery_failed_attempt");
 
-    let owner_name: String = conn
-        .query_row("SELECT name FROM users WHERE id = ?1", params![owner_id], |r| r.get(0))
-        .unwrap_or_else(|_| "Owner".to_string());
+        if new_failed >= MAX_FAILED_LOGIN_ATTEMPTS {
+            let lock_until = (now + chrono::Duration::minutes(LOCKOUT_DURATION_MINUTES)).to_rfc3339();
+            let _ = conn.execute(
+                "UPDATE settings SET recovery_failed_attempts = ?1, recovery_locked_until = ?2 WHERE id = 1",
+                params![new_failed, lock_until],
+            );
+            let _ = log_login_event(conn, &owner_name, "recovery_lock");
+            return Err(format!(
+                "रिकवरी कुंजी गलत है। {} गलत प्रयासों के कारण रिकवरी {} मिनट के लिए लॉक कर दी गई है। / Recovery key locked for {} minutes due to {} failed attempts.",
+                MAX_FAILED_LOGIN_ATTEMPTS, LOCKOUT_DURATION_MINUTES, LOCKOUT_DURATION_MINUTES, MAX_FAILED_LOGIN_ATTEMPTS
+            ));
+        } else {
+            let _ = conn.execute(
+                "UPDATE settings SET recovery_failed_attempts = ?1 WHERE id = 1",
+                params![new_failed],
+            );
+            let remaining = MAX_FAILED_LOGIN_ATTEMPTS - new_failed;
+            return Err(format!(
+                "अमान्य रिकवरी कुंजी! (शेष प्रयास: {}) / Invalid recovery key. Attempts remaining: {}.",
+                remaining, remaining
+            ));
+        }
+    }
 
-    // Generate BRAND NEW recovery key
+    // Success! Single-use: Old recovery key is replaced with brand new key
     let new_rec_key = generate_recovery_key();
     let new_rec_hash = hash_password(&new_rec_key)?;
     let new_pw_hash = hash_password(new_owner_password)?;
 
     conn.execute(
-        "UPDATE settings SET recovery_key_hash = ?1 WHERE id = 1",
+        "UPDATE settings SET recovery_key_hash = ?1, recovery_failed_attempts = 0, recovery_locked_until = NULL WHERE id = 1",
         params![new_rec_hash],
     )
     .map_err(|e| format!("Failed to update recovery key hash: {}", e))?;
@@ -781,6 +866,44 @@ pub fn reset_owner_with_recovery_key_inner(
     let _ = log_login_event(conn, &owner_name, "recovery_use");
 
     Ok(new_rec_key)
+}
+
+// ============================================================================
+// STAFF AND SUPPLIER DATA ACCESS POLICY
+// Default policy: Staff may view customer balances & statements, but supplier
+// financial details (balances, statements, pending supplier bills, purchase rates)
+// and outward supplier payments are restricted to Owner.
+// ============================================================================
+
+pub fn is_supplier_party_type(party_type: &str) -> bool {
+    let t = party_type.trim().to_lowercase();
+    t == "supplier" || t == "सप्लायर" || t == "vendor"
+}
+
+pub fn can_role_access_party_statement(role: &str, party_type: &str) -> bool {
+    if role == "owner" {
+        return true;
+    }
+    !is_supplier_party_type(party_type)
+}
+
+pub fn can_role_access_pending_bills(role: &str, party_type: &str) -> bool {
+    if role == "owner" {
+        return true;
+    }
+    !is_supplier_party_type(party_type)
+}
+
+pub fn can_role_record_payment(role: &str, payment_type: &str) -> bool {
+    if role == "owner" {
+        return true;
+    }
+    let p = payment_type.trim().to_lowercase();
+    p != "payment"
+}
+
+pub fn should_mask_supplier_data_for_role(role: &str) -> bool {
+    role != "owner"
 }
 
 pub fn get_login_logs_inner(conn: &Connection, limit: Option<i64>) -> std::result::Result<Vec<LoginLogEntry>, String> {

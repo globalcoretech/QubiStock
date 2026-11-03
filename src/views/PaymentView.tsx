@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Party, PartyBalance, PendingBill, SearchableOption, Feedback } from "../types";
+import { Party, PartyBalance, PendingBill, SearchableOption, Feedback, SessionUser } from "../types";
 import { Translations, Language } from "../i18n";
 import { formatCurrency, formatRupeesCompact, formatDate } from "../utils/formatters";
 import { localTodayIso } from "../utils/dateUtils";
@@ -32,6 +32,7 @@ export interface PaymentViewProps {
   onRefresh?: () => void;
   t: Translations;
   lang: Language;
+  currentUser?: SessionUser | null;
   initialPartyId?: number | null;
   initialType?: "receipt" | "payment";
   initialParties?: Party[];
@@ -48,6 +49,7 @@ export function PaymentView({
   onRefresh,
   t,
   lang,
+  currentUser,
   initialPartyId,
   initialType = "receipt",
   initialParties,
@@ -58,7 +60,19 @@ export function PaymentView({
   onDirtyChange,
   onSavingChange,
 }: PaymentViewProps) {
-  const [paymentType, setPaymentType] = useState<"receipt" | "payment">(initialType);
+  const isStaff = currentUser?.role === "staff";
+  const [paymentType, setPaymentType] = useState<"receipt" | "payment">(
+    isStaff ? "receipt" : initialType
+  );
+
+  useEffect(() => {
+    if (isStaff && paymentType === "payment") {
+      setPaymentType("receipt");
+      setPartyId("");
+      setMatchedInvoiceNo("");
+      setCustomRefId("");
+    }
+  }, [isStaff, paymentType]);
   const [partyId, setPartyId] = useState<string>(() => {
     if (initialPartyId) {
       return initialPartyId.toString();
@@ -375,24 +389,32 @@ export function PaymentView({
             <ArrowDownLeft size={14} strokeWidth={2.5} className="text-emerald-600" />
             <span>{t.payment.receiptTab}</span>
           </button>
-          <button
-            type="button"
-            data-testid="payment-tab-payment"
-            onClick={() => {
-              setPaymentType("payment");
-              setPartyId("");
-              setMatchedInvoiceNo("");
-              setCustomRefId("");
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
-              paymentType === "payment"
-                ? "bg-white text-rose-700 shadow-2xs border border-rose-200/60"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <ArrowUpRight size={14} strokeWidth={2.5} className="text-rose-600" />
-            <span>{t.payment.paymentTab}</span>
-          </button>
+          {!isStaff ? (
+            <button
+              type="button"
+              data-testid="payment-tab-payment"
+              onClick={() => {
+                setPaymentType("payment");
+                setPartyId("");
+                setMatchedInvoiceNo("");
+                setCustomRefId("");
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+                paymentType === "payment"
+                  ? "bg-white text-rose-700 shadow-2xs border border-rose-200/60"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <ArrowUpRight size={14} strokeWidth={2.5} className="text-rose-600" />
+              <span>{t.payment.paymentTab}</span>
+            </button>
+          ) : (
+            <div className="px-2.5 py-1 text-[11px] text-slate-500 font-medium italic">
+              {lang === "hi"
+                ? "🔒 सप्लायर भुगतान केवल व्यवस्थापक दर्ज कर सकते हैं"
+                : "🔒 Supplier payments restricted to Owner"}
+            </div>
+          )}
         </div>
       </div>
 

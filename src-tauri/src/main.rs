@@ -28,29 +28,44 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
-            app.manage(auth::AuthState::default());
             let data_dir = app.path().app_data_dir().unwrap_or_default();
             let db_path = data_dir.join("inventory.db");
             let _ = backup::check_and_apply_pending_restore(&db_path.to_string_lossy());
 
+            let mut startup_corruption = false;
             // PRAGMA quick_check at startup
             if db_path.exists() {
-                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                    let _ = db::configure_connection(&conn);
-                    let qc: Result<String, _> = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0));
-                    match qc {
-                        Ok(ref s) if s == "ok" => {
-                            eprintln!("[Krishi Kendra] Startup PRAGMA quick_check: OK");
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => {
+                        let _ = db::configure_connection(&conn);
+                        let qc: Result<String, _> = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0));
+                        match qc {
+                            Ok(ref s) if s == "ok" => {
+                                eprintln!("[Krishi Kendra] Startup PRAGMA quick_check: OK");
+                            }
+                            Ok(err) => {
+                                eprintln!("[Krishi Kendra] Startup PRAGMA quick_check FAILED: {}", err);
+                                startup_corruption = true;
+                            }
+                            Err(e) => {
+                                eprintln!("[Krishi Kendra] Startup PRAGMA quick_check error: {}", e);
+                                startup_corruption = true;
+                            }
                         }
-                        Ok(err) => {
-                            eprintln!("[Krishi Kendra] Startup PRAGMA quick_check FAILED: {}", err);
-                        }
-                        Err(e) => {
-                            eprintln!("[Krishi Kendra] Startup PRAGMA quick_check error: {}", e);
-                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[Krishi Kendra] Startup DB open error: {}", e);
+                        startup_corruption = true;
                     }
                 }
             }
+
+            auth::set_startup_corruption_detected(startup_corruption);
+            app.manage(auth::AuthState {
+                current_user: std::sync::Mutex::new(None),
+                is_locked: std::sync::Mutex::new(false),
+                startup_corruption_detected: std::sync::atomic::AtomicBool::new(startup_corruption),
+            });
 
             // Daily first-launch backup check
             let handle_launch = app.handle().clone();
