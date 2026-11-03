@@ -199,6 +199,12 @@ export default function App() {
   const [safetyInfo, setSafetyInfo] = useState<DbSafetyInfo | null>(null);
   const [dismissedLocationWarning, setDismissedLocationWarning] = useState(false);
   const [exitModalState, setExitModalState] = useState<"none" | "busy" | "dirty" | "clean" | "exiting">("none");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("krishi_sidebar_collapsed") === "true";
+    }
+    return false;
+  });
 
   // Local Auth & Security State
   const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
@@ -541,6 +547,16 @@ export default function App() {
         onSelectLanguage={handleLanguageChange}
         t={t}
         onExitClick={handleRequestExit}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => {
+          setIsSidebarCollapsed((prev) => {
+            const next = !prev;
+            if (typeof window !== "undefined") {
+              localStorage.setItem("krishi_sidebar_collapsed", String(next));
+            }
+            return next;
+          });
+        }}
       />
 
       {/* Main Content Area */}

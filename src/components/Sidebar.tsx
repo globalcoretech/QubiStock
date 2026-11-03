@@ -23,6 +23,8 @@ import {
   LogOut,
   Lock,
   User,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "./icons";
 
 interface SidebarProps {
@@ -35,6 +37,8 @@ interface SidebarProps {
   onExitClick?: () => void;
   currentUser?: SessionUser | null;
   onLockClick?: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 interface NavItemDef {
@@ -58,7 +62,45 @@ export function Sidebar({
   onExitClick,
   currentUser,
   onLockClick,
+  isCollapsed: propIsCollapsed,
+  onToggleCollapse,
 }: SidebarProps) {
+  const [internalCollapsed, setInternalCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("krishi_sidebar_collapsed") === "true";
+    }
+    return false;
+  });
+
+  const isCollapsed = propIsCollapsed !== undefined ? propIsCollapsed : internalCollapsed;
+
+  const toggleCollapse = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      const next = !internalCollapsed;
+      setInternalCollapsed(next);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("krishi_sidebar_collapsed", String(next));
+      }
+    }
+  };
+
+  // Keyboard shortcut: Ctrl+B or Cmd+B to toggle sidebar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+          e.preventDefault();
+          toggleCollapse();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [internalCollapsed, onToggleCollapse]);
+
   const [isFlyoutOpen, setIsFlyoutOpen] = useState(false);
   const [flyoutPos, setFlyoutPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -200,31 +242,66 @@ export function Sidebar({
   return (
     <aside
       data-testid="app-sidebar"
-      className="w-[240px] bg-forest text-surface border-r border-forest-dark flex flex-col h-screen max-h-screen select-none flex-shrink-0 z-30 no-print relative overflow-hidden"
+      className={`${
+        isCollapsed ? "w-[68px]" : "w-[240px]"
+      } transition-all duration-200 ease-in-out bg-forest text-surface border-r border-forest-dark flex flex-col h-screen max-h-screen select-none flex-shrink-0 z-30 no-print relative overflow-hidden`}
     >
-      {/* 1. Header: Dukaan ka naam poora dikhe + Bahi logo */}
-      <div className="p-3 border-b border-forest-2/70 flex-shrink-0 bg-forest-dark/40">
-        <button
-          type="button"
-          onClick={() => onNavigate("Dashboard")}
-          className="flex items-center gap-2.5 text-left focus:outline-none w-full min-w-0 cursor-pointer"
-          title={settings.shopName}
-        >
-          <BahiLogoMark size={34} className="flex-shrink-0 shadow-xs" />
-          <div className="min-w-0 flex-1">
-            <h1 className="font-serif text-[15px] font-bold text-surface leading-snug truncate tracking-tight">
-              {settings.shopName}
-            </h1>
-            <p className="text-[11px] text-surface/65 font-medium truncate num-tabular">
-              {settings.gstin || (lang === "hi" ? "डिजिटल बही-खाता" : "Digital Bahi-Khata")}
-            </p>
-          </div>
-        </button>
+      {/* 1. Header: Dukaan ka naam poora dikhe + Bahi logo + Collapse/Expand button */}
+      <div className={`border-b border-forest-2/70 flex-shrink-0 bg-forest-dark/40 ${isCollapsed ? "p-2 flex flex-col items-center gap-2" : "p-3 flex items-center justify-between gap-2"}`}>
+        {isCollapsed ? (
+          <>
+            <button
+              type="button"
+              data-testid="sidebar-expand-btn"
+              onClick={toggleCollapse}
+              className="p-1.5 rounded-lg text-surface/70 hover:text-white hover:bg-forest-2/60 transition cursor-pointer flex items-center justify-center"
+              title={lang === "hi" ? "साइडबार खोलें (Ctrl+B)" : "Expand Sidebar (Ctrl+B)"}
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("Dashboard")}
+              className="focus:outline-none cursor-pointer flex items-center justify-center"
+              title={settings.shopName || (lang === "hi" ? "डिजिटल बही-खाता" : "Digital Bahi-Khata")}
+            >
+              <BahiLogoMark size={30} className="flex-shrink-0 shadow-xs" />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => onNavigate("Dashboard")}
+              className="flex items-center gap-2.5 text-left focus:outline-none min-w-0 flex-1 cursor-pointer"
+              title={settings.shopName}
+            >
+              <BahiLogoMark size={34} className="flex-shrink-0 shadow-xs" />
+              <div className="min-w-0 flex-1">
+                <h1 className="font-serif text-[15px] font-bold text-surface leading-snug truncate tracking-tight">
+                  {settings.shopName}
+                </h1>
+                <p className="text-[11px] text-surface/65 font-medium truncate num-tabular">
+                  {settings.gstin || (lang === "hi" ? "डिजिटल बही-खाता" : "Digital Bahi-Khata")}
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              data-testid="sidebar-collapse-btn"
+              onClick={toggleCollapse}
+              className="p-1.5 rounded-lg text-surface/70 hover:text-white hover:bg-forest-2/60 transition cursor-pointer flex-shrink-0"
+              title={lang === "hi" ? "साइडबार छोटा करें (Ctrl+B)" : "Collapse Sidebar (Ctrl+B)"}
+            >
+              <PanelLeftClose size={18} />
+            </button>
+          </>
+        )}
       </div>
 
       {/* 2. Exactly 7 Main Navigation Items - Fits vertically without any page scroll */}
       <nav
-        className="flex-1 px-2 py-2 space-y-1 overflow-y-auto flex flex-col justify-start"
+        className={`flex-1 ${isCollapsed ? "px-1.5" : "px-2"} py-2 space-y-1 overflow-y-auto flex flex-col justify-start`}
         data-scroll="true"
       >
         {primaryNavItems.map((item) => {
@@ -248,14 +325,18 @@ export function Sidebar({
               }}
               title={
                 isBillBlocked
-                  ? (lang === "hi" ? "पहले दुकान की जानकारी भरें" : "Fill shop details first")
-                  : undefined
+                  ? (lang === "hi" ? `${title} (पहले दुकान की जानकारी भरें)` : `${title} (Fill shop details first)`)
+                  : title
               }
-              className={`w-full group rounded-lg transition-all flex items-center gap-2.5 min-h-[38px] px-2.5 py-1 justify-start text-left cursor-pointer ${
+              className={`w-full group rounded-lg transition-all flex items-center min-h-[38px] ${
+                isCollapsed
+                  ? "justify-center p-1.5"
+                  : "gap-2.5 px-2.5 py-1 justify-start text-left"
+              } cursor-pointer ${
                 isBillBlocked
                   ? "opacity-50 cursor-not-allowed bg-transparent text-surface/50"
                   : isActive
-                  ? `${item.activeBg} border-l-4 ${item.activeBorder}`
+                  ? `${item.activeBg} ${isCollapsed ? "ring-2 ring-emerald-400/80 shadow-md" : `border-l-4 ${item.activeBorder}`}`
                   : "text-surface/85 hover:bg-forest-2/50 hover:text-surface"
               }`}
             >
@@ -270,16 +351,18 @@ export function Sidebar({
                 <IconComp size={17} />
               </div>
 
-              <div className="flex flex-col min-w-0">
-                <span className="font-medium text-[15px] truncate tracking-tight">
-                  {title}
-                </span>
-                {isBillBlocked && (
-                  <span className="text-[10px] text-amber-300 font-semibold truncate leading-tight">
-                    {lang === "hi" ? "पहले दुकान की जानकारी भरें" : "Fill shop details first"}
+              {!isCollapsed && (
+                <div className="flex flex-col min-w-0">
+                  <span className="font-medium text-[15px] truncate tracking-tight">
+                    {title}
                   </span>
-                )}
-              </div>
+                  {isBillBlocked && (
+                    <span className="text-[10px] text-amber-300 font-semibold truncate leading-tight">
+                      {lang === "hi" ? "पहले दुकान की जानकारी भरें" : "Fill shop details first"}
+                    </span>
+                  )}
+                </div>
+              )}
             </button>
           );
         })}
@@ -303,9 +386,12 @@ export function Sidebar({
                 setIsFlyoutOpen(false);
               }
             }}
-            className={`w-full group rounded-lg transition-all flex items-center gap-2.5 min-h-[38px] px-2.5 py-1 justify-start text-left cursor-pointer ${
+            title={lang === "hi" ? "अन्य सेवाएं / सेटिंग्स (More)" : "More Modules & Settings"}
+            className={`w-full group rounded-lg transition-all flex items-center min-h-[38px] ${
+              isCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2.5 py-1 justify-start text-left"
+            } cursor-pointer ${
               isFlyoutActive || isFlyoutOpen
-                ? "bg-forest-2 text-marigold font-semibold border-l-4 border-marigold shadow-xs"
+                ? `bg-forest-2 text-marigold font-semibold ${isCollapsed ? "ring-2 ring-marigold/80 shadow-md" : "border-l-4 border-marigold shadow-xs"}`
                 : "text-surface/85 hover:bg-forest-2/50 hover:text-surface"
             }`}
           >
@@ -319,14 +405,16 @@ export function Sidebar({
               <DuotoneDotsThree size={18} />
             </div>
 
-            <div className="flex items-center justify-between flex-1 min-w-0">
-              <span className="font-medium text-[15px] truncate">
-                {lang === "hi" ? "और" : "More"}
-              </span>
-              <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-forest-dark/80 text-surface/60">
-                {flyoutItems.length}
-              </span>
-            </div>
+            {!isCollapsed && (
+              <div className="flex items-center justify-between flex-1 min-w-0">
+                <span className="font-medium text-[15px] truncate">
+                  {lang === "hi" ? "और" : "More"}
+                </span>
+                <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-forest-dark/80 text-surface/60">
+                  {flyoutItems.length}
+                </span>
+              </div>
+            )}
           </button>
 
           {/* Flyout Popup Menu - Rendered via Portal directly into document.body */}
@@ -400,43 +488,67 @@ export function Sidebar({
       </nav>
 
       {/* 3. Bottom Area: User info + Lock button + Exit Button + Language Toggle ("हिं | EN" pill) + State info */}
-      <div className="p-2 border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30 space-y-2">
+      <div className={`${isCollapsed ? "p-1.5 space-y-1.5" : "p-2 space-y-2"} border-t border-forest-2/70 flex-shrink-0 bg-forest-dark/30`}>
         {/* User Badge & Lock Button */}
         {currentUser && (
-          <div
-            data-testid="sidebar-user-badge"
-            className="flex items-center justify-between gap-1.5 p-1.5 bg-forest-dark/90 rounded-lg border border-forest-2/60"
-          >
-            <div className="min-w-0 flex-1 flex items-center gap-1.5 px-1">
-              <User size={13} className="text-emerald-400 shrink-0" />
-              <div className="min-w-0 flex-1 truncate">
-                <div className="text-[11px] font-semibold text-surface truncate leading-tight">
-                  {currentUser.name}
+          isCollapsed ? (
+            <div className="flex flex-col items-center">
+              {onLockClick ? (
+                <button
+                  type="button"
+                  data-testid="sidebar-lock-btn"
+                  onClick={onLockClick}
+                  className="w-10 h-10 rounded-lg bg-forest-dark/90 hover:bg-forest-2 text-surface hover:text-white transition flex items-center justify-center border border-forest-2/70 cursor-pointer"
+                  title={`${currentUser.name} (${currentUser.role === "owner" ? (lang === "hi" ? "व्यवस्थापक" : "Owner") : (lang === "hi" ? "कर्मचारी" : "Staff")}) - ${lang === "hi" ? "स्क्रीन लॉक करें" : "Lock Screen"}`}
+                >
+                  <Lock size={15} className="text-emerald-300" />
+                </button>
+              ) : (
+                <div
+                  data-testid="sidebar-user-badge"
+                  className="w-10 h-10 rounded-lg bg-forest-dark/90 text-surface flex items-center justify-center border border-forest-2/70"
+                  title={`${currentUser.name} (${currentUser.role === "owner" ? (lang === "hi" ? "व्यवस्थापक" : "Owner") : (lang === "hi" ? "कर्मचारी" : "Staff")})`}
+                >
+                  <User size={15} className="text-emerald-400" />
                 </div>
-                <div className="text-[9px] text-surface/60 font-medium">
-                  {currentUser.role === "owner"
-                    ? lang === "hi"
-                      ? "व्यवस्थापक (Owner)"
-                      : "Owner"
-                    : lang === "hi"
-                    ? "कर्मचारी (Staff)"
-                    : "Staff"}
+              )}
+            </div>
+          ) : (
+            <div
+              data-testid="sidebar-user-badge"
+              className="flex items-center justify-between gap-1.5 p-1.5 bg-forest-dark/90 rounded-lg border border-forest-2/60"
+            >
+              <div className="min-w-0 flex-1 flex items-center gap-1.5 px-1">
+                <User size={13} className="text-emerald-400 shrink-0" />
+                <div className="min-w-0 flex-1 truncate">
+                  <div className="text-[11px] font-semibold text-surface truncate leading-tight">
+                    {currentUser.name}
+                  </div>
+                  <div className="text-[9px] text-surface/60 font-medium">
+                    {currentUser.role === "owner"
+                      ? lang === "hi"
+                        ? "व्यवस्थापक (Owner)"
+                        : "Owner"
+                      : lang === "hi"
+                      ? "कर्मचारी (Staff)"
+                      : "Staff"}
+                  </div>
                 </div>
               </div>
+              {onLockClick && (
+                <button
+                  type="button"
+                  data-testid="sidebar-lock-btn"
+                  onClick={onLockClick}
+                  className="px-2 py-1 rounded-md bg-forest-2/50 hover:bg-forest-2 text-surface/90 hover:text-white transition flex items-center gap-1 text-[11px] font-medium cursor-pointer shrink-0 border border-forest-2/70"
+                  title={lang === "hi" ? "स्क्रीन लॉक करें" : "Lock Screen"}
+                >
+                  <Lock size={12} className="text-emerald-300" />
+                  <span className="text-[10px]">{lang === "hi" ? "लॉक" : "Lock"}</span>
+                </button>
+              )}
             </div>
-            {onLockClick && (
-              <button
-                type="button"
-                data-testid="sidebar-lock-btn"
-                onClick={onLockClick}
-                className="px-2 py-1 rounded-md bg-forest-2/50 hover:bg-forest-2 text-surface/90 hover:text-white transition flex items-center gap-1 text-[11px] font-medium cursor-pointer shrink-0 border border-forest-2/70"
-                title={lang === "hi" ? "स्क्रीन लॉक करें" : "Lock Screen"}
-              >
-                <Lock size={12} className="text-emerald-300" />
-                <span className="text-[10px]">{lang === "hi" ? "लॉक" : "Lock"}</span>
-              </button>
-            )}
-          </div>
+          )
         )}
 
         {/* Exit Application Button */}
@@ -444,51 +556,82 @@ export function Sidebar({
           type="button"
           data-testid="sidebar-exit-btn"
           onClick={() => onExitClick?.()}
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 hover:text-white transition-all text-xs font-semibold cursor-pointer shadow-2xs"
+          className={`flex items-center justify-center gap-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 hover:text-white transition-all text-xs font-semibold cursor-pointer shadow-2xs ${
+            isCollapsed ? "w-10 h-9 mx-auto" : "w-full py-1.5 px-2"
+          }`}
           title={lang === "hi" ? "ऐप से बाहर निकलें (Exit)" : "Exit Application"}
         >
           <LogOut size={14} className="text-rose-400" />
-          <span>{lang === "hi" ? "बाहर निकलें (Exit)" : "Exit / बाहर निकलें"}</span>
+          {!isCollapsed && <span>{lang === "hi" ? "बाहर निकलें (Exit)" : "Exit / बाहर निकलें"}</span>}
         </button>
 
         {/* Language Toggle Pill - "हिं | EN" */}
-        <div className="flex items-center justify-center p-0.5 bg-forest-dark/90 border border-forest-2/80 rounded-full w-full max-w-[120px] mx-auto text-xs">
-          <button
-            type="button"
-            data-testid="lang-hi"
-            onClick={() => onSelectLanguage("hi")}
-            className={`flex-1 text-center py-1 rounded-full font-semibold transition-all cursor-pointer ${
-              lang === "hi"
-                ? "bg-marigold text-ink font-bold shadow-xs"
-                : "text-surface/65 hover:text-surface"
-            }`}
-          >
-            हिं
-          </button>
-          <span className="text-forest-2 text-xs px-1 select-none">|</span>
-          <button
-            type="button"
-            data-testid="lang-en"
-            onClick={() => onSelectLanguage("en")}
-            className={`flex-1 text-center py-1 rounded-full font-semibold transition-all cursor-pointer ${
-              lang === "en"
-                ? "bg-marigold text-ink font-bold shadow-xs"
-                : "text-surface/65 hover:text-surface"
-            }`}
-          >
-            EN
-          </button>
-        </div>
+        {isCollapsed ? (
+          <div className="flex flex-col items-center justify-center p-0.5 bg-forest-dark/90 border border-forest-2/80 rounded-lg text-[10px] w-10 mx-auto">
+            <button
+              type="button"
+              data-testid="lang-hi"
+              onClick={() => onSelectLanguage("hi")}
+              className={`w-full text-center py-0.5 rounded font-bold transition-all cursor-pointer ${
+                lang === "hi" ? "bg-marigold text-ink shadow-xs" : "text-surface/65 hover:text-surface"
+              }`}
+              title="हिंदी"
+            >
+              हिं
+            </button>
+            <button
+              type="button"
+              data-testid="lang-en"
+              onClick={() => onSelectLanguage("en")}
+              className={`w-full text-center py-0.5 rounded font-bold transition-all cursor-pointer ${
+                lang === "en" ? "bg-marigold text-ink shadow-xs" : "text-surface/65 hover:text-surface"
+              }`}
+              title="English"
+            >
+              EN
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center p-0.5 bg-forest-dark/90 border border-forest-2/80 rounded-full w-full max-w-[120px] mx-auto text-xs">
+            <button
+              type="button"
+              data-testid="lang-hi"
+              onClick={() => onSelectLanguage("hi")}
+              className={`flex-1 text-center py-1 rounded-full font-semibold transition-all cursor-pointer ${
+                lang === "hi"
+                  ? "bg-marigold text-ink font-bold shadow-xs"
+                  : "text-surface/65 hover:text-surface"
+              }`}
+            >
+              हिं
+            </button>
+            <span className="text-forest-2 text-xs px-1 select-none">|</span>
+            <button
+              type="button"
+              data-testid="lang-en"
+              onClick={() => onSelectLanguage("en")}
+              className={`flex-1 text-center py-1 rounded-full font-semibold transition-all cursor-pointer ${
+                lang === "en"
+                  ? "bg-marigold text-ink font-bold shadow-xs"
+                  : "text-surface/65 hover:text-surface"
+              }`}
+            >
+              EN
+            </button>
+          </div>
+        )}
 
         {/* State / Version info */}
-        <div className="text-[10px] text-surface/50 text-center num-tabular truncate">
-          {settings.stateCode === "23"
-            ? lang === "hi"
-              ? "म.प्र. (23)"
-              : "MP (23)"
-            : `State: ${settings.stateCode}`}{" "}
-          • v0.3.0
-        </div>
+        {!isCollapsed && (
+          <div className="text-[10px] text-surface/50 text-center num-tabular truncate">
+            {settings.stateCode === "23"
+              ? lang === "hi"
+                ? "म.प्र. (23)"
+                : "MP (23)"
+              : `State: ${settings.stateCode}`}{" "}
+            • v0.3.0
+          </div>
+        )}
       </div>
     </aside>
   );

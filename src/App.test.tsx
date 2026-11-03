@@ -472,8 +472,9 @@ describe("Home Redesign & Sidebar Verification (सरल व सीधा ह�
     expect(paymentHtml).toContain("bg-white text-rose-700"); // payment active styling
   });
 
-  it("3. Sidebar me collapse ka button nahi hai aur hamesha 240px khula hai", () => {
-    const sidebarHtml = renderToString(
+  it("3. Sidebar is collapsible and expands cleanly without overlapping content", () => {
+    // A. Expanded state (default)
+    const expandedHtml = renderToString(
       <Sidebar
         currentView="Dashboard"
         onNavigate={() => {}}
@@ -481,26 +482,47 @@ describe("Home Redesign & Sidebar Verification (सरल व सीधा ह�
         lang="hi"
         onSelectLanguage={() => {}}
         t={t}
+        isCollapsed={false}
       />
     );
 
-    // Sidebar width is 240px
-    expect(sidebarHtml).toContain("w-[240px]");
-
-    // No collapse or expand button
-    expect(sidebarHtml).not.toContain("साइडबार छोटा करें");
-    expect(sidebarHtml).not.toContain("साइडबार खोलें");
-    expect(sidebarHtml).not.toContain("Ctrl+B");
+    // Sidebar width is 240px when expanded
+    expect(expandedHtml).toContain("w-[240px]");
+    expect(expandedHtml).toContain('data-testid="sidebar-collapse-btn"');
+    expect(expandedHtml).toContain("साइडबार छोटा करें (Ctrl+B)");
 
     // All primary Hindi titles rendered with icons
-    expect(sidebarHtml).toContain("घर");
-    expect(sidebarHtml).toContain("बिल बनाओ");
-    expect(sidebarHtml).toContain("माल आया");
-    expect(sidebarHtml).toContain("पैसा मिला / दिया");
-    expect(sidebarHtml).toContain("स्टॉक");
-    expect(sidebarHtml).toContain("लेना-देना");
-    expect(sidebarHtml).toContain("रिपोर्ट");
-    expect(sidebarHtml).toContain("और");
+    expect(expandedHtml).toContain("घर");
+    expect(expandedHtml).toContain("बिल बनाओ");
+    expect(expandedHtml).toContain("माल आया");
+    expect(expandedHtml).toContain("पैसा मिला / दिया");
+    expect(expandedHtml).toContain("स्टॉक");
+    expect(expandedHtml).toContain("लेना-देना");
+    expect(expandedHtml).toContain("रिपोर्ट");
+    expect(expandedHtml).toContain("और");
+
+    // B. Collapsed state
+    const collapsedHtml = renderToString(
+      <Sidebar
+        currentView="Dashboard"
+        onNavigate={() => {}}
+        settings={populatedSettings}
+        lang="hi"
+        onSelectLanguage={() => {}}
+        t={t}
+        isCollapsed={true}
+      />
+    );
+
+    // Sidebar width is 68px when collapsed
+    expect(collapsedHtml).toContain("w-[68px]");
+    expect(collapsedHtml).toContain('data-testid="sidebar-expand-btn"');
+    expect(collapsedHtml).toContain("साइडबार खोलें (Ctrl+B)");
+    // Navigation items still have their testids
+    expect(collapsedHtml).toContain('data-testid="nav-Dashboard"');
+    expect(collapsedHtml).toContain('data-testid="nav-Sale"');
+    expect(collapsedHtml).toContain('data-testid="nav-Purchase"');
+    expect(collapsedHtml).toContain('data-testid="nav-More"');
   });
 
   it("4. Language toggle sidebar me hai ('हिं | EN' pill) kisi se overlap nahi", () => {
