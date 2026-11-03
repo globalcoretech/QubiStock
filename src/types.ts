@@ -164,6 +164,11 @@ export interface DbSafetyInfo {
   is_synced_or_removable?: boolean;
 }
 
+export interface RecoveryResetResult {
+  new_recovery_key: string;
+  owner_name: string;
+}
+
 export interface StartupHealthInfo {
   healthy: boolean;
   corruption_detected: boolean;

@@ -44,6 +44,10 @@ export const InitialSetupWizard: React.FC<InitialSetupWizardProps> = ({ onComple
       });
       setGeneratedKey(res.recovery_key);
       setStep("key");
+      try {
+        localStorage.setItem("krishi_last_username", name);
+        localStorage.setItem("krishi_remembered_users", JSON.stringify([name]));
+      } catch {}
     } catch (err: any) {
       setError(typeof err === "string" ? err : err?.message || "व्यवस्थापक बनाने में त्रुटि हुई।");
     } finally {

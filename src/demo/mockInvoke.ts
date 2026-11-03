@@ -704,7 +704,10 @@ export function setupDemoMocks() {
         return { id: 1, name: "sharma_owner", role: "owner" };
 
       case "reset_owner_with_recovery_key_cmd":
-        return "RK-NEW-RECOVERY-KEY-9999";
+        return {
+          new_recovery_key: "RK-NEW-RECOVERY-KEY-9999",
+          owner_name: "sharma_owner",
+        };
 
       case "get_users_cmd":
         return [

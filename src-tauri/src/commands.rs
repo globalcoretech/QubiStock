@@ -6083,17 +6083,31 @@ pub fn get_current_user_cmd(app: AppHandle) -> Result<Option<crate::auth::Sessio
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryResetResult {
+    pub new_recovery_key: String,
+    pub owner_name: String,
+}
+
 #[command]
 pub fn reset_owner_with_recovery_key_cmd(
     app: AppHandle,
     recovery_key: String,
     new_password: String,
-) -> Result<String, String> {
+) -> Result<RecoveryResetResult, String> {
     let mut conn = get_conn(&app)?;
+    let owner_name: String = conn.query_row(
+        "SELECT name FROM users WHERE role = 'owner' ORDER BY id ASC LIMIT 1",
+        [],
+        |r| r.get(0),
+    ).unwrap_or_else(|_| "Owner".to_string());
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let new_rec_key = crate::auth::reset_owner_with_recovery_key_inner(&tx, &recovery_key, &new_password)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(new_rec_key)
+    Ok(RecoveryResetResult {
+        new_recovery_key: new_rec_key,
+        owner_name,
+    })
 }
 
 #[command]

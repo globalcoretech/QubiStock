@@ -60,6 +60,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       ]);
       setUsers(uList || []);
       setLogs(lList || []);
+      if (uList && uList.length > 0) {
+        try {
+          const names = uList.filter((u) => u.is_active).map((u) => u.name);
+          localStorage.setItem("krishi_remembered_users", JSON.stringify(names));
+        } catch {}
+      }
     } catch (err: any) {
       console.error("Failed to load users/logs:", err);
     } finally {

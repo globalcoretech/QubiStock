@@ -146,6 +146,75 @@ describe("Auth & Role Security Frontend Tests", () => {
       // Recovery key input should appear
       expect(container.textContent).toContain("रिकवरी कुंजी");
     });
+
+    it("renders saved usernames dropdown from localStorage even when get_users_cmd is denied", async () => {
+      localStorage.setItem("krishi_remembered_users", JSON.stringify(["uday singh", "ramesh_staff"]));
+      localStorage.setItem("krishi_last_username", "uday singh");
+
+      (invoke as any).mockImplementation((cmd: string) => {
+        if (cmd === "get_users_cmd") {
+          return Promise.reject(new Error("Permission denied: Login required"));
+        }
+        return Promise.resolve(null);
+      });
+
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(<LoginModal onLoginSuccess={vi.fn()} />);
+      });
+
+      const select = container.querySelector('[data-testid="login-user-select"]') as HTMLSelectElement;
+      expect(select).toBeTruthy();
+      expect(select.tagName).toBe("SELECT");
+      expect(select.options.length).toBe(2); // "uday singh", "ramesh_staff"
+      expect(select.value).toBe("uday singh");
+    });
+
+    it("recovers owner username on recovery key reset and displays it prominently", async () => {
+      (invoke as any).mockImplementation((cmd: string) => {
+        if (cmd === "get_users_cmd") return Promise.reject("Permission denied");
+        if (cmd === "reset_owner_with_recovery_key_cmd") {
+          return Promise.resolve({
+            new_recovery_key: "RK-NEW-KEY-8888-9999",
+            owner_name: "uday singh",
+          });
+        }
+        return Promise.resolve(null);
+      });
+
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(<LoginModal onLoginSuccess={vi.fn()} />);
+      });
+
+      // Open forgot modal
+      const forgotBtn = container.querySelector('[data-testid="forgot-password-link-btn"]') as HTMLButtonElement;
+      await act(async () => {
+        forgotBtn.click();
+      });
+
+      // Fill in recovery key and password
+      const keyInput = container.querySelector('[data-testid="recovery-key-input"]') as HTMLInputElement;
+      const passInput = container.querySelector('[data-testid="recovery-new-password-input"]') as HTMLInputElement;
+      const confInput = container.querySelector('[data-testid="recovery-confirm-password-input"]') as HTMLInputElement;
+      const submitBtn = container.querySelector('[data-testid="submit-recovery-reset-btn"]') as HTMLButtonElement;
+
+      await act(async () => {
+        setInputValue(keyInput, "RK-TEST-RECOVERY-KEY");
+        setInputValue(passInput, "BrandNewPassword123");
+        setInputValue(confInput, "BrandNewPassword123");
+      });
+
+      await act(async () => {
+        submitBtn.click();
+      });
+
+      // Verification: Recovered owner username is prominently shown!
+      expect(container.textContent).toContain("uday singh");
+      expect(container.textContent).toContain("व्यवस्थापक यूज़रनेम (Owner Username)");
+      expect(container.textContent).toContain("RK-NEW-KEY-8888-9999");
+      expect(localStorage.getItem("krishi_last_username")).toBe("uday singh");
+    });
   });
 
   describe("LockScreenOverlay", () => {
