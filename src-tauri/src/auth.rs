@@ -147,6 +147,7 @@ pub const PERMISSION_TABLE: &[CommandPermission] = &[
     CommandPermission { name: "get_db_safety_info_cmd", min_role: MinimumRole::Public, allowed_while_locked: false, masked_for_staff: false },
     CommandPermission { name: "acknowledge_exit_request_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
     CommandPermission { name: "safe_exit_app_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
+    CommandPermission { name: "get_startup_health_cmd", min_role: MinimumRole::Public, allowed_while_locked: true, masked_for_staff: false },
 
     // Staff & Owner commands (37)
     CommandPermission { name: "get_current_user_cmd", min_role: MinimumRole::Staff, allowed_while_locked: false, masked_for_staff: false },
@@ -240,6 +241,7 @@ pub const PERMISSION_MATRIX: &[(&str, MinimumRole)] = &[
     ("get_db_safety_info_cmd", MinimumRole::Public),
     ("acknowledge_exit_request_cmd", MinimumRole::Public),
     ("safe_exit_app_cmd", MinimumRole::Public),
+    ("get_startup_health_cmd", MinimumRole::Public),
 
     // Staff & Owner (37)
     ("get_current_user_cmd", MinimumRole::Staff),

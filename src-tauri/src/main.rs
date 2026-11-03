@@ -196,6 +196,7 @@ fn main() {
             commands::alter_payment_cmd,
             commands::cancel_payment_cmd,
             commands::get_db_safety_info_cmd,
+            commands::get_startup_health_cmd,
             commands::safe_exit_app_cmd,
             commands::get_security_status_cmd,
             commands::create_owner_initial_cmd,

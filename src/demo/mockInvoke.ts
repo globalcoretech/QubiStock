@@ -639,6 +639,12 @@ export function setupDemoMocks() {
           message: "रीस्टोर फ़ाइल तैयार कर दी गई है। ऐप को पुनः प्रारंभ (Restart) करें।",
         };
 
+      case "get_startup_health_cmd":
+        return {
+          healthy: true,
+          corruption_detected: false,
+        };
+
       case "check_db_integrity_cmd":
         return {
           isOk: true,

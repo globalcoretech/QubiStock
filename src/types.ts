@@ -164,6 +164,11 @@ export interface DbSafetyInfo {
   is_synced_or_removable?: boolean;
 }
 
+export interface StartupHealthInfo {
+  healthy: boolean;
+  corruption_detected: boolean;
+}
+
 export interface IntegrityCheckReport {
   isOk: boolean;
   message: string;

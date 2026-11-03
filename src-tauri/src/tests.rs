@@ -7531,6 +7531,98 @@ fn test_recovery_key_rate_limiting_single_use_and_new_key() {
 }
 
 #[test]
+fn test_recovery_key_lockout_persists_across_restart() {
+    use crate::auth::{
+        create_user_inner, hash_password, reset_owner_with_recovery_key_inner, AuthState,
+    };
+    use std::fs;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "test_recovery_lockout_restart_{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+    let db_path = temp_dir.join("test_restart.db");
+
+    let correct_key = "RK-TEST-ABCD-1234-EFGH";
+    let key_hash = hash_password(correct_key).unwrap();
+
+    // Session 1: Open connection, configure DB, create owner, fail 5 times
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::configure_connection(&conn).unwrap();
+        crate::db::run_migrations(&conn).unwrap();
+
+        let _owner = create_user_inner(&conn, "Super Owner", "owner", "pass123").unwrap();
+        conn.execute(
+            "UPDATE settings SET recovery_key_hash = ?1, recovery_failed_attempts = 0, recovery_locked_until = NULL WHERE id = 1",
+            rusqlite::params![key_hash],
+        ).unwrap();
+
+        let _auth_state_1 = AuthState {
+            current_user: Mutex::new(None),
+            is_locked: Mutex::new(false),
+            startup_corruption_detected: AtomicBool::new(false),
+        };
+
+        // 5 wrong attempts to trigger lock
+        for i in 1..=4 {
+            let res = reset_owner_with_recovery_key_inner(&conn, "RK-WRONG-KEY", "newpass123");
+            assert!(res.is_err(), "Attempt {} must fail", i);
+        }
+
+        let err_lock = reset_owner_with_recovery_key_inner(&conn, "RK-WRONG-KEY", "newpass123").unwrap_err();
+        assert!(
+            err_lock.contains("5 मिनट") || err_lock.contains("locked for 5 minutes"),
+            "5th attempt must trigger 5-minute lock: {}",
+            err_lock
+        );
+
+        // Verify lock is saved in settings table
+        let (stored_fails, locked_until): (i64, Option<String>) = conn.query_row(
+            "SELECT recovery_failed_attempts, recovery_locked_until FROM settings WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(stored_fails, 5);
+        assert!(locked_until.is_some(), "recovery_locked_until must be set in DB");
+        // Drop conn and auth_state_1 to simulate closing/restarting the app
+    }
+
+    // Session 2: Simulate restart with brand new connection and brand new AuthState
+    {
+        let conn2 = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::configure_connection(&conn2).unwrap();
+
+        let _auth_state_2 = AuthState {
+            current_user: Mutex::new(None),
+            is_locked: Mutex::new(false),
+            startup_corruption_detected: AtomicBool::new(false),
+        };
+
+        // Even with the CORRECT recovery key, attempt must be rejected because 5-minute lockout persists
+        let restart_attempt_err = reset_owner_with_recovery_key_inner(&conn2, correct_key, "newpass456").unwrap_err();
+        assert!(
+            restart_attempt_err.contains("लॉक है") || restart_attempt_err.contains("is locked") || restart_attempt_err.contains("locked for"),
+            "Lockout must persist across restart: {}",
+            restart_attempt_err
+        );
+
+        // Also wrong key is rejected with lockout
+        let wrong_attempt_err = reset_owner_with_recovery_key_inner(&conn2, "RK-ANOTHER-WRONG", "newpass456").unwrap_err();
+        assert!(
+            wrong_attempt_err.contains("लॉक है") || wrong_attempt_err.contains("is locked") || wrong_attempt_err.contains("locked for"),
+            "Lockout must persist across restart: {}",
+            wrong_attempt_err
+        );
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_staff_and_supplier_data_policy_masking_and_denial() {
     use crate::auth::{
         can_role_access_party_statement, can_role_access_pending_bills,

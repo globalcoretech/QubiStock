@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./index.css";
-import { View, AppSettings, DEFAULT_SETTINGS, IntegrityCheckReport, RestoreResult, DbSafetyInfo, BackupInfo, SessionUser, SecurityStatus } from "./types";
+import { View, AppSettings, DEFAULT_SETTINGS, IntegrityCheckReport, StartupHealthInfo, RestoreResult, DbSafetyInfo, BackupInfo, SessionUser, SecurityStatus } from "./types";
 import { InitialSetupWizard } from "./components/InitialSetupWizard";
 import { LoginModal } from "./components/LoginModal";
 import { LockScreenOverlay } from "./components/LockScreenOverlay";
@@ -433,15 +433,27 @@ export default function App() {
     invoke<string>("init_db_cmd")
       .then(async () => {
         await refreshSecurityStatus();
-        // Startup integrity check (PRAGMA quick_check)
+        // Startup health check (PRAGMA quick_check from startup)
         try {
-          const report = await invoke<IntegrityCheckReport>("check_db_integrity_cmd");
-          if (report && (report.isOk === false || report.is_ok === false)) {
-            setIntegrityReport(report);
+          const health = await invoke<StartupHealthInfo>("get_startup_health_cmd");
+          if (health && health.corruption_detected) {
+            try {
+              const report = await invoke<IntegrityCheckReport>("check_db_integrity_cmd");
+              setIntegrityReport(report);
+            } catch {
+              setIntegrityReport({
+                isOk: false,
+                is_ok: false,
+                message: "डेटाबेस क्षतिग्रस्त है (Database corruption detected)",
+                details: ["PRAGMA quick_check failed during startup."],
+                suggestedBackup: null,
+                availableBackups: [],
+              });
+            }
             return;
           }
         } catch (e) {
-          console.error("check_db_integrity_cmd startup error:", e);
+          console.warn("get_startup_health_cmd startup error (ignored, not treated as corruption):", e);
         }
 
         // Check DB safety info (location warning for cloud-synced / removable drive)

@@ -5698,6 +5698,26 @@ pub fn get_db_safety_info_cmd(app: AppHandle) -> Result<DbSafetyInfo, String> {
     get_db_safety_info_inner(&conn, &path.to_string_lossy(), Some(&primary_dir.to_string_lossy()))
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StartupHealthInfo {
+    pub healthy: bool,
+    pub corruption_detected: bool,
+}
+
+#[command]
+pub fn get_startup_health_cmd(app: AppHandle) -> Result<StartupHealthInfo, String> {
+    let corruption_detected = if let Some(state) = app.try_state::<crate::auth::AuthState>() {
+        state.startup_corruption_detected.load(std::sync::atomic::Ordering::SeqCst)
+    } else {
+        crate::auth::is_startup_corruption_detected()
+    };
+
+    Ok(StartupHealthInfo {
+        healthy: !corruption_detected,
+        corruption_detected,
+    })
+}
+
 pub fn run_wal_checkpoint_truncate(conn: &Connection) -> Result<String, String> {
     let mut stmt = conn.prepare("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|e| e.to_string())?;
     let res: Result<(i64, i64, i64), _> = stmt.query_row([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)));

@@ -252,6 +252,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             security_enabled INTEGER NOT NULL DEFAULT 0,
             auto_lock_minutes INTEGER NOT NULL DEFAULT 10,
             recovery_key_hash TEXT,
+            recovery_failed_attempts INTEGER NOT NULL DEFAULT 0,
+            recovery_locked_until TEXT,
             updated_at TEXT
         );
 
