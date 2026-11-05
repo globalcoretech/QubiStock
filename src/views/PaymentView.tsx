@@ -352,19 +352,19 @@ export function PaymentView({
       : "₹0";
 
   return (
-    <div className="h-full flex flex-col min-h-0 space-y-2 overflow-hidden">
+    <div className="h-full max-h-full flex flex-col justify-between overflow-hidden gap-2 text-ink font-body select-none">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-slate-200 flex-shrink-0">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 p-2 px-3.5 bg-surface border border-border border-t-4 border-t-emerald-600 rounded-panel flex-shrink-0 shadow-2xs">
         <div>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
               <Wallet size={16} strokeWidth={2} />
             </div>
-            <h2 className="text-lg font-bold tracking-tight text-slate-900">
+            <h2 className="text-base sm:text-lg font-bold font-serif tracking-tight text-slate-900">
               {t.payment.title}
             </h2>
           </div>
-          <p className="text-xs text-slate-500">
+          <p className="text-[11px] text-slate-500 font-medium">
             {t.payment.subtitle}
           </p>
         </div>
@@ -380,7 +380,7 @@ export function PaymentView({
               setMatchedInvoiceNo("");
               setCustomRefId("");
             }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
               paymentType === "receipt"
                 ? "bg-white text-emerald-700 shadow-2xs border border-emerald-200/60"
                 : "text-slate-600 hover:text-slate-900"
@@ -399,7 +399,7 @@ export function PaymentView({
                 setMatchedInvoiceNo("");
                 setCustomRefId("");
               }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
                 paymentType === "payment"
                   ? "bg-white text-rose-700 shadow-2xs border border-rose-200/60"
                   : "text-slate-600 hover:text-slate-900"
@@ -420,266 +420,313 @@ export function PaymentView({
 
       <FeedbackBanner feedback={feedback} />
 
-      {/* Main Entry Form Grid */}
+      {/* Main Entry Form Layout: 2-Column Responsive Balanced Grid */}
       <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div
-          data-scroll="true"
-          className="flex-1 min-h-0 overflow-y-auto bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-4"
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {/* 1. Party Selector */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  {t.payment.partyLabel} *
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setIsPartyModalOpen(true)}
-                  className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold flex items-center gap-1"
-                >
-                  <Plus size={13} strokeWidth={2} />
-                  <span>{t.common.newParty}</span>
-                </button>
+        <div className="grid grid-cols-12 gap-2.5 flex-1 min-h-0 overflow-hidden">
+          {/* Left Column: Party, Amount, Date, Mode, Remarks */}
+          <div
+            data-scroll="true"
+            className="col-span-12 lg:col-span-6 h-full flex flex-col justify-between bg-white border border-slate-200 rounded-panel p-3 min-h-0 overflow-y-auto shadow-2xs space-y-2.5"
+          >
+            <div className="space-y-2.5">
+              {/* Row 1: Party Selector & Date */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                      {t.payment.partyLabel} *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setIsPartyModalOpen(true)}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-900 font-bold flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Plus size={12} strokeWidth={2} />
+                      <span>{t.common.newParty}</span>
+                    </button>
+                  </div>
+                  <div data-testid="payment-party-select">
+                    <SearchableSelect
+                      options={partyOptions}
+                      value={partyId}
+                      onChange={handlePartyChange}
+                      placeholder={t.payment.partyPlaceholder}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    {t.payment.dateLabel} *
+                  </label>
+                  <input
+                    required
+                    type="date"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                  />
+                </div>
               </div>
-              <div data-testid="payment-party-select">
-                <SearchableSelect
-                  options={partyOptions}
-                  value={partyId}
-                  onChange={handlePartyChange}
-                  placeholder={t.payment.partyPlaceholder}
-                />
+
+              {/* Row 2: Amount Input & Matched Bill Pending indicator */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    {t.payment.amountLabel} *
+                  </label>
+                  {matchedBill && (
+                    <span className="text-[11px] font-medium text-slate-500">
+                      {lang === "hi" ? "बकाया:" : "Pending:"}{" "}
+                      <strong className="text-rose-700 font-mono">
+                        {formatCurrency(matchedBill.pending_amount)}
+                      </strong>
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">
+                    ₹
+                  </span>
+                  <input
+                    required
+                    data-testid="payment-amount-input"
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="0.00"
+                    className={`w-full pl-7 pr-3 py-1.5 border rounded-lg text-sm font-mono font-bold text-slate-900 bg-white focus:outline-none ${
+                      isAmountExceeded
+                        ? "border-rose-500 ring-1 ring-rose-500 bg-rose-50/40"
+                        : "border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
+                    }`}
+                    value={amountRupees}
+                    onChange={(e) => setAmountRupees(e.target.value)}
+                  />
+                </div>
+                {isAmountExceeded && maxAllowedPaise !== null && (
+                  <p
+                    className="text-[11px] text-rose-600 font-semibold"
+                    data-testid="payment-amount-error"
+                  >
+                    {lang === "hi"
+                      ? `रकम बकाया राशि (${formatCurrency(maxAllowedPaise)}) से ज़्यादा नहीं हो सकती`
+                      : `Amount cannot exceed pending bill (${formatCurrency(maxAllowedPaise)})`}
+                  </p>
+                )}
+              </div>
+
+              {/* Party Balance Status Cards (If party is chosen) */}
+              {selectedParty && (
+                <div className="grid grid-cols-2 gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200/80">
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
+                      {t.payment.currentBalance}
+                    </span>
+                    <div className="flex items-baseline gap-1.5 mt-0.5">
+                      <span
+                        className={`text-base font-bold font-mono ${
+                          currentNetBalance > 0
+                            ? "text-emerald-700"
+                            : currentNetBalance < 0
+                            ? "text-rose-700"
+                            : "text-slate-700"
+                        }`}
+                      >
+                        {formatCurrency(Math.abs(currentNetBalance))}
+                      </span>
+                      <span className="text-[10px] font-medium text-slate-500">
+                        {currentNetBalance > 0
+                          ? lang === "hi" ? "लेना है" : "Receivable"
+                          : currentNetBalance < 0
+                          ? lang === "hi" ? "देना है" : "Payable"
+                          : t.lenDen.settledText}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
+                      {t.payment.newBalance}
+                    </span>
+                    <div className="flex items-baseline gap-1.5 mt-0.5">
+                      <span
+                        className={`text-base font-bold font-mono ${
+                          projectedBalance > 0
+                            ? "text-emerald-700"
+                            : projectedBalance < 0
+                            ? "text-rose-700"
+                            : "text-slate-700"
+                        }`}
+                      >
+                        {formatCurrency(Math.abs(projectedBalance))}
+                      </span>
+                      <span className="text-[10px] font-medium text-slate-500">
+                        {projectedBalance > 0
+                          ? lang === "hi" ? "लेना रहेगा" : "Receivable"
+                          : projectedBalance < 0
+                          ? lang === "hi" ? "देना रहेगा" : "Payable"
+                          : t.lenDen.settledText}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Payment Mode Selector */}
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  {t.payment.modeLabel} *
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    data-testid="payment-mode-cash"
+                    onClick={() => setPaymentMode("cash")}
+                    className={`py-1.5 px-3 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      paymentMode === "cash"
+                        ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-1 ring-emerald-600 shadow-2xs"
+                        : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                    }`}
+                  >
+                    <Wallet
+                      size={14}
+                      className={paymentMode === "cash" ? "text-emerald-600" : "text-slate-400"}
+                    />
+                    <span>{lang === "hi" ? "नकद" : "Cash"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="payment-mode-upi"
+                    onClick={() => setPaymentMode("upi_bank")}
+                    className={`py-1.5 px-3 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      paymentMode === "upi_bank"
+                        ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-1 ring-emerald-600 shadow-2xs"
+                        : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                    }`}
+                  >
+                    <span className="font-mono font-bold text-xs">UPI</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="payment-mode-bank"
+                    onClick={() => setPaymentMode("bank")}
+                    className={`py-1.5 px-3 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      paymentMode === "bank"
+                        ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-1 ring-emerald-600 shadow-2xs"
+                        : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                    }`}
+                  >
+                    <Landmark
+                      size={14}
+                      className={paymentMode === "bank" ? "text-emerald-600" : "text-slate-400"}
+                    />
+                    <span>{lang === "hi" ? "बैंक" : "Bank"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Remark and Ref ID */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    {t.payment.remarkLabel}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={t.payment.remarkPlaceholder}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-900 bg-white focus:outline-none focus:border-emerald-600"
+                    value={remark}
+                    onChange={(e) => setRemark(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    {t.payment.refIdLabel}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={
+                      matchedInvoiceNo
+                        ? `${matchedInvoiceNo} (${lang === "hi" ? "बकाया बिल" : "Matched Bill"})`
+                        : t.payment.refIdPlaceholder
+                    }
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 bg-white focus:outline-none focus:border-emerald-600"
+                    value={customRefId}
+                    onChange={(e) => {
+                      setCustomRefId(e.target.value);
+                      setMatchedInvoiceNo("");
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
-            {/* 2. Amount Input (₹) */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  {t.payment.amountLabel} *
-                </label>
-                {matchedBill && (
-                  <span className="text-[11px] font-medium text-slate-500">
-                    {lang === "hi" ? "बकाया:" : "Pending:"}{" "}
-                    <strong className="text-rose-700 font-mono">
-                      {formatCurrency(matchedBill.pending_amount)}
-                    </strong>
+            {/* Live Summary & Submit Button inside left card */}
+            <div className="pt-2 border-t border-slate-100 flex flex-col gap-2 flex-shrink-0">
+              <div className="text-xs font-semibold" data-testid="payment-live-summary">
+                {!partyId ? (
+                  <span className="text-slate-500 font-medium">
+                    {lang === "hi" ? "पहले पार्टी चुनो" : "Please select a party first"}
+                  </span>
+                ) : paymentType === "receipt" ? (
+                  <span className="text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 block text-center">
+                    {lang === "hi"
+                      ? `${partyDisplayName} से ${amountDisplay} मिले, उनका लेना ${amountDisplay} कम होगा`
+                      : `Received ${amountDisplay} from ${partyDisplayName}, outstanding will decrease by ${amountDisplay}`}
+                  </span>
+                ) : (
+                  <span className="text-rose-800 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 block text-center">
+                    {lang === "hi"
+                      ? `${partyDisplayName} को ${amountDisplay} दिए, आपका देना ${amountDisplay} कम होगा`
+                      : `Paid ${amountDisplay} to ${partyDisplayName}, liability will decrease by ${amountDisplay}`}
                   </span>
                 )}
               </div>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-base">
-                  ₹
-                </span>
-                <input
-                  required
-                  data-testid="payment-amount-input"
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0.00"
-                  className={`w-full pl-8 pr-4 py-2.5 border rounded-xl text-base font-mono font-bold text-slate-900 bg-white focus:outline-none min-h-[46px] ${
-                    isAmountExceeded
-                      ? "border-rose-500 ring-1 ring-rose-500"
-                      : "border-slate-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
-                  }`}
-                  value={amountRupees}
-                  onChange={(e) => setAmountRupees(e.target.value)}
-                />
-              </div>
-              {isAmountExceeded && maxAllowedPaise !== null && (
-                <p
-                  className="text-xs text-rose-600 font-semibold mt-1"
-                  data-testid="payment-amount-error"
-                >
-                  {lang === "hi"
-                    ? `रकम बकाया राशि (${formatCurrency(maxAllowedPaise)}) से ज़्यादा नहीं हो सकती`
-                    : `Amount cannot exceed pending bill (${formatCurrency(maxAllowedPaise)})`}
-                </p>
-              )}
-            </div>
-
-            {/* 3. Date */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                {t.payment.dateLabel} *
-              </label>
-              <input
-                required
-                type="date"
-                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Party Balance Status Cards (If party is chosen) */}
-          {selectedParty && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-slate-50/80 border border-slate-200/80">
-              {/* Current Outstanding */}
-              <div>
-                <span className="text-xs text-slate-500 font-medium block">
-                  {t.payment.currentBalance} ({selectedParty.name})
-                </span>
-                <div className="flex items-center gap-2 mt-1">
-                  <span
-                    className={`text-xl font-bold font-mono ${
-                      currentNetBalance > 0
-                        ? "text-emerald-700"
-                        : currentNetBalance < 0
-                        ? "text-rose-700"
-                        : "text-slate-700"
-                    }`}
-                  >
-                    {formatCurrency(Math.abs(currentNetBalance))}
-                  </span>
-                  <span className="text-xs font-medium text-slate-500">
-                    {currentNetBalance > 0
-                      ? lang === "hi"
-                        ? "लेना है"
-                        : "Receivable"
-                      : currentNetBalance < 0
-                      ? lang === "hi"
-                        ? "देना है"
-                        : "Payable"
-                      : t.lenDen.settledText}
-                  </span>
-                </div>
-              </div>
-
-              {/* Projected Balance */}
-              <div>
-                <span className="text-xs text-slate-500 font-medium block">
-                  {t.payment.newBalance} ({lang === "hi" ? "इस एंट्री के बाद" : "After this entry"})
-                </span>
-                <div className="flex items-center gap-2 mt-1">
-                  <span
-                    className={`text-xl font-bold font-mono ${
-                      projectedBalance > 0
-                        ? "text-emerald-700"
-                        : projectedBalance < 0
-                        ? "text-rose-700"
-                        : "text-slate-700"
-                    }`}
-                  >
-                    {formatCurrency(Math.abs(projectedBalance))}
-                  </span>
-                  <span className="text-xs font-medium text-slate-500">
-                    {projectedBalance > 0
-                      ? lang === "hi"
-                        ? "लेना रहेगा"
-                        : "Remaining Receivable"
-                      : projectedBalance < 0
-                      ? lang === "hi"
-                        ? "देना रहेगा"
-                        : "Remaining Payable"
-                      : t.lenDen.settledText}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Payment Mode Selector ("नकद / UPI / बैंक") */}
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              {t.payment.modeLabel} *
-            </label>
-            <div className="grid grid-cols-3 gap-3 max-w-lg">
-              <button
-                type="button"
-                data-testid="payment-mode-cash"
-                onClick={() => setPaymentMode("cash")}
-                className={`py-3 px-4 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 transition-all ${
-                  paymentMode === "cash"
-                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-2 ring-emerald-600/20 shadow-sm"
-                    : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
-                }`}
-              >
-                <Wallet
-                  size={16}
-                  className={paymentMode === "cash" ? "text-emerald-600" : "text-slate-400"}
-                />
-                <span>{lang === "hi" ? "नकद" : "Cash"}</span>
-              </button>
 
               <button
-                type="button"
-                data-testid="payment-mode-upi"
-                onClick={() => setPaymentMode("upi_bank")}
-                className={`py-3 px-4 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 transition-all ${
-                  paymentMode === "upi_bank"
-                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-2 ring-emerald-600/20 shadow-sm"
-                    : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
-                }`}
+                type="submit"
+                data-testid="payment-submit-btn"
+                disabled={saving || !partyId || !amountRupees || parsedAmountPaise <= 0 || isAmountExceeded}
+                className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs text-white shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  paymentType === "receipt"
+                    ? "bg-emerald-600 hover:bg-emerald-700"
+                    : "bg-slate-800 hover:bg-slate-900"
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
-                <span className="font-bold text-sm">UPI</span>
-              </button>
-
-              <button
-                type="button"
-                data-testid="payment-mode-bank"
-                onClick={() => setPaymentMode("bank")}
-                className={`py-3 px-4 rounded-xl text-sm font-semibold border flex items-center justify-center gap-2 transition-all ${
-                  paymentMode === "bank"
-                    ? "bg-emerald-50 border-emerald-600 text-emerald-800 ring-2 ring-emerald-600/20 shadow-sm"
-                    : "border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
-                }`}
-              >
-                <Landmark
-                  size={16}
-                  className={paymentMode === "bank" ? "text-emerald-600" : "text-slate-400"}
-                />
-                <span>{lang === "hi" ? "बैंक" : "Bank"}</span>
+                {saving ? (
+                  <span>{t.payment.savingBtn}</span>
+                ) : !partyId ? (
+                  <span>पहले पार्टी चुनो</span>
+                ) : (
+                  <>
+                    <CheckCircle2 size={15} strokeWidth={2} />
+                    <span>
+                      {paymentType === "receipt"
+                        ? lang === "hi" ? "पैसा मिला दर्ज करें" : "Record Receipt"
+                        : lang === "hi" ? "पैसा दिया दर्ज करें" : "Record Payment"}
+                    </span>
+                  </>
+                )}
               </button>
             </div>
           </div>
 
-          {/* Remark and Ref ID (टिप्पणी और बिल नंबर) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                {t.payment.remarkLabel}
-              </label>
-              <input
-                type="text"
-                placeholder={t.payment.remarkPlaceholder}
-                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
-                value={remark}
-                onChange={(e) => setRemark(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                {t.payment.refIdLabel}
-              </label>
-              <input
-                type="text"
-                placeholder={
-                  matchedInvoiceNo
-                    ? `${matchedInvoiceNo} (${lang === "hi" ? "बकाया बिल" : "Matched Bill"})`
-                    : t.payment.refIdPlaceholder
-                }
-                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono text-slate-900 bg-white focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 min-h-[46px]"
-                value={customRefId}
-                onChange={(e) => {
-                  setCustomRefId(e.target.value);
-                  setMatchedInvoiceNo("");
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Pending Bills Matching Section ("बकाया बिल से जोड़ो (ज़रूरी नहीं)") */}
-          <div className="pt-2 border-t border-slate-100 space-y-3" data-testid="pending-bills-section">
-            <div className="flex items-center justify-between">
+          {/* Right Column: Pending Bills Selection Table */}
+          <div
+            data-scroll="true"
+            className="col-span-12 lg:col-span-6 h-full flex flex-col bg-white border border-slate-200 rounded-panel p-3 min-h-0 overflow-hidden shadow-2xs"
+            data-testid="pending-bills-section"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 flex-shrink-0">
               <div>
-                <h4 className="text-sm font-bold text-slate-900">
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                   {t.payment.pendingBillSection}
                 </h4>
-                <p className="text-xs text-slate-500">
+                <p className="text-[11px] text-slate-500">
                   {t.payment.pendingBillHelp}
                 </p>
               </div>
@@ -691,172 +738,99 @@ export function PaymentView({
                     setMatchedInvoiceNo("");
                     setCustomRefId("");
                   }}
-                  className="text-xs text-rose-600 hover:text-rose-800 flex items-center gap-1 font-semibold"
+                  className="text-xs text-rose-600 hover:text-rose-800 flex items-center gap-1 font-bold cursor-pointer"
                 >
-                  <X size={14} />
+                  <X size={13} />
                   <span>{lang === "hi" ? "चुनाव हटाओ" : "Clear selection"}</span>
                 </button>
               )}
             </div>
 
-            {!partyId ? (
-              <div
-                data-testid="pending-bills-no-party"
-                className="p-4 bg-slate-50 rounded-xl text-xs text-slate-500 text-center border border-slate-200/60 font-medium"
-              >
-                {lang === "hi" ? "पहले पार्टी चुनो" : "Please select a party first"}
-              </div>
-            ) : loadingBills ? (
-              <div className="py-4 text-center text-xs text-slate-400">
-                {t.common.loading}
-              </div>
-            ) : filteredPendingBills.length === 0 ? (
-              <div
-                data-testid="pending-bills-empty"
-                className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 text-center border border-slate-200/60"
-              >
-                {t.payment.noPendingBills}
-              </div>
-            ) : (
-              <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                      <th className="py-2.5 px-3">{lang === "hi" ? "चुनें" : "Select"}</th>
-                      <th className="py-2.5 px-3">{lang === "hi" ? "बिल नंबर" : "Bill No"}</th>
-                      <th className="py-2.5 px-3">{t.common.date}</th>
-                      <th className="py-2.5 px-3">{lang === "hi" ? "प्रकार" : "Type"}</th>
-                      <th className="py-2.5 px-3 text-right">{t.common.total}</th>
-                      <th className="py-2.5 px-3 text-right">{lang === "hi" ? "जमा" : "Paid"}</th>
-                      <th className="py-2.5 px-3 text-right text-rose-700 font-bold">
-                        {lang === "hi" ? "बकाया" : "Pending"}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredPendingBills.map((bill) => {
-                      const isSelected = matchedInvoiceNo === bill.invoice_no;
-                      return (
-                        <tr
-                          key={bill.invoice_no}
-                          data-testid={`pending-bill-row-${bill.invoice_no}`}
-                          onClick={() => handleSelectPendingBill(bill)}
-                          className={`cursor-pointer transition-colors ${
-                            isSelected
-                              ? "bg-emerald-50/80 font-semibold"
-                              : "hover:bg-slate-50/70"
-                          }`}
-                        >
-                          <td className="py-2.5 px-3 text-center">
-                            <input
-                              type="radio"
-                              name="matchedBill"
-                              checked={isSelected}
-                              onChange={() => handleSelectPendingBill(bill)}
-                              className="text-emerald-600 focus:ring-emerald-500"
-                            />
-                          </td>
-                          <td className="py-2.5 px-3 font-mono font-medium text-slate-900">
-                            {bill.invoice_no}
-                          </td>
-                          <td className="py-2.5 px-3 font-mono text-slate-600">
-                            {formatDate(bill.date)}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                                bill.bill_type === "sale"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : "bg-slate-100 text-slate-700 border border-slate-200"
-                              }`}
-                            >
-                              {bill.bill_type === "sale"
-                                ? lang === "hi"
-                                  ? "बिक्री"
-                                  : "Sale"
-                                : lang === "hi"
-                                ? "खरीदी"
-                                : "Purchase"}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-700">
-                            {formatCurrency(bill.total_amount)}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-emerald-700">
-                            {formatCurrency(bill.paid_amount)}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-rose-700 font-bold">
-                            {formatCurrency(bill.pending_amount)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Bottom Live Summary & Submit Button */}
-          <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-4">
-            <div className="text-sm font-semibold" data-testid="payment-live-summary">
+            <div className="flex-1 min-h-0 overflow-y-auto mt-2" data-scroll="true">
               {!partyId ? (
-                <span className="text-slate-500 font-medium">
-                  {lang === "hi" ? "पहले पार्टी चुनो" : "Please select a party first"}
-                </span>
-              ) : paymentType === "receipt" ? (
-                <span className="text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 inline-block">
-                  {lang === "hi"
-                    ? `${partyDisplayName} से ${amountDisplay} मिले, उनका लेना ${amountDisplay} कम होगा`
-                    : `Received ${amountDisplay} from ${partyDisplayName}, outstanding will decrease by ${amountDisplay}`}
-                </span>
+                <div
+                  data-testid="pending-bills-no-party"
+                  className="h-full flex flex-col items-center justify-center p-6 bg-slate-50/60 rounded-xl text-xs text-slate-400 text-center border border-dashed border-slate-200 font-medium"
+                >
+                  <Wallet size={24} className="mb-1.5 opacity-40 text-slate-500" />
+                  <span>{lang === "hi" ? "पार्टी चुनते ही उसके बकाया बिल यहाँ दिखेंगे" : "Select a party to see pending credit bills"}</span>
+                </div>
+              ) : loadingBills ? (
+                <div className="h-full flex items-center justify-center py-6 text-center text-xs text-slate-400">
+                  {t.common.loading}
+                </div>
+              ) : filteredPendingBills.length === 0 ? (
+                <div
+                  data-testid="pending-bills-empty"
+                  className="h-full flex flex-col items-center justify-center p-6 bg-slate-50/60 rounded-xl text-xs text-slate-500 text-center border border-dashed border-slate-200"
+                >
+                  <CheckCircle2 size={24} className="mb-1.5 text-emerald-600 opacity-60" />
+                  <span className="font-bold text-slate-700">{t.payment.noPendingBills}</span>
+                  <span className="text-[11px] text-slate-400 mt-0.5">
+                    {lang === "hi" ? "(सीधे खाते में जमा/भुगतान दर्ज हो जाएगा)" : "(Payment will be recorded directly on account)"}
+                  </span>
+                </div>
               ) : (
-                <span className="text-rose-800 bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200 inline-block">
-                  {lang === "hi"
-                    ? `${partyDisplayName} को ${amountDisplay} दिए, आपका देना ${amountDisplay} कम होगा`
-                    : `Paid ${amountDisplay} to ${partyDisplayName}, liability will decrease by ${amountDisplay}`}
-                </span>
+                <div className="border border-slate-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10">
+                      <tr>
+                        <th className="py-2 px-2.5 text-center w-8">{lang === "hi" ? "चुनें" : "Pick"}</th>
+                        <th className="py-2 px-2.5 font-mono">{lang === "hi" ? "बिल नं." : "Bill No"}</th>
+                        <th className="py-2 px-2">{t.common.date}</th>
+                        <th className="py-2 px-2 text-right">{t.common.total}</th>
+                        <th className="py-2 px-2 text-right">{lang === "hi" ? "जमा" : "Paid"}</th>
+                        <th className="py-2 px-2.5 text-right text-rose-700 font-bold">
+                          {lang === "hi" ? "बकाया" : "Pending"}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredPendingBills.map((bill) => {
+                        const isSelected = matchedInvoiceNo === bill.invoice_no;
+                        return (
+                          <tr
+                            key={bill.invoice_no}
+                            data-testid={`pending-bill-row-${bill.invoice_no}`}
+                            onClick={() => handleSelectPendingBill(bill)}
+                            className={`cursor-pointer transition-colors ${
+                              isSelected
+                                ? "bg-emerald-50/80 font-bold text-slate-900"
+                                : "hover:bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            <td className="py-2 px-2.5 text-center">
+                              <input
+                                type="radio"
+                                name="matchedBill"
+                                checked={isSelected}
+                                onChange={() => handleSelectPendingBill(bill)}
+                                className="text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                              />
+                            </td>
+                            <td className="py-2 px-2.5 font-mono font-bold text-slate-900">
+                              {bill.invoice_no}
+                            </td>
+                            <td className="py-2 px-2 font-mono text-slate-600 text-[11px]">
+                              {formatDate(bill.date)}
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono text-slate-700">
+                              {formatCurrency(bill.total_amount)}
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono text-emerald-700">
+                              {formatCurrency(bill.paid_amount)}
+                            </td>
+                            <td className="py-2 px-2.5 text-right font-mono text-rose-700 font-extrabold">
+                              {formatCurrency(bill.pending_amount)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
-
-            <button
-              type="submit"
-              data-testid="payment-submit-btn"
-              disabled={saving || !partyId || !amountRupees || parsedAmountPaise <= 0 || isAmountExceeded}
-              title={
-                !partyId
-                  ? "पहले पार्टी चुनो"
-                  : isAmountExceeded
-                  ? lang === "hi"
-                    ? "रकम बकाया बिल से ज़्यादा है"
-                    : "Amount exceeds pending bill"
-                  : undefined
-              }
-              className={`w-full sm:w-auto px-8 py-3 rounded-xl font-bold text-sm text-white shadow-sm transition-all flex items-center justify-center gap-2 ${
-                paymentType === "receipt"
-                  ? "bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-500"
-                  : "bg-slate-800 hover:bg-slate-900 focus:ring-slate-500"
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {saving ? (
-                <span>{t.payment.savingBtn}</span>
-              ) : !partyId ? (
-                <span>पहले पार्टी चुनो</span>
-              ) : (
-                <>
-                  <CheckCircle2 size={16} strokeWidth={2} />
-                  <span>
-                    {paymentType === "receipt"
-                      ? lang === "hi"
-                        ? "पैसा मिला दर्ज करें"
-                        : "Record Receipt"
-                      : lang === "hi"
-                      ? "पैसा दिया दर्ज करें"
-                      : "Record Payment"}
-                  </span>
-                </>
-              )}
-            </button>
           </div>
         </div>
       </form>

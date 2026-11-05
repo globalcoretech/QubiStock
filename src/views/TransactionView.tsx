@@ -9,6 +9,7 @@ import { localTodayIso } from "../utils/dateUtils";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { FeedbackBanner } from "../components/FeedbackBanner";
 import { AddPartyModal } from "../components/AddPartyModal";
+import { AddItemModal } from "../components/AddItemModal";
 import { Pagination } from "../components/Pagination";
 import {
   DuotoneReceipt,
@@ -106,6 +107,7 @@ export function TransactionView({
   const [pendingTaxMode, setPendingTaxMode] = useState<"with_tax" | "without_tax" | "none">("with_tax");
   const [alterationReason, setAlterationReason] = useState("");
   const [isLoadingAlteration, setIsLoadingAlteration] = useState(false);
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [lines, setLines] = useState<any[]>([
     {
       itemId: "",
@@ -696,7 +698,10 @@ export function TransactionView({
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === "a" || e.key === "A")) {
+      if (e.key === "F2") {
+        e.preventDefault();
+        setIsItemModalOpen(true);
+      } else if (e.altKey && (e.key === "a" || e.key === "A")) {
         e.preventDefault();
         addLine();
       } else if (e.ctrlKey && e.key === "Enter") {
@@ -982,14 +987,26 @@ export function TransactionView({
                 <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
                   {lang === "hi" ? "सामान खोजें / जोड़ें" : "Search & Add Item"}
                 </label>
-                <button
-                  type="button"
-                  data-testid="transaction-add-line-btn"
-                  onClick={() => addLine()}
-                  className="text-[11px] text-forest font-bold hover:underline"
-                >
-                  + खाली लाइन
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="transaction-new-item-btn"
+                    onClick={() => setIsItemModalOpen(true)}
+                    className="text-[11px] text-forest hover:underline font-bold flex items-center gap-0.5"
+                    title={lang === "hi" ? "नया सामान जोड़ें (F2)" : "Add New Item (F2)"}
+                  >
+                    + {lang === "hi" ? "नया सामान (F2)" : "New Item (F2)"}
+                  </button>
+                  <span className="text-border">|</span>
+                  <button
+                    type="button"
+                    data-testid="transaction-add-line-btn"
+                    onClick={() => addLine()}
+                    className="text-[11px] text-muted hover:text-ink font-semibold"
+                  >
+                    + खाली लाइन
+                  </button>
+                </div>
               </div>
               <div className="relative">
                 <input
@@ -1041,8 +1058,19 @@ export function TransactionView({
                           </div>
                         ))
                       ) : (
-                        <div className="p-2 text-center text-xs text-muted">
-                          सामान नहीं मिला
+                        <div className="p-2.5 text-center text-xs text-muted flex flex-col items-center gap-1.5">
+                          <span>{lang === "hi" ? "सामान नहीं मिला" : "No item found"}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsQuickItemDropdownOpen(false);
+                              setIsItemModalOpen(true);
+                            }}
+                            className="text-xs font-bold text-forest hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus size={13} />
+                            <span>{lang === "hi" ? `नया सामान "${quickItemSearch}" जोड़ें` : `Add "${quickItemSearch}" as new item`}</span>
+                          </button>
                         </div>
                       )}
                     </div>,
@@ -1546,6 +1574,31 @@ export function TransactionView({
           setIsPartyModalOpen(false);
         }}
         t={t}
+      />
+
+      {/* Add New Item Modal (F2 shortcut or button) */}
+      <AddItemModal
+        isOpen={isItemModalOpen}
+        onClose={() => setIsItemModalOpen(false)}
+        onSuccess={async (newItemId: number) => {
+          try {
+            const freshItems = await invoke<Item[]>("get_items_cmd");
+            setItems(freshItems);
+            // Auto add or select in last empty line or new line
+            const emptyIdx = lines.findIndex((l) => !l.itemId);
+            if (emptyIdx !== -1) {
+              updateLine(emptyIdx, "itemId", newItemId.toString());
+            } else {
+              addLine(newItemId.toString());
+            }
+          } catch (e) {
+            console.error("Error refreshing items after add:", e);
+            addLine(newItemId.toString());
+          }
+          setIsItemModalOpen(false);
+        }}
+        t={t}
+        lang={lang}
       />
     </div>
   );
