@@ -7722,3 +7722,85 @@ fn test_staff_and_supplier_data_policy_masking_and_denial() {
     assert!(can_role_record_payment("owner", "receipt"), "Owner can record receipt");
     assert!(can_role_record_payment("owner", "payment"), "Owner can record payment to supplier");
 }
+
+#[test]
+fn test_flexible_invoice_details_and_alteration() {
+    use crate::commands::{get_invoice_details_inner, alter_purchase_inner};
+    use crate::invoice::{save_invoice, InvoicePayload, InvoiceLine};
+
+    let mut conn = init_db(":memory:").expect("Failed to init DB");
+    conn.execute("INSERT INTO godowns (id, name) VALUES (1, 'Main Godown')", []).unwrap();
+    conn.execute("INSERT INTO items (id, name, category, hsn, gst_rate, base_unit) VALUES (1, 'DAP Fertilizer', 'fertilizer', '3105', 5000, 'bag')", []).unwrap();
+    conn.execute("INSERT INTO parties (id, name, type, category, phone, gstin, state_code) VALUES (2, 'Kisan Fertilizer Ltd', 'supplier', 'regular', '9800000001', '23AAAAA0000A1Z5', '23')", []).unwrap();
+
+    let pur = InvoicePayload {
+        invoice_no: "PUR-01".to_string(),
+        date: "2026-11-03".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 0,
+        supplier_invoice_no: Some("SUPP-INV-99".to_string()),
+        supplier_invoice_date: Some("2026-11-03".to_string()),
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 10_000,
+                unit: "bag".to_string(),
+                rate: 135000,
+                taxable: 1285714,
+                cgst: 32143,
+                sgst: 32143,
+                igst: 0,
+            }
+        ],
+    };
+    save_invoice(&mut conn, pur).unwrap();
+
+    // 1. Exact match
+    let res1 = get_invoice_details_inner(&conn, "PUR-01").expect("Exact match should succeed");
+    assert_eq!(res1.invoice_no, "PUR-01");
+
+    // 2. Slash vs Dash match (PUR/01 finds PUR-01)
+    let res2 = get_invoice_details_inner(&conn, "PUR/01").expect("Slash vs dash match should succeed");
+    assert_eq!(res2.invoice_no, "PUR-01");
+
+    // 3. Case-insensitive match (pur-01 finds PUR-01)
+    let res3 = get_invoice_details_inner(&conn, "pur-01").expect("Case-insensitive match should succeed");
+    assert_eq!(res3.invoice_no, "PUR-01");
+
+    // 4. Supplier invoice number match (SUPP-INV-99 finds PUR-01)
+    let res4 = get_invoice_details_inner(&conn, "SUPP-INV-99").expect("Supplier invoice no lookup should succeed");
+    assert_eq!(res4.invoice_no, "PUR-01");
+
+    // 5. Alter purchase using slash "PUR/01" when stored as "PUR-01"
+    let alter_pur = InvoicePayload {
+        invoice_no: "PUR-01".to_string(),
+        date: "2026-11-03".to_string(),
+        party_id: 2,
+        godown_id: 1,
+        type_: "purchase".to_string(),
+        payment_mode: "credit".to_string(),
+        paid_amount: 50000,
+        supplier_invoice_no: Some("SUPP-INV-99".to_string()),
+        supplier_invoice_date: Some("2026-11-03".to_string()),
+        shop_state: Some("23".to_string()),
+        lines: vec![
+            InvoiceLine {
+                item_id: 1,
+                qty: 12_000,
+                unit: "bag".to_string(),
+                rate: 135000,
+                taxable: 1542857,
+                cgst: 38571,
+                sgst: 38571,
+                igst: 0,
+            }
+        ],
+    };
+    alter_purchase_inner(&mut conn, "PUR/01", alter_pur, Some("Corrected quantity from 10 to 12")).expect("Alteration using slash should succeed");
+    let res_after = get_invoice_details_inner(&conn, "PUR-01").unwrap();
+    assert_eq!(res_after.lines[0].qty, 12_000);
+}

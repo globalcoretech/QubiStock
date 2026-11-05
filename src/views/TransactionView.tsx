@@ -107,6 +107,7 @@ export function TransactionView({
   const [pendingTaxMode, setPendingTaxMode] = useState<"with_tax" | "without_tax" | "none">("with_tax");
   const [alterationReason, setAlterationReason] = useState("");
   const [isLoadingAlteration, setIsLoadingAlteration] = useState(false);
+  const [alterationLoadError, setAlterationLoadError] = useState<string | null>(null);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [lines, setLines] = useState<any[]>([
     {
@@ -209,13 +210,16 @@ export function TransactionView({
   useEffect(() => {
     if (!alteringInvoiceNo) {
       setAlterationReason("");
+      setAlterationLoadError(null);
       return;
     }
     let isMounted = true;
     setIsLoadingAlteration(true);
+    setAlterationLoadError(null);
     invoke<any>("get_invoice_details_cmd", { invoiceNo: alteringInvoiceNo })
       .then((details) => {
         if (!isMounted) return;
+        setAlterationLoadError(null);
         if (details.invoice_no) setInvoiceNo(details.invoice_no);
         if (details.date) setDate(details.date);
         if (details.party_id) setPartyId(details.party_id.toString());
@@ -253,6 +257,9 @@ export function TransactionView({
       })
       .catch((err) => {
         console.error("Failed to load invoice details for alteration:", err);
+        if (isMounted) {
+          setAlterationLoadError(String(err));
+        }
         setFeedback({
           message:
             lang === "hi"
@@ -843,6 +850,41 @@ export function TransactionView({
         </div>
       )}
 
+      {/* Alteration Loading Error Banner */}
+      {alteringInvoiceNo && alterationLoadError && (
+        <div
+          data-testid="alteration-error-recovery-banner"
+          className="p-3 bg-rose-50 border-2 border-rose-400 rounded-panel flex flex-wrap items-center justify-between gap-3 text-rose-950 text-xs shadow-xs"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-base flex-shrink-0">⚠️</span>
+            <div>
+              <span className="font-bold block">
+                {lang === "hi"
+                  ? `बिल '${alteringInvoiceNo}' डेटाबेस में नहीं मिला।`
+                  : `Invoice '${alteringInvoiceNo}' was not found in database.`}
+              </span>
+              <span className="text-[11px] text-rose-700">
+                {lang === "hi"
+                  ? "यह बिल डिलीट/रद्द हो चुका है या बिल नंबर गलत है। आप सुरक्षित रूप से बाहर निकल सकते हैं।"
+                  : "This invoice may have been deleted, cancelled, or the number was incorrect."}
+              </span>
+            </div>
+          </div>
+          {onCancelAlteration && (
+            <button
+              type="button"
+              data-testid="exit-alteration-error-btn"
+              onClick={onCancelAlteration}
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-xs flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <X size={14} />
+              <span>{lang === "hi" ? "ऑल्टर मोड से बाहर निकलें (Exit)" : "Exit Alteration Mode"}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* WAC Notice for Purchase Alteration */}
       {type === "purchase" && alteringInvoiceNo && (
         <div
@@ -1351,7 +1393,7 @@ export function TransactionView({
                     type="button"
                     data-testid="transaction-submit-with-tax-btn"
                     onClick={() => handleInitiateSaveWithMode("with_tax")}
-                    disabled={lines.length === 0 || hasOversell || isBillBlocked || (alteringInvoiceNo ? !alterationReason.trim() : false)}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked || Boolean(alterationLoadError) || (alteringInvoiceNo ? !alterationReason.trim() : false)}
                     className={`min-h-[46px] ${
                       isBillBlocked
                         ? "bg-slate-400 cursor-not-allowed opacity-60"
@@ -1372,7 +1414,7 @@ export function TransactionView({
                     type="button"
                     data-testid="transaction-submit-without-tax-btn"
                     onClick={() => handleInitiateSaveWithMode("without_tax")}
-                    disabled={lines.length === 0 || hasOversell || isBillBlocked || (alteringInvoiceNo ? !alterationReason.trim() : false)}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked || Boolean(alterationLoadError) || (alteringInvoiceNo ? !alterationReason.trim() : false)}
                     className={`min-h-[46px] ${
                       isBillBlocked
                         ? "bg-slate-400 cursor-not-allowed opacity-60"
@@ -1395,7 +1437,7 @@ export function TransactionView({
                   <button
                     type="button"
                     onClick={() => handleInitiateSaveWithMode("none")}
-                    disabled={lines.length === 0 || hasOversell || isBillBlocked || (alteringInvoiceNo ? !alterationReason.trim() : false)}
+                    disabled={lines.length === 0 || hasOversell || isBillBlocked || Boolean(alterationLoadError) || (alteringInvoiceNo ? !alterationReason.trim() : false)}
                     className="text-forest hover:underline font-bold disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {alteringInvoiceNo
@@ -1413,6 +1455,7 @@ export function TransactionView({
                     lines.length === 0 ||
                     hasOversell ||
                     isBillBlocked ||
+                    Boolean(alterationLoadError) ||
                     (!isSale && (!partyId || partyId === "1" || selectedParty?.name?.toLowerCase().includes("walk-in"))) ||
                     (alteringInvoiceNo ? !alterationReason.trim() : false)
                   }

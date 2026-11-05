@@ -1332,12 +1332,21 @@ pub struct InvoicePrintDetails {
 }
 
 pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<InvoicePrintDetails, String> {
+    let clean_inv = invoice_no.trim();
+    if clean_inv.is_empty() {
+        return Err("Invoice number cannot be empty".to_string());
+    }
+
     let sale_res = conn.query_row(
-        "SELECT s.invoice_no, s.date, p.name, p.phone, p.gstin, p.village, s.payment_mode, s.paid_amount, s.total_amount, p.address, p.state_code, s.customer_id, COALESCE(s.status, 'active')
+        "SELECT s.invoice_no, s.date, COALESCE(p.name, 'Customer'), p.phone, p.gstin, p.village,
+                s.payment_mode, s.paid_amount, s.total_amount, p.address, p.state_code, s.customer_id, COALESCE(s.status, 'active')
          FROM sales s
-         JOIN parties p ON s.customer_id = p.id
-         WHERE s.invoice_no = ?1",
-        rusqlite::params![invoice_no],
+         LEFT JOIN parties p ON s.customer_id = p.id
+         WHERE TRIM(s.invoice_no) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(s.invoice_no), '/', '-') = REPLACE(?1, '/', '-')
+         ORDER BY (TRIM(s.invoice_no) = ?1 COLLATE NOCASE) DESC
+         LIMIT 1",
+        rusqlite::params![clean_inv],
         |row| Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -1358,21 +1367,21 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
     if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code, customer_id, inv_status)) = sale_res {
         let godown_id: Option<i64> = conn.query_row(
             "SELECT godown_id FROM stock_ledger WHERE ref_id = ?1 LIMIT 1",
-            rusqlite::params![invoice_no],
+            rusqlite::params![&inv_no],
             |r| r.get(0)
         ).ok();
 
         let mut stmt = conn.prepare(
-            "SELECT i.name, sl.qty, sl.unit, sl.rate, sl.taxable, (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as gst_amt,
+            "SELECT COALESCE(i.name, 'Item'), sl.qty, sl.unit, sl.rate, sl.taxable, (COALESCE(sl.cgst, 0) + COALESCE(sl.sgst, 0) + COALESCE(sl.igst, 0)) as gst_amt,
                     COALESCE(sl.hsn, i.hsn) as line_hsn,
                     COALESCE(sl.gst_rate, i.gst_rate) as line_gst_rate,
                     sl.item_id
              FROM sale_lines sl
-             JOIN items i ON sl.item_id = i.id
+             LEFT JOIN items i ON sl.item_id = i.id
              WHERE sl.invoice_no = ?1"
         ).map_err(|e| e.to_string())?;
 
-        let line_rows = stmt.query_map(rusqlite::params![invoice_no], |row| {
+        let line_rows = stmt.query_map(rusqlite::params![&inv_no], |row| {
             let item_name: String = row.get(0)?;
             let qty: i64 = row.get(1)?;
             let unit: String = row.get(2)?;
@@ -1423,11 +1432,19 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
     }
 
     let pur_res = conn.query_row(
-        "SELECT p.invoice_no, p.date, pr.name, pr.phone, pr.gstin, pr.village, p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code, p.supplier_invoice_no, p.supplier_invoice_date, p.supplier_id, COALESCE(p.status, 'active')
+        "SELECT p.invoice_no, p.date, COALESCE(pr.name, 'Supplier'), pr.phone, pr.gstin, pr.village,
+                p.payment_mode, p.paid_amount, p.total_amount, pr.address, pr.state_code,
+                p.supplier_invoice_no, p.supplier_invoice_date, p.supplier_id, COALESCE(p.status, 'active')
          FROM purchases p
-         JOIN parties pr ON p.supplier_id = pr.id
-         WHERE p.invoice_no = ?1",
-        rusqlite::params![invoice_no],
+         LEFT JOIN parties pr ON p.supplier_id = pr.id
+         WHERE TRIM(p.invoice_no) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(p.invoice_no), '/', '-') = REPLACE(?1, '/', '-')
+            OR TRIM(COALESCE(p.supplier_invoice_no, '')) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(COALESCE(p.supplier_invoice_no, '')), '/', '-') = REPLACE(?1, '/', '-')
+         ORDER BY (TRIM(p.invoice_no) = ?1 COLLATE NOCASE) DESC,
+                  (REPLACE(TRIM(p.invoice_no), '/', '-') = REPLACE(?1, '/', '-')) DESC
+         LIMIT 1",
+        rusqlite::params![clean_inv],
         |row| Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -1450,21 +1467,21 @@ pub fn get_invoice_details_inner(conn: &Connection, invoice_no: &str) -> Result<
     if let Ok((inv_no, date, party_name, party_phone, party_gstin, party_village, payment_mode, paid_amount, total_amount, party_address, party_state_code, supp_inv_no, supp_inv_date, supplier_id, inv_status)) = pur_res {
         let godown_id: Option<i64> = conn.query_row(
             "SELECT godown_id FROM stock_ledger WHERE ref_id = ?1 LIMIT 1",
-            rusqlite::params![invoice_no],
+            rusqlite::params![&inv_no],
             |r| r.get(0)
         ).ok();
 
         let mut stmt = conn.prepare(
-            "SELECT i.name, pl.qty, pl.unit, pl.rate, pl.taxable, (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as gst_amt,
+            "SELECT COALESCE(i.name, 'Item'), pl.qty, pl.unit, pl.rate, pl.taxable, (COALESCE(pl.cgst, 0) + COALESCE(pl.sgst, 0) + COALESCE(pl.igst, 0)) as gst_amt,
                     COALESCE(pl.hsn, i.hsn) as line_hsn,
                     COALESCE(pl.gst_rate, i.gst_rate) as line_gst_rate,
                     pl.item_id
              FROM purchase_lines pl
-             JOIN items i ON pl.item_id = i.id
+             LEFT JOIN items i ON pl.item_id = i.id
              WHERE pl.invoice_no = ?1"
         ).map_err(|e| e.to_string())?;
 
-        let line_rows = stmt.query_map(rusqlite::params![invoice_no], |row| {
+        let line_rows = stmt.query_map(rusqlite::params![&inv_no], |row| {
             let item_name: String = row.get(0)?;
             let qty: i64 = row.get(1)?;
             let unit: String = row.get(2)?;
@@ -4454,10 +4471,15 @@ pub fn cancel_invoice_with_user(conn: &mut Connection, invoice_no: &str, reason:
         return Err("Invoice number is required / बिल नंबर आवश्यक है".to_string());
     }
 
-    let sale_opt: Option<(String, i64, i64, i64, String)> = conn.query_row(
-        "SELECT date, customer_id, paid_amount, total_amount, COALESCE(status, 'active') FROM sales WHERE invoice_no = ?1",
+    let sale_opt: Option<(String, String, i64, i64, i64, String)> = conn.query_row(
+        "SELECT invoice_no, date, customer_id, paid_amount, total_amount, COALESCE(status, 'active')
+         FROM sales
+         WHERE TRIM(invoice_no) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(invoice_no), '/', '-') = REPLACE(?1, '/', '-')
+         ORDER BY (TRIM(invoice_no) = ?1 COLLATE NOCASE) DESC
+         LIMIT 1",
         rusqlite::params![clean_inv],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
     ).optional().map_err(|e| e.to_string())?;
 
     let is_sale;
@@ -4466,8 +4488,10 @@ pub fn cancel_invoice_with_user(conn: &mut Connection, invoice_no: &str, reason:
     let paid_amount: i64;
     let total_amount: i64;
     let status: String;
+    let resolved_inv_no: String;
 
-    if let Some((d, cid, pa, ta, st)) = sale_opt {
+    if let Some((inv, d, cid, pa, ta, st)) = sale_opt {
+        resolved_inv_no = inv;
         is_sale = true;
         inv_date = d;
         party_id = cid;
@@ -4475,13 +4499,22 @@ pub fn cancel_invoice_with_user(conn: &mut Connection, invoice_no: &str, reason:
         total_amount = ta;
         status = st;
     } else {
-        let pur_opt: Option<(String, i64, i64, i64, String)> = conn.query_row(
-            "SELECT date, supplier_id, paid_amount, total_amount, COALESCE(status, 'active') FROM purchases WHERE invoice_no = ?1",
+        let pur_opt: Option<(String, String, i64, i64, i64, String)> = conn.query_row(
+            "SELECT invoice_no, date, supplier_id, paid_amount, total_amount, COALESCE(status, 'active')
+             FROM purchases
+             WHERE TRIM(invoice_no) = ?1 COLLATE NOCASE
+                OR REPLACE(TRIM(invoice_no), '/', '-') = REPLACE(?1, '/', '-')
+                OR TRIM(COALESCE(supplier_invoice_no, '')) = ?1 COLLATE NOCASE
+                OR REPLACE(TRIM(COALESCE(supplier_invoice_no, '')), '/', '-') = REPLACE(?1, '/', '-')
+             ORDER BY (TRIM(invoice_no) = ?1 COLLATE NOCASE) DESC,
+                      (REPLACE(TRIM(invoice_no), '/', '-') = REPLACE(?1, '/', '-')) DESC
+             LIMIT 1",
             rusqlite::params![clean_inv],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
         ).optional().map_err(|e| e.to_string())?;
 
-        if let Some((d, sid, pa, ta, st)) = pur_opt {
+        if let Some((inv, d, sid, pa, ta, st)) = pur_opt {
+            resolved_inv_no = inv;
             is_sale = false;
             inv_date = d;
             party_id = sid;
@@ -4492,6 +4525,7 @@ pub fn cancel_invoice_with_user(conn: &mut Connection, invoice_no: &str, reason:
             return Err(format!("Invoice '{}' not found / बिल नहीं मिला", clean_inv));
         }
     }
+    let clean_inv = &resolved_inv_no;
 
     if status == "cancelled" {
         return Err(format!("Invoice '{}' is already cancelled / बिल पहले से रद्द है", clean_inv));
@@ -4672,11 +4706,17 @@ pub fn alter_sale_with_user(
         return Err("Current invoice number is required".to_string());
     }
 
-    let (old_date, old_customer_id, old_payment_mode, old_paid_amount, old_total_amount, old_status): (String, i64, String, i64, i64, String) = conn.query_row(
-        "SELECT date, customer_id, payment_mode, paid_amount, total_amount, COALESCE(status, 'active') FROM sales WHERE invoice_no = ?1",
+    let (real_inv_no, old_date, old_customer_id, old_payment_mode, old_paid_amount, old_total_amount, old_status): (String, String, i64, String, i64, i64, String) = conn.query_row(
+        "SELECT invoice_no, date, customer_id, payment_mode, paid_amount, total_amount, COALESCE(status, 'active')
+         FROM sales
+         WHERE TRIM(invoice_no) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(invoice_no), '/', '-') = REPLACE(?1, '/', '-')
+         ORDER BY (TRIM(invoice_no) = ?1 COLLATE NOCASE) DESC
+         LIMIT 1",
         rusqlite::params![clean_current],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
     ).map_err(|_| format!("Sale invoice '{}' not found / बिक्री बिल नहीं मिला", clean_current))?;
+    let clean_current = &real_inv_no;
 
     if old_status == "cancelled" {
         return Err("Cannot alter a cancelled invoice / रद्द किए गए बिल में बदलाव नहीं किया जा सकता".to_string());
@@ -4983,11 +5023,20 @@ pub fn alter_purchase_with_user(
         return Err("Current invoice number is required".to_string());
     }
 
-    let (old_date, old_supplier_id, old_payment_mode, old_paid_amount, old_total_amount, old_supp_no, old_supp_date, old_status): (String, i64, String, i64, i64, Option<String>, Option<String>, String) = conn.query_row(
-        "SELECT date, supplier_id, payment_mode, paid_amount, total_amount, supplier_invoice_no, supplier_invoice_date, COALESCE(status, 'active') FROM purchases WHERE invoice_no = ?1",
+    let (real_inv_no, old_date, old_supplier_id, old_payment_mode, old_paid_amount, old_total_amount, old_supp_no, old_supp_date, old_status): (String, String, i64, String, i64, i64, Option<String>, Option<String>, String) = conn.query_row(
+        "SELECT invoice_no, date, supplier_id, payment_mode, paid_amount, total_amount, supplier_invoice_no, supplier_invoice_date, COALESCE(status, 'active')
+         FROM purchases
+         WHERE TRIM(invoice_no) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(invoice_no), '/', '-') = REPLACE(?1, '/', '-')
+            OR TRIM(COALESCE(supplier_invoice_no, '')) = ?1 COLLATE NOCASE
+            OR REPLACE(TRIM(COALESCE(supplier_invoice_no, '')), '/', '-') = REPLACE(?1, '/', '-')
+         ORDER BY (TRIM(invoice_no) = ?1 COLLATE NOCASE) DESC,
+                  (REPLACE(TRIM(invoice_no), '/', '-') = REPLACE(?1, '/', '-')) DESC
+         LIMIT 1",
         rusqlite::params![clean_current],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
     ).map_err(|_| format!("Purchase invoice '{}' not found / खरीद बिल नहीं मिला", clean_current))?;
+    let clean_current = &real_inv_no;
 
     if old_status == "cancelled" {
         return Err("Cannot alter a cancelled invoice / रद्द किए गए बिल में बदलाव नहीं किया जा सकता".to_string());
