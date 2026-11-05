@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Lock, User, AlertTriangle, Copy, Check, Printer, Shield } from "./icons";
+import { User, AlertTriangle, Copy, Check, Printer, Shield } from "./icons";
 import { SessionUser, UserInfo } from "../types";
+import qubiLogo from "../assets/qubistock_logo.png";
 
 interface LoginModalProps {
   onLoginSuccess: (user: SessionUser) => void;
@@ -231,12 +232,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess }) => {
     >
       <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden border border-slate-200/80">
         {/* Header */}
-        <div className="bg-gradient-to-r from-emerald-800 to-teal-900 text-white p-6 text-center">
-          <div className="w-14 h-14 mx-auto mb-3 bg-white/10 rounded-2xl flex items-center justify-center backdrop-blur-sm border border-white/20">
-            <Lock className="w-7 h-7 text-emerald-300" />
+        <div className="bg-gradient-to-r from-emerald-800 to-teal-900 text-white p-5 text-center">
+          <div className="bg-white/95 py-2 px-4 rounded-2xl mb-2.5 shadow-sm inline-block">
+            <img src={qubiLogo} alt="QubiStock" className="h-8 w-auto object-contain" />
           </div>
-          <h2 className="text-xl font-bold">कृषि केंद्र लॉगिन / Login</h2>
-          <p className="text-xs text-emerald-200 mt-1">सुरक्षित इन्वेंटरी प्रबंधन प्रणाली</p>
+          <h2 className="text-lg font-bold">कृषि केंद्र लॉगिन / Login</h2>
+          <p className="text-xs text-emerald-200 mt-0.5">सुरक्षित इन्वेंटरी प्रबंधन प्रणाली</p>
         </div>
 
         {error && (

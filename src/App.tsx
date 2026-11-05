@@ -25,6 +25,7 @@ import { BackupView } from "./views/BackupView";
 import { PrintInvoiceModal } from "./components/PrintInvoiceModal";
 import { BillPreviewPage } from "./components/bills/BillPreviewPage";
 import { FirstTimeSetupView } from "./views/FirstTimeSetupView";
+import { SplashScreen } from "./components/SplashScreen";
 import { migrateLocalStorageSettingsToSqlite } from "./utils/settingsMigration";
 
 export const toSettingsPayload = (s: any) => {
@@ -232,6 +233,13 @@ export default function App() {
 
   const [lang, setLang] = useState<Language>(() => getInitialLanguage());
   const t = translations[lang];
+
+  const [showSplash, setShowSplash] = useState<boolean>(() => {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") {
+      return false;
+    }
+    return true;
+  });
 
   const handleLanguageChange = (newLang: Language) => {
     setLang(newLang);
@@ -520,19 +528,24 @@ export default function App() {
   // Pehli baar ka setup screen: shopName khali ho to poori screen "पहली बार सेटअप" aaye
   if (!settings.shopName || !settings.shopName.trim()) {
     return (
-      <FirstTimeSetupView
-        initialSettings={settings}
-        onSave={async (newSettings) => {
-          await updateSettings(newSettings);
-        }}
-        t={t}
-        lang={lang}
-      />
+      <>
+        {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
+        <FirstTimeSetupView
+          initialSettings={settings}
+          onSave={async (newSettings) => {
+            await updateSettings(newSettings);
+          }}
+          t={t}
+          lang={lang}
+        />
+      </>
     );
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-paper text-ink font-body">
+    <>
+      {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
+      <div className="flex h-screen w-screen overflow-hidden bg-paper text-ink font-body">
       {/* Sidebar with Navigation + Exit Button */}
       <Sidebar
         currentView={currentView}
@@ -962,5 +975,6 @@ export default function App() {
         />
       )}
     </div>
+    </>
   );
 }
