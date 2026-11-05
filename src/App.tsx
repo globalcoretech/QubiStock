@@ -560,7 +560,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+      <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-slate-100/70">
         {/* Close Listener Failure Visible Warning Banner */}
         {exitListenerWarning && (
           <div
@@ -603,10 +603,10 @@ export default function App() {
           </div>
         )}
 
-        <div className="flex-1 overflow-auto min-w-0">
+        <div className="flex-1 overflow-auto min-w-0 p-3 sm:p-3.5 lg:p-4">
           {(() => {
             return (
-              <div className="h-full">
+              <div className="h-full min-h-0">
                 {currentView === "Dashboard" && (
                   <DashboardView
                     currentUser={currentUser}

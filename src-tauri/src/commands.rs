@@ -5122,14 +5122,6 @@ pub fn alter_purchase_with_user(
         processed_lines.push(line);
     }
 
-    if grand_total_paise < old_paid_amount {
-        return Err(format!(
-            "New bill total (₹{:.2}) cannot be less than already recorded payment (₹{:.2}) / कुल राशि पहले से किए गए भुगतान से कम नहीं हो सकती",
-            grand_total_paise as f64 / 100.0,
-            old_paid_amount as f64 / 100.0
-        ));
-    }
-
     // Check stock reduction:
     // If new purchase qty < old purchase qty, ensure current stock doesn't drop below zero
     use std::collections::HashMap;
@@ -5156,8 +5148,7 @@ pub fn alter_purchase_with_user(
         let mut old_stmt = conn.prepare(
             "SELECT item_id, godown_id, SUM(qty_base) FROM stock_ledger 
              WHERE ref_id = ?1 AND (type = 'purchase' OR type = 'purchase_alteration')
-               AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')
-             GROUP BY item_id, godown_id"
+               AND id NOT IN (SELECT linked_id FROM stock_ledger WHERE linked_id IS NOT NULL AND type = 'reversal')"
         ).map_err(|e| e.to_string())?;
 
         let rows = old_stmt.query_map(rusqlite::params![clean_current], |row| {
@@ -5199,9 +5190,12 @@ pub fn alter_purchase_with_user(
         }
     }
 
+    // For purchases, allow alteration even if grand_total_paise < old_paid_amount.
+    // The purchase bill amount is updated, actual_paid is capped at grand_total_paise,
+    // and any excess payment stays as an advance/credit in the party ledger.
     let actual_paid = match payload.payment_mode.as_str() {
         "cash" | "upi_bank" => grand_total_paise,
-        _ => old_paid_amount.max(payload.paid_amount).min(grand_total_paise),
+        _ => grand_total_paise.min(old_paid_amount.max(payload.paid_amount)),
     };
 
     let before_json = serde_json::json!({

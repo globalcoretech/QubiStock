@@ -222,7 +222,29 @@ export function TransactionView({
         setAlterationLoadError(null);
         if (details.invoice_no) setInvoiceNo(details.invoice_no);
         if (details.date) setDate(details.date);
-        if (details.party_id) setPartyId(details.party_id.toString());
+        if (details.party_id) {
+          const pid = details.party_id.toString();
+          setPartyId(pid);
+          if (details.party_name) {
+            setParties((prev) => {
+              if (prev.some((p) => p.id.toString() === pid)) return prev;
+              return [
+                ...prev,
+                {
+                  id: details.party_id,
+                  name: details.party_name,
+                  phone: details.party_phone || "",
+                  village: details.party_village || "",
+                  gstin: details.party_gstin || "",
+                  party_type: type === "purchase" ? "supplier" : "customer",
+                  category: "regular",
+                  address: details.party_address || "",
+                  state_code: details.party_state_code || "",
+                },
+              ];
+            });
+          }
+        }
         if (details.godown_id) setGodownId(details.godown_id.toString());
         if (details.payment_mode) setPaymentMode(details.payment_mode);
         if (typeof details.paid_amount === "number") {
@@ -301,15 +323,27 @@ export function TransactionView({
         type === "purchase"
           ? ptRes.filter((p) => p.id !== 1 && !p.name.toLowerCase().includes("walk-in"))
           : ptRes;
-      setParties(validParties);
-      // Auto-prefill default walk-in cash party for sale ONLY
-      if (!partyId) {
-        if (type === "sale" && validParties.length > 0) {
-          const walkin = validParties.find((p) => p.id === 1) || validParties[0];
-          setPartyId(walkin.id.toString());
-        } else {
-          setPartyId("");
+      
+      setParties((prev) => {
+        if (alteringInvoiceNo) {
+          const currentAlteringParty = prev.find((p) => p.id.toString() === partyId);
+          if (currentAlteringParty && !validParties.some((p) => p.id === currentAlteringParty.id)) {
+            return [...validParties, currentAlteringParty];
+          }
         }
+        return validParties;
+      });
+
+      // Auto-prefill default walk-in cash party for sale ONLY when not in alteration mode
+      if (!alteringInvoiceNo) {
+        setPartyId((prev) => {
+          if (prev) return prev;
+          if (type === "sale" && validParties.length > 0) {
+            const walkin = validParties.find((p) => p.id === 1) || validParties[0];
+            return walkin.id.toString();
+          }
+          return "";
+        });
       }
     } catch (e) {
       console.error("get_parties_cmd error:", e);
