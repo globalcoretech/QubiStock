@@ -11,7 +11,7 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
-import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert, RefreshCw, Sparkles } from "../components/icons";
+import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert, RefreshCw, Sparkles, Phone, Mail } from "../components/icons";
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";
@@ -913,7 +913,56 @@ export function SettingsView({
                 </div>
               </div>
 
-              {/* Software Updates Section (सॉफ़्टवेयर अपडेट) */}
+              {/* Technical Support & Helpdesk Section */}
+              <div className="p-4 bg-gradient-to-r from-emerald-50/70 to-teal-50/70 border border-emerald-200/90 rounded-xl space-y-3">
+                <div className="flex items-center justify-between border-b border-emerald-200/70 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Phone size={16} className="text-emerald-700" />
+                    <h4 className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
+                      {lang === "hi" ? "तकनीकी सहायता एवं संपर्क (Technical Support)" : "Technical Support & Helpdesk"}
+                    </h4>
+                  </div>
+                  <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300">
+                    GlobalCore Tech LLP
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-600">
+                  {lang === "hi"
+                    ? "किसी भी तकनीकी समस्या, डेटा बैकअप या सहायता के लिए हमारी टेक्निकल सपोर्ट टीम से संपर्क करें:"
+                    : "For any technical assistance, data backup inquiries, or troubleshooting, reach out to our team:"}
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-emerald-100 shadow-2xs">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0">
+                      <Phone size={16} />
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        {lang === "hi" ? "हेल्पलाइन / कॉल" : "Support Helpline"}
+                      </div>
+                      <a href="tel:+917879130175" className="text-xs font-bold text-emerald-800 hover:underline">
+                        +91 78791 30175
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-emerald-100 shadow-2xs">
+                    <div className="w-8 h-8 rounded-lg bg-teal-100 flex items-center justify-center text-teal-700 shrink-0">
+                      <Mail size={16} />
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        {lang === "hi" ? "आधिकारिक ईमेल" : "Support Email"}
+                      </div>
+                      <a href="mailto:contact@globlcoretech.com" className="text-xs font-bold text-teal-800 hover:underline">
+                        contact@globlcoretech.com
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                   <div className="flex items-center gap-2">

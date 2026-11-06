@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>QubiStock - User Manual & Installation Guide</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm 18mm 16mm;
+      @bottom-right {
+        content: counter(page);
+        font-size: 9pt;
+        color: #64748b;
+      }
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #0f172a;
+      line-height: 1.6;
+      font-size: 10pt;
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+    }
+    .cover {
+      page-break-after: always;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 90vh;
+      padding: 40px 20px 20px 20px;
+      text-align: center;
+    }
+    .cover-logo-box {
+      background: #f8fafc;
+      padding: 24px;
+      border-radius: 20px;
+      display: inline-block;
+      margin: 0 auto 30px auto;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+    }
+    .cover-logo-box img {
+      width: 320px;
+      height: auto;
+      display: block;
+    }
+    .cover h1 {
+      font-size: 26pt;
+      color: #064e3b;
+      margin: 0 0 10px 0;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+    .cover h2 {
+      font-size: 14pt;
+      color: #0d9488;
+      font-weight: 600;
+      margin: 0 0 25px 0;
+    }
+    .badge-bar {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 30px;
+    }
+    .badge {
+      font-size: 8.5pt;
+      font-weight: 700;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: #ecfdf5;
+      color: #065f46;
+      border: 1px solid #a7f3d0;
+    }
+    .cover-meta {
+      background: #f1f5f9;
+      border-radius: 16px;
+      padding: 20px;
+      max-width: 520px;
+      margin: 0 auto;
+      text-align: left;
+      font-size: 9pt;
+      border: 1px solid #cbd5e1;
+    }
+    .cover-meta table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .cover-meta td {
+      padding: 4px 0;
+    }
+    .cover-meta td.label {
+      font-weight: bold;
+      color: #475569;
+      width: 40%;
+    }
+    .cover-meta td.val {
+      color: #0f172a;
+      font-weight: 600;
+    }
+    .support-highlight-box {
+      background: linear-gradient(135deg, #064e3b 0%, #0f766e 100%);
+      color: #ffffff;
+      border-radius: 16px;
+      padding: 16px;
+      margin-top: 30px;
+      text-align: center;
+    }
+    .support-highlight-box h3 {
+      margin: 0 0 6px 0;
+      font-size: 11pt;
+      color: #99f6e4;
+    }
+    .support-highlight-box p {
+      margin: 0;
+      font-size: 9pt;
+      color: #e2e8f0;
+    }
+
+    h2.section-title {
+      font-size: 16pt;
+      color: #064e3b;
+      border-bottom: 2px solid #0d9488;
+      padding-bottom: 6px;
+      margin-top: 36px;
+      margin-bottom: 14px;
+      page-break-after: avoid;
+    }
+    h3.sub-title {
+      font-size: 12pt;
+      color: #0f766e;
+      margin-top: 20px;
+      margin-bottom: 8px;
+      page-break-after: avoid;
+    }
+    p {
+      margin: 0 0 10px 0;
+      color: #334155;
+    }
+    ul, ol {
+      margin: 0 0 14px 0;
+      padding-left: 22px;
+      color: #334155;
+    }
+    li {
+      margin-bottom: 6px;
+    }
+    strong {
+      color: #0f172a;
+    }
+    .callout {
+      border-left: 4px solid #0d9488;
+      background: #f0fdfa;
+      padding: 12px 16px;
+      border-radius: 0 10px 10px 0;
+      margin: 14px 0;
+      font-size: 9.5pt;
+    }
+    .callout-warning {
+      border-left-color: #f59e0b;
+      background: #fffbeb;
+    }
+    .callout-danger {
+      border-left-color: #ef4444;
+      background: #fef2f2;
+    }
+    .callout-title {
+      font-weight: bold;
+      margin-bottom: 4px;
+      color: #0f172a;
+    }
+
+    .screenshot-container {
+      margin: 18px 0;
+      text-align: center;
+      page-break-inside: avoid;
+    }
+    .screenshot-container img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+    }
+    .screenshot-caption {
+      font-size: 8.5pt;
+      color: #64748b;
+      font-style: italic;
+      margin-top: 6px;
+    }
+
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 9pt;
+      page-break-inside: avoid;
+    }
+    table.data-table th {
+      background: #f1f5f9;
+      color: #0f172a;
+      font-weight: 700;
+      text-align: left;
+      padding: 8px 10px;
+      border: 1px solid #cbd5e1;
+    }
+    table.data-table td {
+      padding: 8px 10px;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+    }
+    table.data-table tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+
+    .page-break {
+      page-break-before: always;
+    }
+    .contact-card {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 14px;
+      margin-top: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- COVER PAGE -->
+  <div class="cover">
+    <div>
+      <div class="cover-logo-box">
+        <img src="images/qubistock_logo.png" alt="QubiStock Logo">
+      </div>
+      <h1>QubiStock™</h1>
+      <h2>Enterprise Desktop Inventory &amp; GST Billing Suite</h2>
+      
+      <div class="badge-bar">
+        <span class="badge">Windows 10 / 11 64-bit</span>
+        <span class="badge">100% Offline Local Database</span>
+        <span class="badge">GST &amp; E-Invoicing Ready</span>
+        <span class="badge">Automated Daily Backups</span>
+      </div>
+
+      <p style="font-size: 11pt; color: #475569; max-width: 550px; margin: 0 auto 30px auto;">
+        Official installation instructions, operational security rules, user workflow guides, and disaster recovery reference for businesses and agricultural dealerships.
+      </p>
+
+      <div class="cover-meta">
+        <table>
+          <tr>
+            <td class="label">Software Version:</td>
+            <td class="val">v0.1.0 (Production Release)</td>
+          </tr>
+          <tr>
+            <td class="label">Target Platform:</td>
+            <td class="val">Microsoft Windows (x86_64 NSIS Setup)</td>
+          </tr>
+          <tr>
+            <td class="label">Database Engine:</td>
+            <td class="val">Embedded SQLite with WAL Mode &amp; Auto-Checkpoint</td>
+          </tr>
+          <tr>
+            <td class="label">Security Architecture:</td>
+            <td class="val">Argon2id Hashing, Rate Limiting &amp; Recovery Keys</td>
+          </tr>
+          <tr>
+            <td class="label">Developed By:</td>
+            <td class="val">GlobalCore Tech LLP</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="support-highlight-box">
+      <h3>Need Help? Official Technical Support &amp; Helpdesk</h3>
+      <p>
+        <strong>Email:</strong> contact@globlcoretech.com &nbsp;|&nbsp; 
+        <strong>Support Phone / WhatsApp:</strong> +91 78791 30175
+      </p>
+    </div>
+  </div>
+
+  <!-- SECTION 1 -->
+  <div>
+    <h2 class="section-title">1. System Requirements &amp; Installation Guide</h2>
+    
+    <h3 class="sub-title">1.1 System Requirements</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>Minimum Specification</th>
+          <th>Recommended Specification</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Operating System</strong></td>
+          <td>Windows 10 (64-bit, Build 19041+)</td>
+          <td>Windows 11 (64-bit)</td>
+        </tr>
+        <tr>
+          <td><strong>Processor</strong></td>
+          <td>Intel Core i3 / AMD Ryzen 3 (Dual Core 2.0 GHz)</td>
+          <td>Intel Core i5 / AMD Ryzen 5 or faster</td>
+        </tr>
+        <tr>
+          <td><strong>Memory (RAM)</strong></td>
+          <td>4 GB RAM</td>
+          <td>8 GB RAM or higher</td>
+        </tr>
+        <tr>
+          <td><strong>Storage Disk</strong></td>
+          <td>500 MB free space (SSD recommended)</td>
+          <td>1 GB free space for database growth &amp; automated backups</td>
+        </tr>
+        <tr>
+          <td><strong>Display Resolution</strong></td>
+          <td>1280 &times; 720 (HD)</td>
+          <td>1920 &times; 1080 (Full HD, 100% scale)</td>
+        </tr>
+        <tr>
+          <td><strong>Internet Connection</strong></td>
+          <td>Not required for daily operations (Runs 100% offline)</td>
+          <td>Required only for downloading software updates from GitHub</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title">1.2 Step-by-Step Installation on Client Laptops</h3>
+    <ol>
+      <li><strong>Download the Installer:</strong> Copy or download the setup file <code>QubiStock_0.1.0_x64-setup.exe</code> to your client laptop or pendrive.</li>
+      <li><strong>Run Setup:</strong> Double-click <code>QubiStock_0.1.0_x64-setup.exe</code> to begin the NSIS installation.</li>
+      <li><strong>Windows SmartScreen Notice:</strong> If Windows Defender SmartScreen displays a blue banner saying <em>"Windows protected your PC"</em>, click on <strong>"More info"</strong> and then click <strong>"Run anyway"</strong>. (This is normal for newly packaged desktop software).</li>
+      <li><strong>Complete Setup:</strong> The setup will automatically extract all system libraries, create desktop shortcuts, and configure local user storage.</li>
+      <li><strong>Launch:</strong> Click the desktop shortcut <strong>"QubiStock"</strong> or find it in the Windows Start Menu.</li>
+    </ol>
+
+    <div class="callout">
+      <div class="callout-title">Database Location &amp; Safety Note</div>
+      All business records, invoices, stock, and passwords are saved locally in:
+      <br><code>%APPDATA%\com.krishikendra.dev\inventory.db</code>
+      <br>This directory is isolated from the program installation folder. Updating or reinstalling the application will <strong>NEVER</strong> overwrite or erase your company database.
+    </div>
+  </div>
+
+  <!-- SECTION 2 -->
+  <div class="page-break">
+    <h2 class="section-title">2. First-Time Setup &amp; Security Rules</h2>
+
+    <h3 class="sub-title">2.1 Initial Configuration Wizard</h3>
+    <p>When QubiStock is opened for the first time, you will be guided through a 3-step setup:</p>
+    <ul>
+      <li><strong>Shop Profile:</strong> Enter your Business / Shop Name (e.g. <em>"Shri Ram Krishi Kendra"</em>), Phone Number, State Code, GSTIN (optional if unregistered), and Invoice Header details.</li>
+      <li><strong>Financial Year &amp; Invoice Prefix:</strong> Select your default invoice prefix (e.g. <code>BILL/26-27/</code> or <code>PUR/26-27/</code>).</li>
+      <li><strong>Owner Security Setup:</strong> Enter the business Owner's username and a strong password (minimum 6 characters).</li>
+    </ul>
+
+    <div class="callout callout-danger">
+      <div class="callout-title">[CRITICAL] Security Recovery Key Safeguarding Rule</div>
+      Upon completing owner registration, QubiStock displays an emergency <strong>Security Recovery Key</strong> (e.g. <code>RK-XXXX-XXXX-XXXX-XXXX</code>).
+      <ul>
+        <li><strong>Copy and Print:</strong> Click the <strong>"Print Key"</strong> button or write it down in your business physical diary.</li>
+        <li><strong>Single-Use Security:</strong> If the owner ever forgets their password or username, this key is the <em>only</em> way to reset the master account and recover credentials.</li>
+        <li>Neither staff nor external hackers can bypass this Argon2 encrypted recovery lock.</li>
+      </ul>
+    </div>
+
+    <h3 class="sub-title">2.2 Operational Security Rules</h3>
+    <ul>
+      <li><strong>5-Attempt Automatic Lockout:</strong> If an incorrect password is typed 5 times in a row, the login panel locks down for 5 minutes. This lock persists across laptop restarts.</li>
+      <li><strong>Staff vs Owner Roles (RBAC):</strong>
+        <ul>
+          <li><strong>Owner (व्यवस्थापक):</strong> Full privileges, viewing purchase prices, profit/loss calculations, audit logs, supplier payment authorizations, and period locking.</li>
+          <li><strong>Staff (कर्मचारी):</strong> Can bill customers, check stock, and record customer receipts. Sensitive supplier purchase costs, margins, and owner passwords are automatically masked.</li>
+        </ul>
+      </li>
+      <li><strong>Append-Only Audit Log:</strong> Every alteration, price modification, deleted bill, or payment is recorded permanently in the tamper-proof audit journal with timestamp and user ID.</li>
+    </ul>
+
+    <div class="screenshot-container">
+      <img src="images/dashboard.jpg" alt="QubiStock Main Dashboard">
+      <div class="screenshot-caption">Figure 1: QubiStock Executive Dashboard showing Sales, Purchases, Cash/Credit totals, and Attention tabs.</div>
+    </div>
+  </div>
+
+  <!-- SECTION 3 -->
+  <div class="page-break">
+    <h2 class="section-title">3. Comprehensive Module Operations Manual</h2>
+
+    <h3 class="sub-title">3.1 Stock In &amp; Purchase Recording</h3>
+    <p>Use the <strong>"Stock In (Purchase)"</strong> screen to record goods received from distributors and manufacturers:</p>
+    <ol>
+      <li><strong>Select Supplier:</strong> Choose from existing suppliers or click <code>+ New Party</code> to add on-the-fly.</li>
+      <li><strong>Supplier Invoice Number &amp; Date:</strong> Record the distributor's printed bill number and invoice date.</li>
+      <li><strong>Add Line Items:</strong> Search items by name, barcode, or category. Enter quantity, packaging unit (bag, liter, kg), and purchase rate.</li>
+      <li><strong>GST Calculation:</strong> GST (CGST/SGST or IGST) is calculated automatically based on whether the supplier is intra-state or inter-state.</li>
+      <li><strong>Payment Mode:</strong> Choose Cash, UPI/Bank, or Credit (उधार).</li>
+      <li><strong>Save Purchase:</strong> Press <kbd>Ctrl + Enter</kbd> to save. Stock is immediately added to the warehouse ledger and weighted average cost (WAC) is refreshed.</li>
+    </ol>
+
+    <div class="screenshot-container">
+      <img src="images/purchase.jpg" alt="Purchase Entry Screen">
+      <div class="screenshot-caption">Figure 2: Purchase &amp; Stock Inward screen with multi-line calculations, unit conversions, and payment options.</div>
+    </div>
+
+    <h3 class="sub-title">3.2 Sales Billing &amp; Invoicing (POS)</h3>
+    <ul>
+      <li><strong>Instant Customer Lookup:</strong> Search customer by mobile number or name. For walk-in counter sales, select <em>"Cash Customer"</em>.</li>
+      <li><strong>Zero-Oversell Protection:</strong> QubiStock strictly prevents billing items that have insufficient physical stock, eliminating phantom inventory deficits.</li>
+      <li><strong>Multi-Unit Conversions:</strong> Seamlessly sell by bag, kg, gram, or liter. Units are automatically converted to base ledger equivalents.</li>
+      <li><strong>Invoice Printing:</strong> Supports 3-inch thermal roll printers and Full A4/A5 laser invoices with customizable company logo, bank details, and QR codes.</li>
+    </ul>
+  </div>
+
+  <!-- SECTION 4 -->
+  <div class="page-break">
+    <h3 class="sub-title">3.3 Payment &amp; Receipt Settlements (Digital Khata)</h3>
+    <p>The <strong>Payments &amp; Receipts</strong> module handles debtor/creditor ledger adjustments:</p>
+    <ul>
+      <li><strong>Payment Received (Customer):</strong> Filtered exclusively to customers. Select a customer to view their total pending credit and individual unpaid bills.</li>
+      <li><strong>Payment Made (Supplier):</strong> Restricted to Owners. View distributor balances and pending supply invoices.</li>
+      <li><strong>Bill Linking:</strong> Click any pending bill in the table to auto-fill the bill number and remaining amount, ensuring precise invoice-to-payment matching.</li>
+    </ul>
+
+    <div class="screenshot-container">
+      <img src="images/payment.jpg" alt="Payment & Receipt Module">
+      <div class="screenshot-caption">Figure 3: Payment settlement window featuring outstanding bill matching and real-time ledger balance updates.</div>
+    </div>
+
+    <h3 class="sub-title">3.4 Bill &amp; Payment Alteration Workflow</h3>
+    <p>QubiStock provides a safe, audited alteration mode for correcting errors without deleting audit trails:</p>
+    <ul>
+      <li><strong>Flexible Search:</strong> Invoices can be looked up using either slashes or dashes (e.g. <code>PUR/01</code> or <code>PUR-01</code>) or the supplier's original bill number.</li>
+      <li><strong>Paid Bill Protection:</strong> If a purchase or sales bill already has payments recorded against it, QubiStock permits updating item quantities while preserving payments and crediting any differential balance to the party ledger.</li>
+      <li><strong>Mandatory Reason for Alteration:</strong> Every alteration requires entering a brief reason (e.g. <em>"Corrected quantity as per physical count"</em>), permanently logged in the audit journal.</li>
+    </ul>
+
+    <h3 class="sub-title">3.5 Automated Backups &amp; Disaster Recovery</h3>
+    <ul>
+      <li><strong>Dual-Location Redundancy:</strong> Configure both a local primary backup folder and a secondary removable USB pendrive in <strong>Settings</strong>.</li>
+      <li><strong>Pre-Update Safety Backup:</strong> The system automatically takes a complete database snapshot before any update is applied.</li>
+      <li><strong>30-Day Rolling Retention:</strong> The software keeps 30 timestamped historical backups, automatically pruning older files to conserve disk space.</li>
+    </ul>
+
+    <h3 class="sub-title">3.6 In-App GitHub Updates (Zero-Downtime)</h3>
+    <p>When updates are released on GitHub:</p>
+    <ol>
+      <li>An in-app modal appears showing the new version number, release date, and changelog.</li>
+      <li>Clicking <strong>"अभी अपडेट करें (Update Now)"</strong> creates a pre-update backup, downloads the signed binary, and restarts the application.</li>
+      <li><strong>100% Data Preservation:</strong> All historical parties, stock, bills, and settings remain untouched.</li>
+    </ol>
+  </div>
+
+  <!-- SECTION 5 -->
+  <div class="page-break">
+    <h2 class="section-title">4. Troubleshooting &amp; Technical Support</h2>
+
+    <h3 class="sub-title">4.1 Frequently Asked Questions &amp; Quick Troubleshooting</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Issue / Symptom</th>
+          <th>Likely Cause</th>
+          <th>Resolution</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Application will not open or shows SmartScreen warning</strong></td>
+          <td>Windows SmartScreen protecting against newly downloaded setup</td>
+          <td>Click <em>"More info"</em> &rarr; <em>"Run anyway"</em>. Verify that Microsoft Edge WebView2 runtime is enabled (standard on Win 10/11).</td>
+        </tr>
+        <tr>
+          <td><strong>Forgot Owner Password</strong></td>
+          <td>Owner misplaced login credentials</td>
+          <td>On the Login screen, click <em>"पासवर्ड भूल गए? / Forgot?"</em>, enter the printed <strong>Recovery Key</strong>, and set a new password.</td>
+        </tr>
+        <tr>
+          <td><strong>Printer not detected or cuts paper incorrectly</strong></td>
+          <td>Thermal printer driver missing or wrong page width</td>
+          <td>Navigate to <strong>Settings &rarr; Printer Setup</strong>. Choose your printer from the dropdown and select <em>3-inch (80mm)</em> or <em>A4</em> mode.</td>
+        </tr>
+        <tr>
+          <td><strong>Database corruption warning on startup</strong></td>
+          <td>Abrupt computer shutdown while saving data</td>
+          <td>The emergency <strong>Database Integrity Guard</strong> will automatically detect this and allow 1-click restore from your latest verified backup.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 class="sub-title">4.2 Official Technical Support &amp; Maintenance Contact</h3>
+    <p>For any technical assistance, on-site setup, customization, or training, reach out directly to the software development engineering team:</p>
+
+    <div class="contact-card">
+      <div style="font-size: 13pt; font-weight: 800; color: #064e3b; margin-bottom: 4px;">
+        GlobalCore Tech LLP
+      </div>
+      <div style="font-size: 9.5pt; color: #0d9488; font-weight: 600; margin-bottom: 12px;">
+        Enterprise Software Solutions &amp; Digital Infrastructure
+      </div>
+      
+      <table style="width: 100%; border-collapse: collapse; font-size: 9.5pt;">
+        <tr>
+          <td style="width: 35%; padding: 6px 0; font-weight: bold; color: #475569;">📞 Technical Helpline / WhatsApp:</td>
+          <td style="padding: 6px 0; font-weight: bold; color: #065f46; font-size: 11pt;">+91 78791 30175</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; font-weight: bold; color: #475569;">✉️ Official Support Email:</td>
+          <td style="padding: 6px 0; font-weight: bold; color: #0f766e;"><a href="mailto:contact@globlcoretech.com" style="color: #0f766e; text-decoration: none;">contact@globlcoretech.com</a></td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; font-weight: bold; color: #475569;">🕒 Working Hours:</td>
+          <td style="padding: 6px 0; color: #334155;">Monday to Saturday: 9:30 AM &ndash; 7:30 PM IST</td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="margin-top: 40px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 20px; font-size: 8.5pt; color: #94a3b8;">
+      &copy; 2026 GlobalCore Tech LLP. All rights reserved. QubiStock™ is a trademark of GlobalCore Tech LLP.
+    </div>
+  </div>
+
+</body>
+</html>
