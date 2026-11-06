@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>कृषि केंद्र - डिजिटल बही-खाता</title>
+    <title>QubiStock - स्मार्ट इन्वेंटरी एवं बिलिंग समाधान</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -11,8 +11,20 @@
       rel="stylesheet"
     />
   </head>
-  <body class="bg-paper text-ink font-body antialiased selection:bg-marigold/30 selection:text-ink">
-    <div id="root"></div>
+  <body class="bg-[#091823] text-ink font-body antialiased selection:bg-marigold/30 selection:text-ink">
+    <div id="root">
+      <div id="pre-splash" style="position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(180deg,#091823 0%,#0b2436 50%,#06141e 100%);color:#fff;font-family:system-ui,-apple-system,sans-serif;user-select:none;">
+        <div style="background:rgba(255,255,255,0.96);padding:20px 32px;border-radius:24px;box-shadow:0 16px 50px rgba(0,141,145,0.3);margin-bottom:20px;max-width:320px;width:80%;display:flex;align-items:center;justify-content:center;">
+          <img src="/qubistock_logo.png" alt="QubiStock" style="width:100%;height:auto;display:block;" />
+        </div>
+        <div style="font-size:14px;font-weight:700;color:#99f6e4;margin-bottom:4px;letter-spacing:0.5px;">Smart Inventory &amp; Billing Suite</div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:28px;">स्मार्ट व्यापार एवं डिजिटल बही-खाता</div>
+        <div style="width:200px;height:4px;background:rgba(255,255,255,0.12);border-radius:999px;overflow:hidden;position:relative;">
+          <div style="width:50%;height:100%;background:linear-gradient(90deg,#2dd4bf,#10b981);border-radius:999px;"></div>
+        </div>
+        <div style="font-size:11px;color:#64748b;margin-top:10px;font-family:sans-serif;">सिस्टम लोड हो रहा है...</div>
+      </div>
+    </div>
     <script>
       window.addEventListener('error', function(e) {
         console.error('Window Error:', e);

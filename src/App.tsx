@@ -547,17 +547,20 @@ export default function App() {
   const isCorrupted = integrityReport && (integrityReport.isOk === false || integrityReport.is_ok === false);
   if (isCorrupted && integrityReport) {
     return (
-      <DbCorruptionScreen
-        integrityReport={integrityReport}
-        isRestoringFromCorruption={isRestoringFromCorruption}
-        corruptionFeedback={corruptionFeedback}
-        onRestoreBackup={handleRestoreFromPath}
-        onRestore={() => {
-          const suggested = integrityReport.suggestedBackup ?? integrityReport.suggested_backup;
-          const backupPath = suggested?.filePath ?? suggested?.path ?? "";
-          return handleRestoreFromPath(backupPath);
-        }}
-      />
+      <>
+        {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
+        <DbCorruptionScreen
+          integrityReport={integrityReport}
+          isRestoringFromCorruption={isRestoringFromCorruption}
+          corruptionFeedback={corruptionFeedback}
+          onRestoreBackup={handleRestoreFromPath}
+          onRestore={() => {
+            const suggested = integrityReport.suggestedBackup ?? integrityReport.suggested_backup;
+            const backupPath = suggested?.filePath ?? suggested?.path ?? "";
+            return handleRestoreFromPath(backupPath);
+          }}
+        />
+      </>
     );
   }
 
