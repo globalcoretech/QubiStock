@@ -215,6 +215,24 @@ describe("Auth & Role Security Frontend Tests", () => {
       expect(container.textContent).toContain("RK-NEW-KEY-8888-9999");
       expect(localStorage.getItem("krishi_last_username")).toBe("uday singh");
     });
+
+    it("renders exit app button in login panel and triggers onExitApp callback", async () => {
+      const onExitApp = vi.fn();
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(<LoginModal onLoginSuccess={vi.fn()} onExitApp={onExitApp} />);
+      });
+
+      const exitBtn = container.querySelector('[data-testid="login-exit-app-btn"]') as HTMLButtonElement;
+      expect(exitBtn).toBeTruthy();
+      expect(exitBtn.textContent).toContain("ऐप बंद करें (Exit)");
+
+      await act(async () => {
+        exitBtn.click();
+      });
+
+      expect(onExitApp).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("LockScreenOverlay", () => {

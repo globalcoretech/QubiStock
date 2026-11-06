@@ -287,6 +287,12 @@ export default function App() {
   };
 
   const handleRequestExit = () => {
+    // If user is not logged in yet (or initial setup is open), there is no active session or unsaved documents.
+    // Exit application immediately and safely!
+    if (!currentUser) {
+      handleConfirmExit();
+      return;
+    }
     const { isDirty: currentDirty, isBusy: currentBusy } = appStateRef.current;
     if (currentBusy) {
       setExitModalState("busy");
@@ -871,7 +877,7 @@ export default function App() {
 
       {/* Graceful Exit Modals */}
       {exitModalState === "busy" && (
-        <div data-testid="exit-busy-modal" className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+        <div data-testid="exit-busy-modal" className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center gap-3 text-amber-600">
               <AlertCircle size={24} />
@@ -897,7 +903,7 @@ export default function App() {
       )}
 
       {exitModalState === "dirty" && (
-        <div data-testid="exit-dirty-modal" className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+        <div data-testid="exit-dirty-modal" className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-rose-200 space-y-4">
             <div className="flex items-center gap-3 text-rose-600">
               <AlertCircle size={24} />
@@ -934,7 +940,7 @@ export default function App() {
       )}
 
       {exitModalState === "clean" && (
-        <div data-testid="exit-clean-modal" className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-in fade-in">
+        <div data-testid="exit-clean-modal" className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center gap-3 text-slate-700">
               <LogOut size={24} className="text-slate-600" />
@@ -968,7 +974,7 @@ export default function App() {
       )}
 
       {exitModalState === "exiting" && (
-        <div data-testid="exit-overlay" className="fixed inset-0 bg-forest-dark/95 z-50 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div data-testid="exit-overlay" className="fixed inset-0 bg-forest-dark/95 z-[100] flex flex-col items-center justify-center p-6 text-white text-center">
           <div className="w-12 h-12 border-4 border-marigold border-t-transparent rounded-full animate-spin mb-4" />
           <h2 className="text-xl font-bold font-serif mb-2">सुरक्षित रूप से बंद हो रहा है...</h2>
           <p className="text-sm text-surface/80">WAL चेकपॉइंट और बैकअप लिया जा रहा है। कृपया प्रतीक्षा करें।</p>
@@ -992,6 +998,7 @@ export default function App() {
             setCurrentUser(user);
             setIsLocked(false);
           }}
+          onExitApp={handleConfirmExit}
         />
       )}
 

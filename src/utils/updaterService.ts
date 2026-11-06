@@ -122,3 +122,4 @@ export async function installUpdate(
   // 3. Relaunch the application
   await relaunch();
 }
+
