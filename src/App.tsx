@@ -26,6 +26,8 @@ import { PrintInvoiceModal } from "./components/PrintInvoiceModal";
 import { BillPreviewPage } from "./components/bills/BillPreviewPage";
 import { FirstTimeSetupView } from "./views/FirstTimeSetupView";
 import { SplashScreen } from "./components/SplashScreen";
+import { UpdateNotificationModal } from "./components/UpdateNotificationModal";
+import { checkForUpdates } from "./utils/updaterService";
 import { migrateLocalStorageSettingsToSqlite } from "./utils/settingsMigration";
 
 export const toSettingsPayload = (s: any) => {
@@ -240,6 +242,13 @@ export default function App() {
     }
     return true;
   });
+
+  const [availableUpdate, setAvailableUpdate] = useState<{
+    version: string;
+    currentVersion?: string;
+    body?: string;
+    date?: string;
+  } | null>(null);
 
   const handleLanguageChange = (newLang: Language) => {
     setLang(newLang);
@@ -505,6 +514,27 @@ export default function App() {
     return () => {
       if (unlistenExit) unlistenExit();
     };
+  }, []);
+
+  // Background check for updates from GitHub (runs 5 seconds after startup, bypassed in tests)
+  useEffect(() => {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "test") return;
+    const updateTimer = setTimeout(async () => {
+      try {
+        const res = await checkForUpdates();
+        if (res && res.available && res.version) {
+          setAvailableUpdate({
+            version: res.version,
+            currentVersion: res.currentVersion || "v0.1.0",
+            body: res.body,
+            date: res.date,
+          });
+        }
+      } catch (err) {
+        console.warn("Background update check error:", err);
+      }
+    }, 5000);
+    return () => clearTimeout(updateTimer);
   }, []);
 
   // 4. Startup check: PRAGMA quick_check at launch. If fails, show recovery screen in Hindi + English
@@ -972,6 +1002,17 @@ export default function App() {
           hasUnsavedWork={isDirty}
           onUnlocked={handleUnlock}
           onSwitchUser={handleSwitchUser}
+        />
+      )}
+      {/* Update Notification Modal */}
+      {availableUpdate && (
+        <UpdateNotificationModal
+          version={availableUpdate.version}
+          currentVersion={availableUpdate.currentVersion}
+          notes={availableUpdate.body}
+          date={availableUpdate.date}
+          onClose={() => setAvailableUpdate(null)}
+          lang={lang}
         />
       )}
     </div>

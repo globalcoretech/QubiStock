@@ -25,3 +25,5 @@ rfd = { version = "0.16", default-features = false }
 tauri-plugin-single-instance = "2.5.5"
 argon2 = "0.5"
 rand_core = { version = "0.6", features = ["std"] }
+tauri-plugin-updater = "2.0.0"
+tauri-plugin-process = "2.0.0"

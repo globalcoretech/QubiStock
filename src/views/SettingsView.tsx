@@ -11,13 +11,14 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
-import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert } from "../components/icons";
+import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert, RefreshCw, Sparkles } from "../components/icons";
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";
 import { localTodayIso } from "../utils/dateUtils";
 import { PrinterSetupView } from "./PrinterSetupView";
 import { UserManagementView } from "../components/UserManagementView";
+import { checkForUpdates } from "../utils/updaterService";
 
 interface SettingsViewProps {
   settings: AppSettings;
@@ -52,6 +53,40 @@ export function SettingsView({
   const [previewFormat, setPreviewFormat] = useState<BillFormat>(
     formData.defaultBillFormat || "A4"
   );
+
+  const [updateCheckState, setUpdateCheckState] = useState<{
+    checking: boolean;
+    result: string | null;
+    hasUpdate: boolean;
+    version?: string;
+  }>({ checking: false, result: null, hasUpdate: false });
+
+  const handleManualCheckUpdates = async () => {
+    setUpdateCheckState({ checking: true, result: null, hasUpdate: false });
+    try {
+      const res = await checkForUpdates();
+      if (res && res.available && res.version) {
+        setUpdateCheckState({
+          checking: false,
+          result: lang === "hi" ? `नया अपडेट उपलब्ध है: ${res.version}` : `New update available: ${res.version}`,
+          hasUpdate: true,
+          version: res.version,
+        });
+      } else {
+        setUpdateCheckState({
+          checking: false,
+          result: lang === "hi" ? "आप नवीनतम संस्करण उपयोग कर रहे हैं (v0.1.0) ✓" : "You are using the latest version (v0.1.0) ✓",
+          hasUpdate: false,
+        });
+      }
+    } catch (e: any) {
+      setUpdateCheckState({
+        checking: false,
+        result: typeof e === "string" ? e : e?.message || (lang === "hi" ? "अपडेट जाँच विफल" : "Update check failed"),
+        hasUpdate: false,
+      });
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -875,6 +910,49 @@ export function SettingsView({
                       ? "अतिरिक्त सुरक्षा के लिए पेनड्राइव या बाहरी ड्राइव का पाथ। ड्राइव न मिलने पर चेतावनी दिखेगी, बैकअप नहीं रुकेगा।"
                       : "Optional secondary location (Pendrive / 2nd drive). If drive is missing, a warning will be shown without interrupting backup."}
                   </p>
+                </div>
+              </div>
+
+              {/* Software Updates Section (सॉफ़्टवेयर अपडेट) */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={16} className="text-teal-700" />
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+                      {lang === "hi" ? "सॉफ़्टवेयर अपडेट (QubiStock Updates)" : "Software Updates"}
+                    </h4>
+                  </div>
+                  <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-teal-100 text-teal-800 border border-teal-200">
+                    v0.1.0
+                  </span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-800">
+                      {lang === "hi" ? "GitHub से स्वचालित अपडेट प्राप्त करें" : "Automatic updates from GitHub"}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {updateCheckState.result ||
+                        (lang === "hi"
+                          ? "नया संस्करण आते ही सूचना मिलेगी। अपडेट के दौरान डेटाबेस 100% सुरक्षित रहता है।"
+                          : "You will be notified when a new version is available. Database is 100% safe.")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="check-updates-btn"
+                    disabled={updateCheckState.checking}
+                    onClick={handleManualCheckUpdates}
+                    className="py-1.5 px-3.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw size={13} className={updateCheckState.checking ? "animate-spin text-teal-600" : "text-slate-600"} />
+                    <span>
+                      {updateCheckState.checking
+                        ? (lang === "hi" ? "जाँच हो रही है..." : "Checking...")
+                        : (lang === "hi" ? "अपडेट की जाँच करें" : "Check for Updates")}
+                    </span>
+                  </button>
                 </div>
               </div>
 
