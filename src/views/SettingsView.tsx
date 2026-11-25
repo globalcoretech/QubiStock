@@ -72,6 +72,12 @@ export function SettingsView({
           hasUpdate: true,
           version: res.version,
         });
+      } else if (res && res.error) {
+        setUpdateCheckState({
+          checking: false,
+          result: typeof res.error === "string" ? res.error : (lang === "hi" ? "अपडेट जाँच विफल" : "Update check failed"),
+          hasUpdate: false,
+        });
       } else {
         setUpdateCheckState({
           checking: false,
