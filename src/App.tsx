@@ -26,7 +26,8 @@ import { PrintInvoiceModal } from "./components/PrintInvoiceModal";
 import { BillPreviewPage } from "./components/bills/BillPreviewPage";
 import { FirstTimeSetupView } from "./views/FirstTimeSetupView";
 import { SplashScreen } from "./components/SplashScreen";
-import { UpdateNotificationModal } from "./components/UpdateNotificationModal";
+import { UpdateNotificationBanner } from "./components/UpdateNotificationBanner";
+import { isUpdateSnoozed } from "./utils/updateScheduler";
 import { checkForUpdates } from "./utils/updaterService";
 import { migrateLocalStorageSettingsToSqlite } from "./utils/settingsMigration";
 
@@ -525,10 +526,15 @@ export default function App() {
   // Background check for updates from GitHub (runs 5 seconds after startup, bypassed in tests)
   useEffect(() => {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "test") return;
-    const updateTimer = setTimeout(async () => {
+
+    let isMounted = true;
+    const runCheck = async () => {
       try {
+        if (isUpdateSnoozed()) {
+          return;
+        }
         const res = await checkForUpdates();
-        if (res && res.available && res.version) {
+        if (isMounted && res && res.available && res.version) {
           setAvailableUpdate({
             version: res.version,
             currentVersion: res.currentVersion ? `v${res.currentVersion}` : "",
@@ -539,9 +545,23 @@ export default function App() {
       } catch (err) {
         console.warn("Background update check error:", err);
       }
-    }, 5000);
-    return () => clearTimeout(updateTimer);
-  }, []);
+    };
+
+    const updateTimer = setTimeout(runCheck, 5000);
+
+    // Periodically re-check snooze expiration every 1 minute
+    const intervalTimer = setInterval(() => {
+      if (!availableUpdate) {
+        runCheck();
+      }
+    }, 60000);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(updateTimer);
+      clearInterval(intervalTimer);
+    };
+  }, [availableUpdate]);
 
   // 4. Startup check: PRAGMA quick_check at launch. If fails, show recovery screen in Hindi + English
   const isCorrupted = integrityReport && (integrityReport.isOk === false || integrityReport.is_ok === false);
@@ -1014,14 +1034,15 @@ export default function App() {
           onSwitchUser={handleSwitchUser}
         />
       )}
-      {/* Update Notification Modal */}
+      {/* Top Floating Update Notification Banner */}
       {availableUpdate && (
-        <UpdateNotificationModal
+        <UpdateNotificationBanner
           version={availableUpdate.version}
           currentVersion={availableUpdate.currentVersion}
           notes={availableUpdate.body}
           date={availableUpdate.date}
           onClose={() => setAvailableUpdate(null)}
+          onSnoozed={() => setAvailableUpdate(null)}
           lang={lang}
         />
       )}
