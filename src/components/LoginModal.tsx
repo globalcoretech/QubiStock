@@ -16,6 +16,7 @@ import {
 } from "./icons";
 import { SessionUser, UserInfo } from "../types";
 import qubiLogo from "../assets/qubistock_logo.png";
+import { useAppVersion } from "../utils/appVersion";
 
 interface LoginModalProps {
   onLoginSuccess: (user: SessionUser) => void;
@@ -23,6 +24,7 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, onExitApp }) => {
+  const appVersion = useAppVersion();
   const [users, setUsers] = useState<UserInfo[]>([]);
 
   // Saved / remembered usernames in localStorage
@@ -295,7 +297,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, onExitAp
           <div className="relative z-10 pt-6 mt-6 border-t border-white/10 flex items-center justify-between text-[11px] text-emerald-300/80">
             <span>ऑफ़लाइन सुरक्षित</span>
             <span className="font-mono bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-500/20">
-              v0.1.0
+              {appVersion}
             </span>
           </div>
         </div>

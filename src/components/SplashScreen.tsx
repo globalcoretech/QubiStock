@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import qubiLogo from "../assets/qubistock_logo.png";
+import { useAppVersion } from "../utils/appVersion";
 
 interface SplashScreenProps {
   onFinish?: () => void;
@@ -10,6 +11,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   onFinish,
   minDurationMs = 2000,
 }) => {
+  const appVersion = useAppVersion();
   const [fading, setFading] = useState(false);
   const [progress, setProgress] = useState(15);
 
@@ -78,7 +80,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
       {/* Footer Info */}
       <div className="flex items-center justify-between w-full max-w-md text-[11px] text-slate-400 px-2 font-mono">
-        <span>QubiStock v0.1.0</span>
+        <span>QubiStock {appVersion}</span>
         <span className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
           सुरक्षित ऑफलाइन डेटाबेस

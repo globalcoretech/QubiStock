@@ -11,7 +11,7 @@ import {
 } from "../types";
 import { Translations, Language } from "../i18n";
 import { FeedbackBanner } from "../components/FeedbackBanner";
-import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert, RefreshCw, Sparkles, Phone, Mail } from "../components/icons";
+import { Settings, Check, AlertCircle, Printer, Image, Trash2, Eye, Database, Users as UsersIcon, ShieldAlert, RefreshCw, Sparkles, Phone, Mail, Download } from "../components/icons";
 import { buildBillData } from "../utils/billBuilder";
 import { BillViewer } from "../components/bills/BillViewer";
 import { formatBillNumber } from "../utils/billNumber";
@@ -19,6 +19,8 @@ import { localTodayIso } from "../utils/dateUtils";
 import { PrinterSetupView } from "./PrinterSetupView";
 import { UserManagementView } from "../components/UserManagementView";
 import { checkForUpdates } from "../utils/updaterService";
+import { UpdateNotificationModal } from "../components/UpdateNotificationModal";
+import { useAppVersion } from "../utils/appVersion";
 
 interface SettingsViewProps {
   settings: AppSettings;
@@ -54,6 +56,15 @@ export function SettingsView({
     formData.defaultBillFormat || "A4"
   );
 
+  const appVersion = useAppVersion();
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateDetails, setUpdateDetails] = useState<{
+    version: string;
+    currentVersion?: string;
+    notes?: string;
+    date?: string;
+  } | null>(null);
+
   const [updateCheckState, setUpdateCheckState] = useState<{
     checking: boolean;
     result: string | null;
@@ -72,6 +83,13 @@ export function SettingsView({
           hasUpdate: true,
           version: res.version,
         });
+        setUpdateDetails({
+          version: res.version,
+          currentVersion: res.currentVersion || appVersion,
+          notes: res.body,
+          date: res.date,
+        });
+        setShowUpdateModal(true);
       } else if (res && res.error) {
         setUpdateCheckState({
           checking: false,
@@ -81,7 +99,7 @@ export function SettingsView({
       } else {
         setUpdateCheckState({
           checking: false,
-          result: lang === "hi" ? "आप नवीनतम संस्करण उपयोग कर रहे हैं (v0.1.0) ✓" : "You are using the latest version (v0.1.0) ✓",
+          result: lang === "hi" ? `आप नवीनतम संस्करण उपयोग कर रहे हैं (${appVersion}) ✓` : `You are using the latest version (${appVersion}) ✓`,
           hasUpdate: false,
         });
       }
@@ -978,7 +996,7 @@ export function SettingsView({
                     </h4>
                   </div>
                   <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-teal-100 text-teal-800 border border-teal-200">
-                    v0.1.0
+                    {appVersion}
                   </span>
                 </div>
 
@@ -994,20 +1012,33 @@ export function SettingsView({
                           : "You will be notified when a new version is available. Database is 100% safe.")}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    data-testid="check-updates-btn"
-                    disabled={updateCheckState.checking}
-                    onClick={handleManualCheckUpdates}
-                    className="py-1.5 px-3.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition-colors shrink-0 cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw size={13} className={updateCheckState.checking ? "animate-spin text-teal-600" : "text-slate-600"} />
-                    <span>
-                      {updateCheckState.checking
-                        ? (lang === "hi" ? "जाँच हो रही है..." : "Checking...")
-                        : (lang === "hi" ? "अपडेट की जाँच करें" : "Check for Updates")}
-                    </span>
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {updateCheckState.hasUpdate && (
+                      <button
+                        type="button"
+                        data-testid="update-now-settings-btn"
+                        onClick={() => setShowUpdateModal(true)}
+                        className="py-1.5 px-3.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition-transform hover:scale-102 active:scale-98 cursor-pointer"
+                      >
+                        <Download size={13} />
+                        <span>{lang === "hi" ? "अभी अपडेट करें" : "Update Now"}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      data-testid="check-updates-btn"
+                      disabled={updateCheckState.checking}
+                      onClick={handleManualCheckUpdates}
+                      className="py-1.5 px-3.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} className={updateCheckState.checking ? "animate-spin text-teal-600" : "text-slate-600"} />
+                      <span>
+                        {updateCheckState.checking
+                          ? (lang === "hi" ? "जाँच हो रही है..." : "Checking...")
+                          : (lang === "hi" ? "अपडेट की जाँच करें" : "Check for Updates")}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1036,6 +1067,17 @@ export function SettingsView({
           </div>
         )}
       </div>
+
+      {showUpdateModal && updateDetails && (
+        <UpdateNotificationModal
+          version={updateDetails.version}
+          currentVersion={updateDetails.currentVersion}
+          notes={updateDetails.notes}
+          date={updateDetails.date}
+          onClose={() => setShowUpdateModal(false)}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }
