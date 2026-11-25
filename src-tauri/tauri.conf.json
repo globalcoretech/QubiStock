@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1NjMzNUVENjU5ODVBQzQKUldURVdwaGw3VFZqUmZYUHJFQ0dxMnFia3VpMHNpYktBMDJlTkp4WUY4bGRjQWdlM3VhSkpaKzgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFN0VBREIxNjI1NjgyQzYKUldUR2dsWmlzYTErM3NhNTA0VTQxM2V0YlpvTlVvekNQaSttVGlDYWNwTlRBdkNKN3NlVldNRmUK",
       "endpoints": [
         "https://github.com/globalcoretech/QubiStock/releases/latest/download/latest.json"
       ]
