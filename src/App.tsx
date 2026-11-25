@@ -531,7 +531,7 @@ export default function App() {
         if (res && res.available && res.version) {
           setAvailableUpdate({
             version: res.version,
-            currentVersion: res.currentVersion || "v0.1.0",
+            currentVersion: res.currentVersion ? `v${res.currentVersion}` : "",
             body: res.body,
             date: res.date,
           });

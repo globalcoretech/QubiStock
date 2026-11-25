@@ -26,6 +26,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from "./icons";
+import { useAppVersion } from "../utils/appVersion";
 
 interface SidebarProps {
   currentView: View;
@@ -65,6 +66,7 @@ export function Sidebar({
   isCollapsed: propIsCollapsed,
   onToggleCollapse,
 }: SidebarProps) {
+  const appVersion = useAppVersion();
   const [internalCollapsed, setInternalCollapsed] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("krishi_sidebar_collapsed") === "true";
@@ -629,7 +631,7 @@ export function Sidebar({
                 ? "म.प्र. (23)"
                 : "MP (23)"
               : `State: ${settings.stateCode}`}{" "}
-            • v0.3.0
+            • {appVersion}
           </div>
         )}
       </div>

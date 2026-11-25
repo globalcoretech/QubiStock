@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 
-let cachedVersion = "v0.1.2";
+declare const __APP_VERSION__: string | undefined;
+
+const initialVersion = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "v0.1.3";
+let cachedVersion = initialVersion;
 
 export function useAppVersion(): string {
   const [version, setVersion] = useState<string>(cachedVersion);
