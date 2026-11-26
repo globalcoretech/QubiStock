@@ -6,6 +6,7 @@ import { Translations, Language } from "../i18n";
 import { Printer, X, AlertCircle, FileText, Check } from "./icons";
 import { calculateBill, buildBillDataWithQr } from "../utils/billBuilder";
 import { BillViewer } from "./bills/BillViewer";
+import { WhatsAppShareModal } from "./WhatsAppShareModal";
 import {
   printInvoiceBill,
   executeDialogPrint,
@@ -46,6 +47,7 @@ export function PrintInvoiceModal({
     settings.printerPaperSize || settings.defaultBillFormat || "A4"
   );
   const [isDuplicate, setIsDuplicate] = useState(false);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
 
   // Sync initial tax mode or default when opening
   useEffect(() => {
@@ -305,6 +307,21 @@ export function PrintInvoiceModal({
               <span>PDF</span>
             </button>
 
+            {/* WhatsApp Share Button */}
+            <button
+              type="button"
+              data-testid="print-whatsapp-btn"
+              onClick={() => setShowWhatsAppModal(true)}
+              disabled={loading || !billData || printing}
+              className="text-xs py-1.5 px-3 flex items-center gap-1.5 rounded-lg font-bold shadow-sm bg-emerald-600 hover:bg-emerald-700 text-white transition-all cursor-pointer ring-2 ring-emerald-400/40 disabled:opacity-50"
+              title="ग्राहक को WhatsApp पर बिल PDF भेजें"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2ZM12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67ZM8.53 7.33C8.37 7.33 8.1 7.39 7.87 7.64C7.65 7.89 7 8.5 7 9.73C7 10.97 7.9 12.16 8.03 12.33C8.15 12.49 9.8 15.06 12.33 16.15C14.44 17.06 14.86 16.88 15.32 16.84C15.78 16.8 16.81 16.23 17.02 15.63C17.23 15.03 17.23 14.52 17.17 14.41C17.11 14.31 16.95 14.25 16.71 14.13C16.47 14.01 15.28 13.42 15.05 13.34C14.83 13.26 14.67 13.22 14.51 13.46C14.34 13.71 13.87 14.26 13.73 14.42C13.59 14.59 13.44 14.61 13.2 14.49C12.96 14.37 11.98 14.05 10.82 13.01C9.91 12.21 9.3 11.22 9.14 10.94C8.98 10.66 9.12 10.51 9.24 10.39C9.35 10.28 9.49 10.1 9.61 9.96C9.73 9.82 9.77 9.72 9.85 9.56C9.93 9.39 9.89 9.25 9.83 9.13C9.77 9.01 9.29 7.84 9.09 7.36C8.9 6.89 8.7 6.95 8.53 7.33Z" />
+              </svg>
+              <span>WhatsApp</span>
+            </button>
+
             {/* Main Print Button */}
             <button
               type="button"
@@ -513,6 +530,25 @@ export function PrintInvoiceModal({
             </div>
           )}
         </div>
+
+        {/* WhatsApp Share Dialog */}
+        {showWhatsAppModal && billData && (
+          <WhatsAppShareModal
+            isOpen={showWhatsAppModal}
+            onClose={() => setShowWhatsAppModal(false)}
+            invoiceNo={invoiceNo}
+            customerName={billData.party?.name}
+            customerPhone={billData.party?.phone || undefined}
+            date={billData.invoice?.date || new Date().toISOString().split("T")[0]}
+            totalAmount={billData.totals?.grandTotal || 0}
+            htmlContent={(() => {
+              const billEl = document.querySelector(".bill-container");
+              return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bill ${invoiceNo}</title><style>@page{size:${selectedFormat};margin:5mm;}body{font-family:Arial,sans-serif;margin:0;padding:10px;}</style></head><body>${billEl ? billEl.outerHTML : ""}</body></html>`;
+            })()}
+            shopName={settings.shopName || "कृषि केंद्र"}
+            lang={lang}
+          />
+        )}
       </div>
     </div>,
     document.body

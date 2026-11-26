@@ -12,6 +12,7 @@ mod invoice;
 mod commands;
 mod printer;
 pub mod backup;
+pub mod whatsapp;
 
 #[cfg(test)]
 mod tests;
@@ -215,7 +216,10 @@ fn main() {
             commands::reset_user_password_cmd,
             commands::change_own_password_cmd,
             commands::get_login_logs_cmd,
-            commands::acknowledge_exit_request_cmd
+            commands::acknowledge_exit_request_cmd,
+            commands::export_invoice_pdf_cmd,
+            commands::open_file_in_explorer_cmd,
+            commands::open_external_url_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6217,6 +6217,24 @@ pub fn get_login_logs_cmd(app: AppHandle, limit: Option<i64>) -> Result<Vec<crat
     crate::auth::get_login_logs_inner(&conn, limit)
 }
 
+#[command]
+pub fn export_invoice_pdf_cmd(
+    req: crate::whatsapp::ExportPdfRequest,
+) -> Result<crate::whatsapp::ExportPdfResponse, String> {
+    crate::whatsapp::export_invoice_pdf_impl(req)
+}
+
+#[command]
+pub fn open_file_in_explorer_cmd(path: String) -> Result<(), String> {
+    crate::whatsapp::open_file_in_explorer_impl(&path)
+}
+
+#[command]
+pub fn open_external_url_cmd(url: String) -> Result<(), String> {
+    crate::whatsapp::open_external_url_impl(&url)
+}
+
+
 
 
 

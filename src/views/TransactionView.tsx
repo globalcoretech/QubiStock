@@ -11,6 +11,7 @@ import { FeedbackBanner } from "../components/FeedbackBanner";
 import { AddPartyModal } from "../components/AddPartyModal";
 import { AddItemModal } from "../components/AddItemModal";
 import { Pagination } from "../components/Pagination";
+import { PurchasePdfImportModal, ExtractedPurchaseData } from "../components/PurchasePdfImportModal";
 import {
   DuotoneReceipt,
   DuotoneTruck,
@@ -96,6 +97,54 @@ export function TransactionView({
   const isBillBlocked =
     isSale &&
     (!settings?.shopName?.trim() || (settings?.isGstRegistered && !settings?.gstin?.trim()));
+
+  const [showPurchaseImport, setShowPurchaseImport] = useState(false);
+
+  const handleApplyExtractedData = (data: ExtractedPurchaseData) => {
+    if (data.invoiceNo && type === "purchase") {
+      setSupplierInvoiceNo(data.invoiceNo);
+    }
+    if (data.supplierName) {
+      const foundParty = parties.find(
+        (p) =>
+          p.name.toLowerCase().includes(data.supplierName!.toLowerCase()) ||
+          data.supplierName!.toLowerCase().includes(p.name.toLowerCase())
+      );
+      if (foundParty) {
+        setPartyId(foundParty.id.toString());
+      }
+    }
+    if (data.invoiceDate) {
+      setDate(data.invoiceDate);
+      setSupplierInvoiceDate(data.invoiceDate);
+    }
+    if (data.items && data.items.length > 0) {
+      const newLines = data.items.map((it) => {
+        const matchedItem = items.find(
+          (inv) =>
+            inv.name.toLowerCase().includes(it.name.toLowerCase()) ||
+            it.name.toLowerCase().includes(inv.name.toLowerCase())
+        );
+        return {
+          itemId: matchedItem ? matchedItem.id.toString() : "",
+          qty: it.qty.toString(),
+          unit: matchedItem?.base_unit || it.unit || "BAG",
+          rate: it.rate.toString(),
+          gst: it.gstPercent !== undefined ? it.gstPercent : (matchedItem?.gst_rate || 5),
+          availableStock: 0,
+          lastRates: null,
+        };
+      });
+      setLines(newLines);
+      setFeedback({
+        message:
+          lang === "hi"
+            ? `WhatsApp बिल से ${data.items.length} आइटम लोड किए गए!`
+            : `${data.items.length} items loaded from WhatsApp bill!`,
+        isError: false,
+      });
+    }
+  };
 
   const [partyId, setPartyId] = useState("");
   const [godownId, setGodownId] = useState("1");
@@ -837,6 +886,18 @@ export function TransactionView({
             value={date}
             onChange={(e) => setDate(e.target.value)}
           />
+
+          {type === "purchase" && (
+            <button
+              type="button"
+              data-testid="open-purchase-import-btn"
+              onClick={() => setShowPurchaseImport(true)}
+              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+              title="WhatsApp सप्लायर PDF बिल आयात करें"
+            >
+              <span>📥 WhatsApp बिल आयात</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -978,6 +1039,18 @@ export function TransactionView({
             >
               <Printer size={14} />
               <span>बिना टैक्स प्रिंट</span>
+            </button>
+            <button
+              type="button"
+              data-testid="post-save-whatsapp-btn"
+              onClick={() => onPrintInvoice(lastSavedInvoiceNo, "with_tax")}
+              className="py-1 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+              title="ग्राहक को WhatsApp पर बिल भेजें"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2ZM12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67ZM8.53 7.33C8.37 7.33 8.1 7.39 7.87 7.64C7.65 7.89 7 8.5 7 9.73C7 10.97 7.9 12.16 8.03 12.33C8.15 12.49 9.8 15.06 12.33 16.15C14.44 17.06 14.86 16.88 15.32 16.84C15.78 16.8 16.81 16.23 17.02 15.63C17.23 15.03 17.23 14.52 17.17 14.41C17.11 14.31 16.95 14.25 16.71 14.13C16.47 14.01 15.28 13.42 15.05 13.34C14.83 13.26 14.67 13.22 14.51 13.46C14.34 13.71 13.87 14.26 13.73 14.42C13.59 14.59 13.44 14.61 13.2 14.49C12.96 14.37 11.98 14.05 10.82 13.01C9.91 12.21 9.3 11.22 9.14 10.94C8.98 10.66 9.12 10.51 9.24 10.39C9.35 10.28 9.49 10.1 9.61 9.96C9.73 9.82 9.77 9.72 9.85 9.56C9.93 9.39 9.89 9.25 9.83 9.13C9.77 9.01 9.29 7.84 9.09 7.36C8.9 6.89 8.7 6.95 8.53 7.33Z" />
+              </svg>
+              <span>WhatsApp पर भेजें</span>
             </button>
           </div>
         </div>
@@ -1677,6 +1750,16 @@ export function TransactionView({
         t={t}
         lang={lang}
       />
+
+      {/* WhatsApp Purchase Bill Import Modal */}
+      {showPurchaseImport && (
+        <PurchasePdfImportModal
+          isOpen={showPurchaseImport}
+          onClose={() => setShowPurchaseImport(false)}
+          onApplyToForm={handleApplyExtractedData}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }
