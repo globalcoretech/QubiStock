@@ -401,6 +401,26 @@ export function TransactionView({
 
   useEffect(() => {
     loadAllData();
+    if (refreshTrigger > 0 && godownId) {
+      const gdId = parseInt(godownId, 10);
+      if (!isNaN(gdId)) {
+        lines.forEach((line, idx) => {
+          const itId = parseInt(line.itemId, 10);
+          if (!isNaN(itId)) {
+            invoke<number>("get_available_stock_cmd", { itemId: itId, godownId: gdId })
+              .then((stockMilli) => {
+                setLines((prev) => {
+                  if (!prev[idx] || prev[idx].itemId !== line.itemId) return prev;
+                  const next = [...prev];
+                  next[idx] = { ...next[idx], availableStock: stockMilli / 1000 };
+                  return next;
+                });
+              })
+              .catch(() => {});
+          }
+        });
+      }
+    }
   }, [type, refreshTrigger]);
 
 

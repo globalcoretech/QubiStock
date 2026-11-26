@@ -27,6 +27,7 @@ import { BillPreviewPage } from "./components/bills/BillPreviewPage";
 import { FirstTimeSetupView } from "./views/FirstTimeSetupView";
 import { SplashScreen } from "./components/SplashScreen";
 import { UpdateNotificationBanner } from "./components/UpdateNotificationBanner";
+import { QuickGoToModal } from "./components/QuickGoToModal";
 import { isUpdateSnoozed } from "./utils/updateScheduler";
 import { checkForUpdates } from "./utils/updaterService";
 import { migrateLocalStorageSettingsToSqlite } from "./utils/settingsMigration";
@@ -282,6 +283,55 @@ export default function App() {
   const triggerGlobalRefresh = () => {
     setRefreshTrigger((prev) => prev + 1);
   };
+
+  // Quick Go To (Alt+G) & Safe Return Stack (keeps Sale / Purchase form alive across report jumps)
+  const [isQuickGoToOpen, setIsQuickGoToOpen] = useState(false);
+  const [returnViewStack, setReturnViewStack] = useState<View[]>([]);
+  const [keepSaleMounted, setKeepSaleMounted] = useState(false);
+  const [keepPurchaseMounted, setKeepPurchaseMounted] = useState(false);
+
+  useEffect(() => {
+    if (currentView === "Sale") setKeepSaleMounted(true);
+    if (currentView === "Purchase") setKeepPurchaseMounted(true);
+  }, [currentView]);
+
+  const handleQuickNavigate = (targetView: View) => {
+    if (targetView === currentView) return;
+    if (currentView === "Sale") setKeepSaleMounted(true);
+    if (currentView === "Purchase") setKeepPurchaseMounted(true);
+    setReturnViewStack((prev) => {
+      if (prev[prev.length - 1] === currentView) return prev;
+      return [...prev.slice(-4), currentView];
+    });
+    setCurrentView(targetView);
+  };
+
+  const handleReturnBack = () => {
+    if (returnViewStack.length === 0) return;
+    const prevView = returnViewStack[returnViewStack.length - 1];
+    setReturnViewStack((prev) => prev.slice(0, -1));
+    setCurrentView(prevView);
+    triggerGlobalRefresh();
+  };
+
+  useEffect(() => {
+    const onGlobalKey = (e: KeyboardEvent) => {
+      if (!currentUser || isLocked) return;
+      if ((e.altKey && (e.key === "g" || e.key === "G")) || ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K"))) {
+        e.preventDefault();
+        setIsQuickGoToOpen((prev) => !prev);
+      } else if (e.key === "Escape" && !isQuickGoToOpen && returnViewStack.length > 0) {
+        // Only trigger return if no modal overlay is open
+        const openModal = document.querySelector(".fixed.inset-0");
+        if (!openModal) {
+          e.preventDefault();
+          handleReturnBack();
+        }
+      }
+    };
+    window.addEventListener("keydown", onGlobalKey);
+    return () => window.removeEventListener("keydown", onGlobalKey);
+  }, [currentUser, isLocked, isQuickGoToOpen, returnViewStack]);
 
   const updateSettings = async (newSettings: AppSettings) => {
     try {
@@ -682,6 +732,51 @@ export default function App() {
           </div>
         )}
 
+        {/* Top Quick Go To & Safe Return Bar */}
+        <div
+          data-testid="quick-goto-topbar"
+          className="bg-surface/90 border-b border-border px-3 sm:px-4 py-1.5 flex items-center justify-between gap-2 flex-shrink-0"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {returnViewStack.length > 0 ? (
+              <div
+                data-testid="quick-return-banner"
+                className="flex items-center gap-2 bg-amber-50 border border-amber-300 rounded-xl px-2.5 py-1 text-xs text-amber-950 font-semibold shadow-2xs"
+              >
+                <span className="truncate">
+                  📌 {lang === "hi" ? "अधूरा काम सुरक्षित:" : "Paused:"}{" "}
+                  <strong className="font-bold">{returnViewStack[returnViewStack.length - 1]}</strong>
+                </span>
+                <button
+                  type="button"
+                  data-testid="quick-return-back-btn"
+                  onClick={handleReturnBack}
+                  className="px-2.5 py-0.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer flex-shrink-0"
+                >
+                  <span>↩ {lang === "hi" ? `वापस ${returnViewStack[returnViewStack.length - 1]} पर लौटें (Esc)` : `Back to ${returnViewStack[returnViewStack.length - 1]} (Esc)`}</span>
+                </button>
+              </div>
+            ) : (
+              <span className="text-[11px] text-muted font-medium hidden sm:inline truncate">
+                {lang === "hi"
+                  ? "किसी भी स्क्रीन से तुरंत रिपोर्ट या स्टॉक सुधार खोलने के लिए Alt + G दबाएँ"
+                  : "Press Alt + G anytime to jump to any Report or Editor without losing your bill"}
+              </span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            data-testid="open-quick-goto-btn"
+            onClick={() => setIsQuickGoToOpen(true)}
+            className="px-3 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-all hover:scale-[1.02] cursor-pointer flex-shrink-0"
+            title="Alt + G / Ctrl + K"
+          >
+            <span>⚡</span>
+            <span>{lang === "hi" ? "फटाफट रिपोर्ट / एडिटर (Alt+G)" : "Quick Go To (Alt+G)"}</span>
+          </button>
+        </div>
+
         <div className="flex-1 overflow-auto min-w-0 p-3 sm:p-3.5 lg:p-4">
           {(() => {
             return (
@@ -711,36 +806,40 @@ export default function App() {
                   />
                 )}
 
-                {currentView === "Sale" && (
-                  <TransactionView
-                    type="sale"
-                    settings={settings}
-                    refreshTrigger={refreshTrigger}
-                    onRefresh={triggerGlobalRefresh}
-                    onPrintInvoice={openPrintModal}
-                    alteringInvoiceNo={alteringInvoice?.type === "sale" ? alteringInvoice.invoiceNo : null}
-                    onCancelAlteration={() => setAlteringInvoice(null)}
-                    onDirtyChange={setIsDirty}
-                    onSavingChange={setIsSaving}
-                    t={t}
-                    lang={lang}
-                  />
+                {(currentView === "Sale" || keepSaleMounted) && (
+                  <div className={currentView === "Sale" ? "h-full" : "hidden"}>
+                    <TransactionView
+                      type="sale"
+                      settings={settings}
+                      refreshTrigger={refreshTrigger}
+                      onRefresh={triggerGlobalRefresh}
+                      onPrintInvoice={openPrintModal}
+                      alteringInvoiceNo={alteringInvoice?.type === "sale" ? alteringInvoice.invoiceNo : null}
+                      onCancelAlteration={() => setAlteringInvoice(null)}
+                      onDirtyChange={setIsDirty}
+                      onSavingChange={setIsSaving}
+                      t={t}
+                      lang={lang}
+                    />
+                  </div>
                 )}
 
-                {currentView === "Purchase" && (
-                  <TransactionView
-                    type="purchase"
-                    settings={settings}
-                    refreshTrigger={refreshTrigger}
-                    onRefresh={triggerGlobalRefresh}
-                    onPrintInvoice={openPrintModal}
-                    alteringInvoiceNo={alteringInvoice?.type === "purchase" ? alteringInvoice.invoiceNo : null}
-                    onCancelAlteration={() => setAlteringInvoice(null)}
-                    onDirtyChange={setIsDirty}
-                    onSavingChange={setIsSaving}
-                    t={t}
-                    lang={lang}
-                  />
+                {(currentView === "Purchase" || keepPurchaseMounted) && (
+                  <div className={currentView === "Purchase" ? "h-full" : "hidden"}>
+                    <TransactionView
+                      type="purchase"
+                      settings={settings}
+                      refreshTrigger={refreshTrigger}
+                      onRefresh={triggerGlobalRefresh}
+                      onPrintInvoice={openPrintModal}
+                      alteringInvoiceNo={alteringInvoice?.type === "purchase" ? alteringInvoice.invoiceNo : null}
+                      onCancelAlteration={() => setAlteringInvoice(null)}
+                      onDirtyChange={setIsDirty}
+                      onSavingChange={setIsSaving}
+                      t={t}
+                      lang={lang}
+                    />
+                  </div>
                 )}
 
                 {currentView === "Stock" && (
@@ -1042,6 +1141,15 @@ export default function App() {
           onSwitchUser={handleSwitchUser}
         />
       )}
+      {/* Quick Go To Command Palette (Alt + G / Ctrl + K) */}
+      <QuickGoToModal
+        isOpen={isQuickGoToOpen}
+        onClose={() => setIsQuickGoToOpen(false)}
+        onNavigate={handleQuickNavigate}
+        currentView={currentView}
+        lang={lang}
+      />
+
       {/* Top Floating Update Notification Banner */}
       {availableUpdate && (
         <UpdateNotificationBanner
