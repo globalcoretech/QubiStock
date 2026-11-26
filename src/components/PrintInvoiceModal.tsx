@@ -22,6 +22,7 @@ interface PrintInvoiceModalProps {
   t: Translations;
   lang: Language;
   initialTaxMode?: BillTaxMode;
+  initialAutoWhatsApp?: boolean;
 }
 
 export function PrintInvoiceModal({
@@ -32,6 +33,7 @@ export function PrintInvoiceModal({
   t,
   lang,
   initialTaxMode = "with_tax",
+  initialAutoWhatsApp = false,
 }: PrintInvoiceModalProps) {
   const [billData, setBillData] = useState<BillData | null>(null);
   const [rawDetails, setRawDetails] = useState<InvoicePrintDetails | null>(null);
@@ -54,8 +56,21 @@ export function PrintInvoiceModal({
   useEffect(() => {
     if (isOpen) {
       setTaxMode(initialTaxMode);
+      if (!initialAutoWhatsApp) {
+        setShowWhatsAppModal(false);
+      }
     }
-  }, [isOpen, initialTaxMode]);
+  }, [isOpen, initialTaxMode, initialAutoWhatsApp]);
+
+  // Auto-open WhatsApp Share modal once billData renders in DOM when triggered directly from Sale screen
+  useEffect(() => {
+    if (isOpen && initialAutoWhatsApp && !loading && billData) {
+      const timer = setTimeout(() => {
+        setShowWhatsAppModal(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, initialAutoWhatsApp, loading, billData]);
 
   // Load invoice details and last printed mode from DB
   useEffect(() => {

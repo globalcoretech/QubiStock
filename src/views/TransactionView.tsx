@@ -28,7 +28,7 @@ interface TransactionViewProps {
   settings?: AppSettings;
   refreshTrigger: number;
   onRefresh?: () => void;
-  onPrintInvoice: (invNo: string, taxMode?: "with_tax" | "without_tax") => void;
+  onPrintInvoice: (invNo: string, taxMode?: "with_tax" | "without_tax", autoWhatsApp?: boolean) => void;
   t: Translations;
   lang: Language;
   alteringInvoiceNo?: string | null;
@@ -153,7 +153,7 @@ export function TransactionView({
 
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [lastSavedInvoiceNo, setLastSavedInvoiceNo] = useState("");
-  const [pendingTaxMode, setPendingTaxMode] = useState<"with_tax" | "without_tax" | "none">("with_tax");
+  const [pendingTaxMode, setPendingTaxMode] = useState<"with_tax" | "without_tax" | "none" | "whatsapp">("with_tax");
   const [alterationReason, setAlterationReason] = useState("");
   const [isLoadingAlteration, setIsLoadingAlteration] = useState(false);
   const [alterationLoadError, setAlterationLoadError] = useState<string | null>(null);
@@ -515,7 +515,7 @@ export function TransactionView({
 
   const grandTotalRupees = totalTaxable + totalGst;
 
-  const handleInitiateSaveWithMode = (mode: "with_tax" | "without_tax" | "none" = "with_tax") => {
+  const handleInitiateSaveWithMode = (mode: "with_tax" | "without_tax" | "none" | "whatsapp" = "with_tax") => {
     setPendingTaxMode(mode);
     setFeedback(null);
 
@@ -594,7 +594,7 @@ export function TransactionView({
     handleInitiateSaveWithMode("with_tax");
   };
 
-  const handleFinalConfirmSave = async (overrideMode?: "with_tax" | "without_tax" | "none") => {
+  const handleFinalConfirmSave = async (overrideMode?: "with_tax" | "without_tax" | "none" | "whatsapp") => {
     const modeToUse = overrideMode ?? pendingTaxMode;
     setIsConfirmModalOpen(false);
     setFeedback(null);
@@ -683,7 +683,11 @@ export function TransactionView({
         if (onRefresh) onRefresh();
         if (onCancelAlteration) onCancelAlteration();
         if (isSale && modeToUse !== "none") {
-          onPrintInvoice(displayInv, modeToUse);
+          onPrintInvoice(
+            displayInv,
+            modeToUse === "whatsapp" ? "with_tax" : modeToUse,
+            modeToUse === "whatsapp"
+          );
         }
         return;
       }
@@ -720,9 +724,13 @@ export function TransactionView({
       await refreshNextInvoicePreview(today);
       if (onRefresh) onRefresh();
 
-      // Automatically open print modal with chosen tax mode!
+      // Automatically open print modal (or WhatsApp share) with chosen mode!
       if (isSale && modeToUse !== "none") {
-        onPrintInvoice(displayInv, modeToUse);
+        onPrintInvoice(
+          displayInv,
+          modeToUse === "whatsapp" ? "with_tax" : modeToUse,
+          modeToUse === "whatsapp"
+        );
       }
     } catch (err: any) {
       console.error("save_invoice_cmd error:", err);
@@ -819,11 +827,21 @@ export function TransactionView({
           </div>
           <div className="min-w-0 flex items-center gap-2">
             <h2 className="font-serif text-base sm:text-lg font-bold tracking-tight text-ink flex items-center gap-2 truncate">
-              <span>{isSale ? "बिल बनाओ (बिक्री)" : "माल आया (खरीदी)"}</span>
+              <span>
+                {isSale
+                  ? lang === "hi"
+                    ? "बिल बनाओ (बिक्री)"
+                    : "Create Bill (Sale)"
+                  : lang === "hi"
+                  ? "माल आया (खरीदी)"
+                  : "Purchase Entry (In)"}
+              </span>
             </h2>
             {isSale ? (
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                <span className="text-[11px] text-muted font-bold">बिल नं:</span>
+                <span className="text-[11px] text-muted font-bold">
+                  {lang === "hi" ? "बिल नं:" : "Bill No:"}
+                </span>
                 <input
                   type="text"
                   maxLength={16}
@@ -1040,18 +1058,20 @@ export function TransactionView({
               <Printer size={14} />
               <span>बिना टैक्स प्रिंट</span>
             </button>
-            <button
-              type="button"
-              data-testid="post-save-whatsapp-btn"
-              onClick={() => onPrintInvoice(lastSavedInvoiceNo, "with_tax")}
-              className="py-1 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
-              title="ग्राहक को WhatsApp पर बिल भेजें"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2ZM12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67ZM8.53 7.33C8.37 7.33 8.1 7.39 7.87 7.64C7.65 7.89 7 8.5 7 9.73C7 10.97 7.9 12.16 8.03 12.33C8.15 12.49 9.8 15.06 12.33 16.15C14.44 17.06 14.86 16.88 15.32 16.84C15.78 16.8 16.81 16.23 17.02 15.63C17.23 15.03 17.23 14.52 17.17 14.41C17.11 14.31 16.95 14.25 16.71 14.13C16.47 14.01 15.28 13.42 15.05 13.34C14.83 13.26 14.67 13.22 14.51 13.46C14.34 13.71 13.87 14.26 13.73 14.42C13.59 14.59 13.44 14.61 13.2 14.49C12.96 14.37 11.98 14.05 10.82 13.01C9.91 12.21 9.3 11.22 9.14 10.94C8.98 10.66 9.12 10.51 9.24 10.39C9.35 10.28 9.49 10.1 9.61 9.96C9.73 9.82 9.77 9.72 9.85 9.56C9.93 9.39 9.89 9.25 9.83 9.13C9.77 9.01 9.29 7.84 9.09 7.36C8.9 6.89 8.7 6.95 8.53 7.33Z" />
-              </svg>
-              <span>WhatsApp पर भेजें</span>
-            </button>
+            {isSale && (
+              <button
+                type="button"
+                data-testid="post-save-whatsapp-btn"
+                onClick={() => onPrintInvoice(lastSavedInvoiceNo, "with_tax", true)}
+                className="py-1 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                title={lang === "hi" ? "ग्राहक को WhatsApp पर बिल भेजें" : "Send bill PDF on WhatsApp"}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2ZM12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67ZM8.53 7.33C8.37 7.33 8.1 7.39 7.87 7.64C7.65 7.89 7 8.5 7 9.73C7 10.97 7.9 12.16 8.03 12.33C8.15 12.49 9.8 15.06 12.33 16.15C14.44 17.06 14.86 16.88 15.32 16.84C15.78 16.8 16.81 16.23 17.02 15.63C17.23 15.03 17.23 14.52 17.17 14.41C17.11 14.31 16.95 14.25 16.71 14.13C16.47 14.01 15.28 13.42 15.05 13.34C14.83 13.26 14.67 13.22 14.51 13.46C14.34 13.71 13.87 14.26 13.73 14.42C13.59 14.59 13.44 14.61 13.2 14.49C12.96 14.37 11.98 14.05 10.82 13.01C9.91 12.21 9.3 11.22 9.14 10.94C8.98 10.66 9.12 10.51 9.24 10.39C9.35 10.28 9.49 10.1 9.61 9.96C9.73 9.82 9.77 9.72 9.85 9.56C9.93 9.39 9.89 9.25 9.83 9.13C9.77 9.01 9.29 7.84 9.09 7.36C8.9 6.89 8.7 6.95 8.53 7.33Z" />
+                </svg>
+                <span>{lang === "hi" ? "WhatsApp पर भेजें" : "Send on WhatsApp"}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1076,7 +1096,14 @@ export function TransactionView({
             <div className={isSale ? "sm:col-span-6" : "sm:col-span-5"}>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-[11px] font-bold text-muted uppercase tracking-wider">
-                  {isSale ? "ग्राहक (Customer)" : "सप्लायर (Supplier)"} *
+                  {isSale
+                    ? lang === "hi"
+                      ? "ग्राहक (Customer)"
+                      : "Customer"
+                    : lang === "hi"
+                    ? "सप्लायर (Supplier)"
+                    : "Supplier"}{" "}
+                  *
                 </label>
                 <button
                   type="button"
@@ -1377,8 +1404,10 @@ export function TransactionView({
           {/* Top: Rakam Breakdown Card */}
           <div className="bg-gradient-to-br from-emerald-50/80 to-emerald-100/40 border border-emerald-200/90 rounded-xl p-2.5 flex-shrink-0 space-y-1">
             <div className="flex justify-between text-xs text-emerald-950 font-medium">
-              <span>कुल सामान (Lines):</span>
-              <span className="font-bold font-mono">{lines.length} मद</span>
+              <span>{lang === "hi" ? "कुल सामान (Lines):" : "Total Items (Lines):"}</span>
+              <span className="font-bold font-mono">
+                {lines.length} {lang === "hi" ? "मद" : "items"}
+              </span>
             </div>
             <div className="flex justify-between text-xs text-emerald-950 font-medium">
               <span>{t.common.taxable}:</span>
@@ -1415,7 +1444,7 @@ export function TransactionView({
                     : "bg-paper border-border text-ink hover:bg-forest/10"
                 }`}
               >
-                नकद
+                {lang === "hi" ? "नकद" : "Cash"}
               </button>
               <button
                 type="button"
@@ -1426,7 +1455,7 @@ export function TransactionView({
                     : "bg-paper border-border text-ink hover:bg-forest/10"
                 }`}
               >
-                उधार
+                {lang === "hi" ? "उधार" : "Credit"}
               </button>
               <button
                 type="button"
@@ -1437,7 +1466,7 @@ export function TransactionView({
                     : "bg-paper border-border text-ink hover:bg-forest/10"
                 }`}
               >
-                बैंक/UPI
+                {lang === "hi" ? "बैंक/UPI" : "Bank/UPI"}
               </button>
             </div>
 
@@ -1445,7 +1474,7 @@ export function TransactionView({
               <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
                 <div>
                   <span className="text-[10px] text-muted font-bold uppercase block mb-0.5">
-                    प्राप्त रकम (₹)
+                    {lang === "hi" ? "प्राप्त रकम (₹)" : "Received Amount (₹)"}
                   </span>
                   <input
                     type="number"
@@ -1458,7 +1487,7 @@ export function TransactionView({
                 </div>
                 <div>
                   <span className="text-[10px] text-muted font-bold uppercase block mb-0.5">
-                    बाकी उधारी (₹)
+                    {lang === "hi" ? "बाकी उधारी (₹)" : "Balance Due (₹)"}
                   </span>
                   <div className="px-2 py-1.5 bg-paper border border-border rounded-lg font-mono font-bold text-rose-700 truncate">
                     {formatCurrency(
@@ -1501,20 +1530,30 @@ export function TransactionView({
                     data-testid="transaction-submit-with-tax-btn"
                     onClick={() => handleInitiateSaveWithMode("with_tax")}
                     disabled={lines.length === 0 || hasOversell || isBillBlocked || Boolean(alterationLoadError) || (alteringInvoiceNo ? !alterationReason.trim() : false)}
-                    className={`min-h-[46px] ${
+                    className={`min-h-[44px] ${
                       isBillBlocked
                         ? "bg-slate-400 cursor-not-allowed opacity-60"
                         : alteringInvoiceNo
                         ? "bg-amber-700 hover:bg-amber-800"
                         : "bg-emerald-700 hover:bg-emerald-800"
                     } disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl shadow-md flex flex-col items-center justify-center gap-0.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
-                    title="टैक्स विवरण (GST, HSN) सहित पक्का बिल बनाएं व प्रिंट करें"
+                    title={lang === "hi" ? "टैक्स विवरण (GST, HSN) सहित पक्का बिल बनाएं व प्रिंट करें" : "Save and print Tax Invoice (GST)"}
                   >
                     <div className="flex items-center gap-1.5">
-                      <Printer size={16} />
-                      <span>{alteringInvoiceNo ? (lang === "hi" ? "संशोधन सहेजें व GST प्रिंट" : "Save & Print GST") : "टैक्स सहित प्रिंट"}</span>
+                      <Printer size={15} />
+                      <span>
+                        {alteringInvoiceNo
+                          ? lang === "hi"
+                            ? "संशोधन सहेजें व GST प्रिंट"
+                            : "Save & Print GST"
+                          : lang === "hi"
+                          ? "टैक्स सहित प्रिंट"
+                          : "Print With GST"}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-normal opacity-90">(GST बिल)</span>
+                    <span className="text-[10px] font-normal opacity-90">
+                      {lang === "hi" ? "(GST बिल)" : "(Tax Invoice)"}
+                    </span>
                   </button>
 
                   <button
@@ -1522,24 +1561,53 @@ export function TransactionView({
                     data-testid="transaction-submit-without-tax-btn"
                     onClick={() => handleInitiateSaveWithMode("without_tax")}
                     disabled={lines.length === 0 || hasOversell || isBillBlocked || Boolean(alterationLoadError) || (alteringInvoiceNo ? !alterationReason.trim() : false)}
-                    className={`min-h-[46px] ${
+                    className={`min-h-[44px] ${
                       isBillBlocked
                         ? "bg-slate-400 cursor-not-allowed opacity-60"
                         : "bg-amber-700 hover:bg-amber-800"
                     } disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl shadow-md flex flex-col items-center justify-center gap-0.5 transition-all hover:scale-[1.01] active:scale-[0.99]`}
-                    title="बिना टैक्स विवरण का सरल खुदरा बिल बनाएं व प्रिंट करें"
+                    title={lang === "hi" ? "बिना टैक्स विवरण का सरल खुदरा बिल बनाएं व प्रिंट करें" : "Save and print Simple Bill without GST"}
                   >
                     <div className="flex items-center gap-1.5">
-                      <Printer size={16} />
-                      <span>{alteringInvoiceNo ? (lang === "hi" ? "संशोधन सहेजें (सरल)" : "Save & Print Simple") : "बिना टैक्स प्रिंट"}</span>
+                      <Printer size={15} />
+                      <span>
+                        {alteringInvoiceNo
+                          ? lang === "hi"
+                            ? "संशोधन सहेजें (सरल)"
+                            : "Save & Print Simple"
+                          : lang === "hi"
+                          ? "बिना टैक्स प्रिंट"
+                          : "Print Without GST"}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-normal opacity-90">(सरल खुदरा पर्ची)</span>
+                    <span className="text-[10px] font-normal opacity-90">
+                      {lang === "hi" ? "(सरल खुदरा पर्ची)" : "(Simple Bill)"}
+                    </span>
                   </button>
                 </div>
 
+                {/* Direct WhatsApp Send Button on Sale Screen */}
+                <button
+                  type="button"
+                  data-testid="transaction-submit-whatsapp-btn"
+                  onClick={() => handleInitiateSaveWithMode("whatsapp")}
+                  disabled={lines.length === 0 || hasOversell || isBillBlocked || Boolean(alterationLoadError) || (alteringInvoiceNo ? !alterationReason.trim() : false)}
+                  className={`w-full min-h-[38px] ${
+                    isBillBlocked
+                      ? "bg-slate-400 cursor-not-allowed opacity-60"
+                      : "bg-emerald-600 hover:bg-emerald-700"
+                  } disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer`}
+                  title={lang === "hi" ? "बिल सहेजें और सीधे WhatsApp पर PDF भेजें" : "Save bill and send PDF on WhatsApp"}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2ZM12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67ZM8.53 7.33C8.37 7.33 8.1 7.39 7.87 7.64C7.65 7.89 7 8.5 7 9.73C7 10.97 7.9 12.16 8.03 12.33C8.15 12.49 9.8 15.06 12.33 16.15C14.44 17.06 14.86 16.88 15.32 16.84C15.78 16.8 16.81 16.23 17.02 15.63C17.23 15.03 17.23 14.52 17.17 14.41C17.11 14.31 16.95 14.25 16.71 14.13C16.47 14.01 15.28 13.42 15.05 13.34C14.83 13.26 14.67 13.22 14.51 13.46C14.34 13.71 13.87 14.26 13.73 14.42C13.59 14.59 13.44 14.61 13.2 14.49C12.96 14.37 11.98 14.05 10.82 13.01C9.91 12.21 9.3 11.22 9.14 10.94C8.98 10.66 9.12 10.51 9.24 10.39C9.35 10.28 9.49 10.1 9.61 9.96C9.73 9.82 9.77 9.72 9.85 9.56C9.93 9.39 9.89 9.25 9.83 9.13C9.77 9.01 9.29 7.84 9.09 7.36C8.9 6.89 8.7 6.95 8.53 7.33Z" />
+                  </svg>
+                  <span>{lang === "hi" ? "सेव करें और WhatsApp पर भेजें" : "Save & Send on WhatsApp"}</span>
+                </button>
+
                 <div className="flex items-center justify-between text-[10px] text-muted font-medium px-1">
                   <span>
-                    शॉर्टकट: <span className="font-mono font-bold">Ctrl + Enter</span>
+                    {lang === "hi" ? "शॉर्टकट:" : "Shortcut:"} <span className="font-mono font-bold">Ctrl + Enter</span>
                   </span>
                   <button
                     type="button"
@@ -1651,7 +1719,7 @@ export function TransactionView({
                     >
                       <div className="flex items-center gap-1.5">
                         <Printer size={15} />
-                        <span>टैक्स सहित प्रिंट</span>
+                        <span>{lang === "hi" ? "टैक्स सहित प्रिंट" : "Print With GST"}</span>
                       </div>
                       <span className="text-[10px] font-normal opacity-90">(GST Tax Invoice)</span>
                     </button>
@@ -1667,11 +1735,28 @@ export function TransactionView({
                     >
                       <div className="flex items-center gap-1.5">
                         <Printer size={15} />
-                        <span>बिना टैक्स प्रिंट</span>
+                        <span>{lang === "hi" ? "बिना टैक्स प्रिंट" : "Print Without GST"}</span>
                       </div>
-                      <span className="text-[10px] font-normal opacity-90">(सरल खुदरा पर्ची)</span>
+                      <span className="text-[10px] font-normal opacity-90">
+                        {lang === "hi" ? "(सरल खुदरा पर्ची)" : "(Simple Bill)"}
+                      </span>
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    data-testid="confirm-save-whatsapp"
+                    onClick={() => handleFinalConfirmSave("whatsapp")}
+                    className={`w-full py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all hover:scale-[1.01] cursor-pointer ${
+                      pendingTaxMode === "whatsapp"
+                        ? "bg-emerald-600 text-white ring-2 ring-emerald-400"
+                        : "bg-emerald-600/90 hover:bg-emerald-600 text-white"
+                    }`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2ZM12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67ZM8.53 7.33C8.37 7.33 8.1 7.39 7.87 7.64C7.65 7.89 7 8.5 7 9.73C7 10.97 7.9 12.16 8.03 12.33C8.15 12.49 9.8 15.06 12.33 16.15C14.44 17.06 14.86 16.88 15.32 16.84C15.78 16.8 16.81 16.23 17.02 15.63C17.23 15.03 17.23 14.52 17.17 14.41C17.11 14.31 16.95 14.25 16.71 14.13C16.47 14.01 15.28 13.42 15.05 13.34C14.83 13.26 14.67 13.22 14.51 13.46C14.34 13.71 13.87 14.26 13.73 14.42C13.59 14.59 13.44 14.61 13.2 14.49C12.96 14.37 11.98 14.05 10.82 13.01C9.91 12.21 9.3 11.22 9.14 10.94C8.98 10.66 9.12 10.51 9.24 10.39C9.35 10.28 9.49 10.1 9.61 9.96C9.73 9.82 9.77 9.72 9.85 9.56C9.93 9.39 9.89 9.25 9.83 9.13C9.77 9.01 9.29 7.84 9.09 7.36C8.9 6.89 8.7 6.95 8.53 7.33Z" />
+                    </svg>
+                    <span>{lang === "hi" ? "सेव करें और WhatsApp पर भेजें" : "Save & Send on WhatsApp"}</span>
+                  </button>
                   <div className="flex items-center justify-between pt-1 border-t border-border/60">
                     <button
                       type="button"

@@ -258,17 +258,24 @@ export default function App() {
 
   const [activePrintInvoiceNo, setActivePrintInvoiceNo] = useState("");
   const [activePrintTaxMode, setActivePrintTaxMode] = useState<"with_tax" | "without_tax">("with_tax");
+  const [activePrintAutoWhatsApp, setActivePrintAutoWhatsApp] = useState(false);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
 
-  const openPrintModal = (invNo: string, taxMode: "with_tax" | "without_tax" = "with_tax") => {
+  const openPrintModal = (
+    invNo: string,
+    taxMode: "with_tax" | "without_tax" = "with_tax",
+    autoWhatsApp: boolean = false
+  ) => {
     setActivePrintInvoiceNo(invNo);
     setActivePrintTaxMode(taxMode);
+    setActivePrintAutoWhatsApp(autoWhatsApp);
     setIsPrintModalOpen(true);
     setIsPrinting(true);
   };
 
   const closePrintModal = () => {
     setIsPrintModalOpen(false);
+    setActivePrintAutoWhatsApp(false);
     setIsPrinting(false);
   };
 
@@ -896,6 +903,7 @@ export default function App() {
         lang={lang}
         t={t}
         initialTaxMode={activePrintTaxMode}
+        initialAutoWhatsApp={activePrintAutoWhatsApp}
       />
 
       {/* Graceful Exit Modals */}
