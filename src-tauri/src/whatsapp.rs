@@ -61,11 +61,12 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
 
     let safe_customer = req.customer_name
         .map(|n| {
-            let cleaned = n.trim().replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "_");
-            if cleaned.is_empty() {
+            let cleaned = n.trim().replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ', '(', ')'], "_");
+            let collapsed = cleaned.trim_matches('_').to_string();
+            if collapsed.is_empty() {
                 String::new()
             } else {
-                format!("_{cleaned}")
+                format!("_{collapsed}")
             }
         })
         .unwrap_or_default();
@@ -93,14 +94,19 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
         let browser_path = find_browser_for_pdf()
             .ok_or_else(|| "PDF बनाने के लिए Microsoft Edge या Chrome नहीं मिला।".to_string())?;
 
+        let temp_profile_dir = temp_dir.join(format!("krishi_edge_pdf_{timestamp}"));
+        let _ = fs::create_dir_all(&temp_profile_dir);
+
         let file_url = format!("file:///{}", temp_html_file.to_string_lossy().replace('\\', "/"));
         let print_arg = format!("--print-to-pdf={}", pdf_path.to_string_lossy());
+        let profile_arg = format!("--user-data-dir={}", temp_profile_dir.to_string_lossy());
 
         let output = Command::new(&browser_path)
             .args([
                 "--headless",
                 "--disable-gpu",
                 "--no-pdf-header-footer",
+                &profile_arg,
                 &print_arg,
                 &file_url,
             ])
@@ -109,10 +115,17 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
             .map_err(|e| format!("PDF इंजन चलाने में त्रुटि: {e}"))?;
 
         let _ = fs::remove_file(&temp_html_file);
+        let _ = fs::remove_dir_all(&temp_profile_dir);
 
         if !pdf_path.exists() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("PDF फ़ाइल नहीं बन सकी: {stderr}"));
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!(
+                "PDF फ़ाइल नहीं बन सकी (code: {:?}): {} {}",
+                output.status.code(),
+                stderr,
+                stdout
+            ));
         }
     }
 
