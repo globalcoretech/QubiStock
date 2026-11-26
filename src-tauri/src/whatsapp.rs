@@ -96,6 +96,7 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
 
         let temp_profile_dir = temp_dir.join(format!("krishi_edge_pdf_{timestamp}"));
         let _ = fs::create_dir_all(&temp_profile_dir);
+        let _ = fs::remove_file(&pdf_path);
 
         let file_url = format!("file:///{}", temp_html_file.to_string_lossy().replace('\\', "/"));
         let print_arg = format!("--print-to-pdf={}", pdf_path.to_string_lossy());
@@ -103,9 +104,11 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
 
         let output = Command::new(&browser_path)
             .args([
-                "--headless",
+                "--headless=new",
                 "--disable-gpu",
                 "--no-pdf-header-footer",
+                "--no-first-run",
+                "--no-default-browser-check",
                 &profile_arg,
                 &print_arg,
                 &file_url,
@@ -113,6 +116,16 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| format!("PDF इंजन चलाने में त्रुटि: {e}"))?;
+
+        // Wait up to 8 seconds in case browser delegated PDF writing to a child process
+        let wait_start = std::time::Instant::now();
+        while !pdf_path.exists() && wait_start.elapsed() < std::time::Duration::from_secs(8) {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        if pdf_path.exists() {
+            // Brief pause to ensure PDF file flush completes
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
 
         let _ = fs::remove_file(&temp_html_file);
         let _ = fs::remove_dir_all(&temp_profile_dir);
