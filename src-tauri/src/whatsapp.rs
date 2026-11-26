@@ -88,6 +88,8 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
     // 3. Find Edge / Chrome to generate PDF
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let browser_path = find_browser_for_pdf()
             .ok_or_else(|| "PDF बनाने के लिए Microsoft Edge या Chrome नहीं मिला।".to_string())?;
 
@@ -102,6 +104,7 @@ pub fn export_invoice_pdf_impl(req: ExportPdfRequest) -> Result<ExportPdfRespons
                 &print_arg,
                 &file_url,
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| format!("PDF इंजन चलाने में त्रुटि: {e}"))?;
 
@@ -159,10 +162,40 @@ pub fn open_file_in_explorer_impl(path_str: &str) -> Result<(), String> {
 pub fn open_external_url_impl(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         Command::new("cmd")
             .args(["/c", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("URL error: {e}"))?;
+    }
+    Ok(())
+}
+
+pub fn copy_file_to_clipboard_impl(path_str: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let p = Path::new(path_str);
+        if !p.exists() {
+            return Err("PDF फ़ाइल नहीं मिली।".to_string());
+        }
+        let escaped = path_str.replace('\'', "''");
+        let ps_script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; $col = New-Object System.Collections.Specialized.StringCollection; $col.Add('{escaped}'); [System.Windows.Forms.Clipboard]::SetFileDropList($col)"
+        );
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-STA", "-Command", &ps_script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("Clipboard error: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("क्लिपबोर्ड पर कॉपी करने में त्रुटि: {stderr}"));
+        }
     }
     Ok(())
 }

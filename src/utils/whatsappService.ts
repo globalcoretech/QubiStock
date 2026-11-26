@@ -117,6 +117,95 @@ export async function openFileInExplorer(path: string): Promise<void> {
 }
 
 /**
+ * Collects all loaded CSS stylesheets into a standalone HTML document for crisp headless PDF rendering
+ */
+export function buildPrintableBillHtml(
+  billEl: Element | null,
+  title: string,
+  paperSize: string = "A4"
+): string {
+  let collectedCss = "";
+  if (typeof document !== "undefined" && document.styleSheets) {
+    for (let i = 0; i < document.styleSheets.length; i++) {
+      const sheet = document.styleSheets[i];
+      try {
+        if (sheet.cssRules) {
+          for (let j = 0; j < sheet.cssRules.length; j++) {
+            collectedCss += sheet.cssRules[j].cssText + "\n";
+          }
+        }
+      } catch {
+        // Ignore cross-origin stylesheets that block cssRules access
+      }
+    }
+  }
+
+  let pageCss = "size: A4 portrait; margin: 6mm;";
+  if (paperSize === "A5") {
+    pageCss = "size: A5 portrait; margin: 5mm;";
+  } else if (paperSize === "A6") {
+    pageCss = "size: 105mm 148mm; margin: 4mm;";
+  }
+
+  const bodyHtml = billEl ? billEl.outerHTML : "";
+
+  return `<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8" />
+<title>${title}</title>
+<style>
+${collectedCss}
+@page {
+  ${pageCss}
+}
+html, body {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+}
+.no-print {
+  display: none !important;
+}
+.bill-container,
+.screen-preview-a4,
+.screen-preview-a5,
+.screen-preview-a6 {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+</style>
+</head>
+<body class="printing-bill">
+${bodyHtml}
+</body>
+</html>`;
+}
+
+/**
+ * Copies the generated PDF file to the Windows clipboard (CF_HDROP) so Ctrl+V attaches it directly in WhatsApp
+ */
+export async function copyFileToClipboard(path: string): Promise<boolean> {
+  if (typeof window === "undefined" || !(window as any).__TAURI_INTERNALS__) {
+    return true;
+  }
+  try {
+    await invoke("copy_file_to_clipboard_cmd", { path });
+    return true;
+  } catch (err) {
+    console.warn("copy_file_to_clipboard_cmd failed:", err);
+    return false;
+  }
+}
+
+/**
  * Opens WhatsApp chat via external URL launcher
  */
 export async function openWhatsAppChat(phone: string, message: string): Promise<void> {

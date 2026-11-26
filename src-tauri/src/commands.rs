@@ -6234,6 +6234,11 @@ pub fn open_external_url_cmd(url: String) -> Result<(), String> {
     crate::whatsapp::open_external_url_impl(&url)
 }
 
+#[command]
+pub fn copy_file_to_clipboard_cmd(path: String) -> Result<(), String> {
+    crate::whatsapp::copy_file_to_clipboard_impl(&path)
+}
+
 
 
 

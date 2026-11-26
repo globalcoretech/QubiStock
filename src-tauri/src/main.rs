@@ -219,7 +219,8 @@ fn main() {
             commands::acknowledge_exit_request_cmd,
             commands::export_invoice_pdf_cmd,
             commands::open_file_in_explorer_cmd,
-            commands::open_external_url_cmd
+            commands::open_external_url_cmd,
+            commands::copy_file_to_clipboard_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

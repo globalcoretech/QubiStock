@@ -7,6 +7,7 @@ import { Printer, X, AlertCircle, FileText, Check } from "./icons";
 import { calculateBill, buildBillDataWithQr } from "../utils/billBuilder";
 import { BillViewer } from "./bills/BillViewer";
 import { WhatsAppShareModal } from "./WhatsAppShareModal";
+import { buildPrintableBillHtml } from "../utils/whatsappService";
 import {
   printInvoiceBill,
   executeDialogPrint,
@@ -541,10 +542,11 @@ export function PrintInvoiceModal({
             customerPhone={billData.party?.phone || undefined}
             date={billData.invoice?.date || new Date().toISOString().split("T")[0]}
             totalAmount={billData.totals?.grandTotal || 0}
-            htmlContent={(() => {
-              const billEl = document.querySelector(".bill-container");
-              return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bill ${invoiceNo}</title><style>@page{size:${selectedFormat};margin:5mm;}body{font-family:Arial,sans-serif;margin:0;padding:10px;}</style></head><body>${billEl ? billEl.outerHTML : ""}</body></html>`;
-            })()}
+            htmlContent={buildPrintableBillHtml(
+              document.querySelector(".bill-container"),
+              `Bill ${invoiceNo}`,
+              selectedFormat
+            )}
             shopName={settings.shopName || "कृषि केंद्र"}
             lang={lang}
           />

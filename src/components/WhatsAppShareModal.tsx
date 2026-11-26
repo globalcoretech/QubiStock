@@ -6,6 +6,7 @@ import {
   exportInvoicePdf,
   openFileInExplorer,
   openWhatsAppChat,
+  copyFileToClipboard,
   ExportPdfResult,
 } from "../utils/whatsappService";
 
@@ -38,6 +39,7 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
   const [message, setMessage] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [pdfResult, setPdfResult] = useState<ExportPdfResult | null>(null);
+  const [copiedToClipboard, setCopiedToClipboard] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Initialize phone and prefilled message
@@ -63,10 +65,14 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
         invoiceNo,
         customerName,
       })
-        .then((res) => {
+        .then(async (res) => {
           if (isMounted) {
             setPdfResult(res);
             setIsExporting(false);
+            if (res.success && res.pdf_path) {
+              const copied = await copyFileToClipboard(res.pdf_path);
+              if (isMounted) setCopiedToClipboard(copied);
+            }
           }
         })
         .catch((err) => {
@@ -104,11 +110,18 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
 
     setError(null);
     try {
-      // 1. Open WhatsApp Chat with prefilled message
+      // 1. Copy PDF file to clipboard for instant Ctrl+V paste in WhatsApp
+      let copied = copiedToClipboard;
+      if (pdfResult?.pdf_path) {
+        copied = await copyFileToClipboard(pdfResult.pdf_path);
+        setCopiedToClipboard(copied);
+      }
+
+      // 2. Open WhatsApp Chat with prefilled message
       await openWhatsAppChat(cleaned, message);
 
-      // 2. Open folder and highlight the PDF for effortless drag & attach
-      if (pdfResult?.pdf_path) {
+      // 3. Fallback: open Explorer only if clipboard copy did not succeed
+      if (!copied && pdfResult?.pdf_path) {
         await openFileInExplorer(pdfResult.pdf_path);
       }
 
@@ -229,9 +242,17 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
                 <div className="font-mono text-[11px] text-emerald-800 truncate">
                   📄 {pdfResult.filename}
                 </div>
-                <div className="text-[10px] text-slate-500 truncate">
-                  📁 {pdfResult.directory}
-                </div>
+                {copiedToClipboard ? (
+                  <div className="mt-1.5 bg-emerald-100/90 border border-emerald-300 rounded-lg px-2.5 py-1.5 text-[11px] text-emerald-950 font-semibold leading-snug">
+                    📋 {lang === "hi"
+                      ? "PDF क्लिपबोर्ड पर कॉपी हो गया है! WhatsApp चैट खुलते ही बस Ctrl + V दबाएं।"
+                      : "PDF copied to clipboard! Just press Ctrl + V in WhatsApp chat to attach."}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-slate-500 truncate">
+                    📁 {pdfResult.directory}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-amber-800 flex items-center gap-1.5">
